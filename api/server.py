@@ -4,6 +4,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import asyncio
 import json
+from contextlib import asynccontextmanager
 from datetime import datetime
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,10 +15,24 @@ from api.auth import verify_password, create_token, get_current_user, DASHBOARD_
 from core.memory import init_db, TradeMemory
 from core.records import init_records_db, RecordTracker
 from core import ipc
+from core.bot_runner import get_runner
 from data.market import RealMarketData
 from api.broadcaster import manager
 
-app = FastAPI(title="Trading Bot API")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # ── startup ──────────────────────────────────────────────────────────────
+    init_db()
+    init_records_db()
+    runner = get_runner()
+    runner.start()
+    yield
+    # ── shutdown ─────────────────────────────────────────────────────────────
+    runner.stop()
+
+
+app = FastAPI(title="Trading Bot API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -26,13 +41,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-init_db()
-init_records_db()
 memory = TradeMemory()
 records = RecordTracker()
 market = RealMarketData()
 
-WATCHLIST = ["NIFTY", "BANKNIFTY"]
+WATCHLIST = ["NIFTY"]
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -161,8 +174,8 @@ def pause_bot(user: str = Depends(get_current_user)):
 
 @app.post("/api/bot/resume")
 def resume_bot(user: str = Depends(get_current_user)):
-    ipc.write_flag(ipc.FLAG_RESUME)
     ipc.clear_flag(ipc.FLAG_PAUSE)
+    ipc.write_flag(ipc.FLAG_RESUME)
     return {"status": "running"}
 
 @app.post("/api/trade/force")
