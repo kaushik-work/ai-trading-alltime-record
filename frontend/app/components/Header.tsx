@@ -99,7 +99,7 @@ export default function Header({ mode, connected, botStatus, onBotToggle }: Prop
           </button>
 
           {menuOpen && (
-            <div className="absolute right-0 top-full mt-2 w-52 bg-white border border-gray-200 rounded-xl shadow-xl z-50 overflow-visible pb-1">
+            <div className="absolute right-0 top-full mt-2 w-52 bg-white border border-gray-200 rounded-xl shadow-xl z-50">
               {/* Bot controls */}
               <div className="px-3 py-2 text-[10px] text-gray-400 uppercase tracking-widest font-semibold">
                 Bot
@@ -138,12 +138,13 @@ export default function Header({ mode, connected, botStatus, onBotToggle }: Prop
                 <span>📓</span> Journal
               </button>
 
-              <div className="border-t border-gray-100 mx-3" />
+              <div className="border-t border-gray-100 mx-3 my-1" />
 
               {/* Logout */}
               <button
                 onClick={logout}
-                className="w-full text-left px-4 py-2.5 text-sm text-red-500 hover:bg-red-50 flex items-center gap-2"
+                style={{ color: "#ef4444" }}
+                className="w-full text-left px-4 py-2.5 mb-1 text-sm font-semibold hover:bg-red-50 rounded-b-xl flex items-center gap-2"
               >
                 <span>🚪</span> Logout
               </button>
