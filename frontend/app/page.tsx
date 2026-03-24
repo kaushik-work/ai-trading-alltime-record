@@ -1,5 +1,5 @@
 "use client";
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useWebSocket } from "./hooks/useWebSocket";
 import Header from "./components/Header";
@@ -44,9 +44,17 @@ const STRATEGIES = [
 
 export default function Home() {
   const router = useRouter();
+  const [authed, setAuthed] = useState(false);
+
   useEffect(() => {
-    if (!localStorage.getItem("aq_token")) router.push("/login");
+    if (!localStorage.getItem("aq_token")) {
+      router.replace("/login");
+    } else {
+      setAuthed(true);
+    }
   }, []);
+
+  if (!authed) return null;
 
   const { data, connected } = useWebSocket(WS_URL);
   const trades     = data?.recent_trades   ?? [];
