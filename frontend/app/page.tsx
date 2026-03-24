@@ -54,14 +54,14 @@ export default function Home() {
     }
   }, []);
 
-  if (!authed) return null;
-
-  const { data, connected } = useWebSocket(WS_URL);
+  const { data, connected } = useWebSocket(authed ? WS_URL : "");
   const trades     = data?.recent_trades   ?? [];
   const openPos    = data?.open_positions  ?? [];
   const mode       = data?.mode            ?? "paper";
   const botStatus  = data?.bot_status      ?? "unknown";
   const prices     = data?.prices          ?? {};
+
+  if (!authed) return null;
 
   // Merge open positions and recent closed trades for live feed
   const liveTrades = [

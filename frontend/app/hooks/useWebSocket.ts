@@ -26,6 +26,7 @@ export function useWebSocket(url: string) {
   }
 
   useEffect(() => {
+    if (!url) return;
     connect();
     return () => {
       if (retry.current) clearTimeout(retry.current);
