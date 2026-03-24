@@ -91,7 +91,7 @@ export default function Header({ mode, connected, botStatus, onBotToggle }: Prop
             onClick={() => setMenuOpen(o => !o)}
             className="flex items-center gap-1.5 text-sm font-semibold px-4 py-2 border border-gray-300 hover:border-gray-400 text-gray-700 rounded-lg transition-colors bg-white"
           >
-            Brain Fry
+            BrainFry
             <svg className={`w-3.5 h-3.5 transition-transform ${menuOpen ? "rotate-180" : ""}`}
                  fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
@@ -130,6 +130,12 @@ export default function Header({ mode, connected, botStatus, onBotToggle }: Prop
                 className="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
               >
                 <span>📊</span> Backtest
+              </button>
+              <button
+                onClick={() => { router.push("/journal"); setMenuOpen(false); }}
+                className="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+              >
+                <span>📓</span> Journal
               </button>
 
               <div className="border-t border-gray-100 mx-3" />
