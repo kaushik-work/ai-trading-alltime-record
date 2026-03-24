@@ -71,7 +71,9 @@ def init_db():
         ("sl_price",    "REAL"),
         ("tp_price",    "REAL"),
         ("close_reason","TEXT"),
-        ("score",       "REAL"),
+        ("score",        "REAL"),
+        ("entry_remark", "TEXT"),
+        ("exit_remark",  "TEXT"),
     ]
     with get_connection() as conn:
         existing = {row[1] for row in conn.execute("PRAGMA table_info(trades)")}
@@ -89,8 +91,9 @@ class TradeMemory:
                 INSERT OR IGNORE INTO trades
                 (order_id, symbol, side, quantity, price, pnl, status, action_reason,
                  confidence, risk_level, timestamp, mode,
-                 strategy, option_type, strike, lot_size, sl_price, tp_price, close_reason, score)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 strategy, option_type, strike, lot_size, sl_price, tp_price, close_reason, score,
+                 entry_remark, exit_remark)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 order.get("order_id"),
                 order.get("symbol"),
@@ -112,8 +115,20 @@ class TradeMemory:
                 order.get("tp_price"),
                 order.get("close_reason"),
                 order.get("score"),
+                order.get("entry_remark"),
+                order.get("exit_remark"),
             ))
             return cursor.lastrowid
+
+    def update_remarks(self, order_id: str, entry_remark: str = None, exit_remark: str = None):
+        """Update AI-generated remarks on a trade."""
+        with get_connection() as conn:
+            if entry_remark:
+                conn.execute("UPDATE trades SET entry_remark = ? WHERE order_id = ?",
+                             (entry_remark, order_id))
+            if exit_remark:
+                conn.execute("UPDATE trades SET exit_remark = ? WHERE order_id = ?",
+                             (exit_remark, order_id))
 
     def close_trade(self, order_id: str, pnl: float):
         """Update a trade with P&L when closed."""

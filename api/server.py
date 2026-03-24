@@ -110,11 +110,13 @@ def _build_snapshot() -> dict:
             "lot_size":    t.get("lot_size", 75),
             "entry_price": t.get("price"),
             "pnl":         round(t.get("pnl", 0), 2),
-            "close_reason":t.get("close_reason", "—"),
-            "score":       t.get("score"),
-            "entry_time":  t.get("timestamp"),
-            "exit_time":   t.get("closed_at"),
-            "status":      t.get("status"),
+            "close_reason": t.get("close_reason", "—"),
+            "score":        t.get("score"),
+            "entry_time":   t.get("timestamp"),
+            "exit_time":    t.get("closed_at"),
+            "status":       t.get("status"),
+            "entry_remark": t.get("entry_remark"),
+            "exit_remark":  t.get("exit_remark"),
         }
         for t in today_trades
         if t.get("status") == "COMPLETE" and t.get("strategy")
@@ -225,6 +227,39 @@ async def force_trade(body: dict, user: str = Depends(get_current_user)):
         return {"error": "A trade is already queued"}
     ipc.write_force_trade(symbol, side, quantity, reason)
     return {"status": "queued", "symbol": symbol, "side": side, "quantity": quantity}
+
+
+@app.get("/api/journals")
+def list_journals(user: str = Depends(get_current_user)):
+    """List all saved daily journal dates (newest first)."""
+    from core.journal import list_journals as _list
+    return {"dates": _list()}
+
+@app.get("/api/journals/{date}")
+def get_journal(date: str, user: str = Depends(get_current_user)):
+    """Return a specific day's journal JSON (date format: YYYY-MM-DD)."""
+    from core.journal import load_journal
+    journal = load_journal(date)
+    if journal is None:
+        raise HTTPException(status_code=404, detail=f"No journal found for {date}")
+    return journal
+
+@app.patch("/api/journals/{date}/notes")
+def update_notes(date: str, body: dict, user: str = Depends(get_current_user)):
+    """Save/update learning notes for a day's journal."""
+    from core.journal import update_learning_notes
+    notes = body.get("notes", "")
+    ok = update_learning_notes(date, notes)
+    if not ok:
+        raise HTTPException(status_code=404, detail=f"No journal found for {date}")
+    return {"status": "saved", "date": date}
+
+@app.post("/api/journals/save-now")
+def save_journal_now(user: str = Depends(get_current_user)):
+    """Manually trigger today's journal save."""
+    from core.journal import save_daily_journal
+    path = save_daily_journal()
+    return {"status": "saved", "path": path}
 
 
 @app.post("/api/backtest")

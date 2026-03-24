@@ -248,7 +248,8 @@ export default function Home() {
                       const pnl = t.pnl ?? 0;
                       const optColor = t.option_type === "CE" ? "bg-blue-100 text-blue-700" : "bg-orange-100 text-orange-700";
                       return (
-                        <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
+                        <>
+                        <tr key={`${i}-row`} className="border-b border-gray-50 hover:bg-gray-50">
                           <td className="px-3 py-2 font-semibold text-gray-700">{t.strategy}</td>
                           <td className="px-3 py-2">
                             <span className={`px-1.5 py-0.5 rounded font-bold ${optColor}`}>{t.option_type}</span>
@@ -276,6 +277,25 @@ export default function Home() {
                             {t.exit_time ? new Date(t.exit_time).toLocaleTimeString("en-IN") : "—"}
                           </td>
                         </tr>
+                        {(t.entry_remark || t.exit_remark) && (
+                          <tr key={`${i}-remarks`} className="border-b border-gray-100 bg-gray-50/50">
+                            <td colSpan={10} className="px-4 py-2 space-y-1">
+                              {t.entry_remark && (
+                                <div className="flex gap-2 text-xs">
+                                  <span className="font-bold text-indigo-500 shrink-0">📝 Entry:</span>
+                                  <span className="text-gray-600">{t.entry_remark}</span>
+                                </div>
+                              )}
+                              {t.exit_remark && (
+                                <div className="flex gap-2 text-xs">
+                                  <span className="font-bold text-amber-500 shrink-0">🔍 Review:</span>
+                                  <span className="text-gray-600">{t.exit_remark}</span>
+                                </div>
+                              )}
+                            </td>
+                          </tr>
+                        )}
+                        </>
                       );
                     })}
                   </tbody>

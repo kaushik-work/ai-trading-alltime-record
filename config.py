@@ -71,8 +71,9 @@ WATCHLIST = {
 
 # ── Paths ──────────────────────────────────────────────────────────────────────
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_PATH  = os.path.join(BASE_DIR, "db", "trading.db")
-LOGS_DIR = os.path.join(BASE_DIR, "logs")
+DB_PATH      = os.getenv("DB_PATH", os.path.join(BASE_DIR, "db", "trading.db"))
+LOGS_DIR     = os.path.join(BASE_DIR, "logs")
+JOURNALS_DIR = os.getenv("JOURNALS_DIR", os.path.join(BASE_DIR, "journals"))
 
 # ── Market Hours (IST) ─────────────────────────────────────────────────────────
 MARKET_OPEN  = "09:15"

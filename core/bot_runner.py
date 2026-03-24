@@ -21,6 +21,7 @@ import numpy as np
 import config
 from core.memory import TradeMemory
 from core import ipc
+from core.trade_analyst import generate_entry_remark, generate_exit_remark
 
 logger = logging.getLogger(__name__)
 
@@ -148,8 +149,9 @@ class BotRunner:
             self._atr_cycle, "interval", minutes=5,
             id="atr_intraday", next_run_time=datetime.now(),
         )
-        # EOD square-off at 15:15
+        # EOD square-off at 15:15, journal save at 15:20
         self.scheduler.add_job(self._eod_squareoff, "cron", hour=15, minute=15, id="eod")
+        self.scheduler.add_job(self._save_journal,  "cron", hour=15, minute=20, id="journal")
 
         self.scheduler.start()
         logger.info("BotRunner started — Musashi(15m) + Raijin(5m) + ATR(5m)")
@@ -192,8 +194,10 @@ class BotRunner:
                     pnl = (price - pos["entry"]) * pos["qty"]
                     if pos["side"] == "SELL":
                         pnl = -pnl
-                    self._close_trade(pos, price, round(pnl, 2), reason)
+                    pnl = round(pnl, 2)
+                    self._close_trade(pos, price, pnl, reason)
                     self.state.set_position("musashi", None)
+                    asyncio.ensure_future(self._generate_exit_remark(pos, price, pnl, reason))
                 return
 
             # ── look for entry ────────────────────────────────────────────────
@@ -216,6 +220,7 @@ class BotRunner:
             pos = self._open_trade("Musashi", sig["action"], entry, sl, tp, sig["score"])
             self.state.set_position("musashi", pos)
             self.state.record_trade("musashi")
+            asyncio.ensure_future(self._generate_entry_remark(pos, sig))
 
         except Exception as e:
             logger.error("Musashi cycle: %s", e, exc_info=True)
@@ -251,8 +256,10 @@ class BotRunner:
                     pnl = (price - pos["entry"]) * pos["qty"]
                     if pos["side"] == "SELL":
                         pnl = -pnl
-                    self._close_trade(pos, price, round(pnl, 2), reason)
+                    pnl = round(pnl, 2)
+                    self._close_trade(pos, price, pnl, reason)
                     self.state.set_position("raijin", None)
+                    asyncio.ensure_future(self._generate_exit_remark(pos, price, pnl, reason))
                 return
 
             # ── look for entry ────────────────────────────────────────────────
@@ -275,6 +282,7 @@ class BotRunner:
             pos = self._open_trade("Raijin", sig["action"], entry, sl, tp, sig["score"])
             self.state.set_position("raijin", pos)
             self.state.record_trade("raijin")
+            asyncio.ensure_future(self._generate_entry_remark(pos, sig))
 
         except Exception as e:
             logger.error("Raijin cycle: %s", e, exc_info=True)
@@ -307,7 +315,43 @@ class BotRunner:
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, self._atr_strategy.square_off_all)
 
+    async def _save_journal(self):
+        """Save daily journal JSON at 15:20 (after EOD square-off)."""
+        try:
+            from core.journal import save_daily_journal
+            loop = asyncio.get_event_loop()
+            path = await loop.run_in_executor(None, save_daily_journal)
+            logger.info("Journal saved: %s", path)
+        except Exception as e:
+            logger.error("Journal save failed: %s", e, exc_info=True)
+
     # ── trade helpers ─────────────────────────────────────────────────────────
+
+    async def _generate_entry_remark(self, pos: dict, sig: dict):
+        """Run Claude entry remark in background thread — non-blocking."""
+        try:
+            loop = asyncio.get_event_loop()
+            remark = await loop.run_in_executor(
+                None, lambda: generate_entry_remark(pos, sig)
+            )
+            if remark:
+                self.memory.update_remarks(pos["order_id"], entry_remark=remark)
+                logger.info("[%s] Entry remark saved.", pos["strategy"])
+        except Exception as e:
+            logger.debug("Entry remark failed: %s", e)
+
+    async def _generate_exit_remark(self, pos: dict, close_price: float, pnl: float, reason: str):
+        """Run Claude exit remark in background thread — non-blocking."""
+        try:
+            loop = asyncio.get_event_loop()
+            remark = await loop.run_in_executor(
+                None, lambda: generate_exit_remark(pos, close_price, pnl, reason)
+            )
+            if remark:
+                self.memory.update_remarks(pos["order_id"], exit_remark=remark)
+                logger.info("[%s] Exit remark saved.", pos["strategy"])
+        except Exception as e:
+            logger.debug("Exit remark failed: %s", e)
 
     def _open_trade(self, strategy: str, side: str, entry: float,
                     sl: float, tp: float, score: float) -> dict:
