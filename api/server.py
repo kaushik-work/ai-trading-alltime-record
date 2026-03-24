@@ -85,6 +85,41 @@ def _build_snapshot() -> dict:
         except Exception:
             prices[sym] = {"price": 0, "change_pct": 0, "source": "error"}
 
+    # Per-strategy daily summary
+    STRATEGIES = ["Musashi", "Raijin", "ATR Intraday"]
+    strategy_summary = {}
+    for strat in STRATEGIES:
+        strat_trades = [t for t in today_trades if t.get("strategy") == strat and t.get("status") == "COMPLETE"]
+        strat_pnl    = round(sum(t.get("pnl", 0) for t in strat_trades), 2)
+        strat_wins   = sum(1 for t in strat_trades if t.get("pnl", 0) > 0)
+        strategy_summary[strat] = {
+            "trades": len(strat_trades),
+            "pnl":    strat_pnl,
+            "wins":   strat_wins,
+            "losses": len(strat_trades) - strat_wins,
+        }
+
+    # Today's completed journal (closed trades with full detail)
+    today_journal = [
+        {
+            "strategy":    t.get("strategy", "—"),
+            "symbol":      t.get("symbol"),
+            "option_type": t.get("option_type", "—"),
+            "strike":      t.get("strike"),
+            "side":        t.get("side"),
+            "lot_size":    t.get("lot_size", 75),
+            "entry_price": t.get("price"),
+            "pnl":         round(t.get("pnl", 0), 2),
+            "close_reason":t.get("close_reason", "—"),
+            "score":       t.get("score"),
+            "entry_time":  t.get("timestamp"),
+            "exit_time":   t.get("closed_at"),
+            "status":      t.get("status"),
+        }
+        for t in today_trades
+        if t.get("status") == "COMPLETE" and t.get("strategy")
+    ]
+
     return {
         "timestamp": datetime.now().isoformat(),
         "bot_status": "paused" if ipc.flag_exists(ipc.FLAG_PAUSE) else "running",
@@ -99,6 +134,8 @@ def _build_snapshot() -> dict:
             "losses_today": losses_today,
             "open_positions": len(open_pos),
         },
+        "strategy_summary": strategy_summary,
+        "today_journal":    today_journal,
         "prices": prices,
         "recent_trades": all_trades[:20],
         "open_positions": open_pos,

@@ -55,11 +55,13 @@ export default function Home() {
   }, []);
 
   const { data, connected } = useWebSocket(authed ? WS_URL : "");
-  const trades     = data?.recent_trades   ?? [];
-  const openPos    = data?.open_positions  ?? [];
-  const mode       = data?.mode            ?? "paper";
-  const botStatus  = data?.bot_status      ?? "unknown";
-  const prices     = data?.prices          ?? {};
+  const trades          = data?.recent_trades     ?? [];
+  const openPos         = data?.open_positions    ?? [];
+  const mode            = data?.mode              ?? "paper";
+  const botStatus       = data?.bot_status        ?? "unknown";
+  const prices          = data?.prices            ?? {};
+  const strategySummary = data?.strategy_summary  ?? {};
+  const todayJournal    = data?.today_journal     ?? [];
 
   if (!authed) return null;
 
@@ -195,6 +197,89 @@ export default function Home() {
                 {openPos.map((t: any, i: number) => (
                   <OpenPositionCard key={i} trade={t} prices={prices} />
                 ))}
+              </div>
+            </div>
+          )}
+
+          {/* Strategy summary cards */}
+          {Object.keys(strategySummary).length > 0 && (
+            <div className="mb-4">
+              <div className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">Today's Strategy P&L</div>
+              <div className="grid grid-cols-3 gap-3">
+                {Object.entries(strategySummary).map(([name, s]: any) => (
+                  <div key={name} className="bg-white rounded-xl border border-gray-200 p-3">
+                    <div className="text-xs font-bold text-gray-700 mb-2">{name}</div>
+                    <div className={`text-lg font-bold ${s.pnl >= 0 ? "text-green-600" : "text-red-500"}`}>
+                      {s.pnl >= 0 ? "+" : ""}₹{s.pnl.toLocaleString("en-IN")}
+                    </div>
+                    <div className="flex gap-3 mt-1 text-xs text-gray-400">
+                      <span>{s.trades} trades</span>
+                      <span className="text-green-600">{s.wins}W</span>
+                      <span className="text-red-500">{s.losses}L</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Today's trade journal */}
+          {todayJournal.length > 0 && (
+            <div className="mb-4">
+              <div className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">Today's Trade Journal</div>
+              <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="bg-gray-50 border-b border-gray-100">
+                      <th className="px-3 py-2 text-left text-gray-500 font-semibold uppercase">Strategy</th>
+                      <th className="px-3 py-2 text-left text-gray-500 font-semibold uppercase">Option</th>
+                      <th className="px-3 py-2 text-right text-gray-500 font-semibold uppercase">Strike</th>
+                      <th className="px-3 py-2 text-right text-gray-500 font-semibold uppercase">Entry ₹</th>
+                      <th className="px-3 py-2 text-right text-gray-500 font-semibold uppercase">Lots</th>
+                      <th className="px-3 py-2 text-right text-gray-500 font-semibold uppercase">P&L</th>
+                      <th className="px-3 py-2 text-left text-gray-500 font-semibold uppercase">Close</th>
+                      <th className="px-3 py-2 text-left text-gray-500 font-semibold uppercase">Score</th>
+                      <th className="px-3 py-2 text-left text-gray-500 font-semibold uppercase">Entry Time</th>
+                      <th className="px-3 py-2 text-left text-gray-500 font-semibold uppercase">Exit Time</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {todayJournal.map((t: any, i: number) => {
+                      const pnl = t.pnl ?? 0;
+                      const optColor = t.option_type === "CE" ? "bg-blue-100 text-blue-700" : "bg-orange-100 text-orange-700";
+                      return (
+                        <tr key={i} className="border-b border-gray-50 hover:bg-gray-50">
+                          <td className="px-3 py-2 font-semibold text-gray-700">{t.strategy}</td>
+                          <td className="px-3 py-2">
+                            <span className={`px-1.5 py-0.5 rounded font-bold ${optColor}`}>{t.option_type}</span>
+                          </td>
+                          <td className="px-3 py-2 text-right text-gray-700">{t.strike ?? "—"}</td>
+                          <td className="px-3 py-2 text-right text-gray-700">
+                            {t.entry_price ? `₹${Number(t.entry_price).toLocaleString("en-IN")}` : "—"}
+                          </td>
+                          <td className="px-3 py-2 text-right text-gray-500">{t.lot_size ?? 75}</td>
+                          <td className={`px-3 py-2 text-right font-bold ${pnl >= 0 ? "text-green-600" : "text-red-500"}`}>
+                            {pnl >= 0 ? "+" : ""}₹{pnl.toLocaleString("en-IN")}
+                          </td>
+                          <td className="px-3 py-2">
+                            <span className={`px-1.5 py-0.5 rounded font-medium ${
+                              t.close_reason === "TP" ? "bg-green-100 text-green-700" :
+                              t.close_reason === "SL" ? "bg-red-100 text-red-700" :
+                              "bg-gray-100 text-gray-500"
+                            }`}>{t.close_reason ?? "—"}</span>
+                          </td>
+                          <td className="px-3 py-2 text-gray-500">{t.score ? t.score.toFixed(1) : "—"}</td>
+                          <td className="px-3 py-2 text-gray-400">
+                            {t.entry_time ? new Date(t.entry_time).toLocaleTimeString("en-IN") : "—"}
+                          </td>
+                          <td className="px-3 py-2 text-gray-400">
+                            {t.exit_time ? new Date(t.exit_time).toLocaleTimeString("en-IN") : "—"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
               </div>
             </div>
           )}

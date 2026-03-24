@@ -313,42 +313,58 @@ class BotRunner:
                     sl: float, tp: float, score: float) -> dict:
         ts = datetime.now().isoformat()
         order_id = f"{strategy.upper()}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        option_type = "CE" if side == "BUY" else "PE"
+        strike = round(entry / 50) * 50   # nearest ATM 50-point strike
         order = {
-            "order_id": order_id,
-            "symbol": "NIFTY",
-            "side": side,
-            "quantity": 75,
-            "price": entry,
-            "pnl": 0,
-            "status": "OPEN",
-            "timestamp": ts,
+            "order_id":    order_id,
+            "symbol":      "NIFTY",
+            "side":        side,
+            "quantity":    75,
+            "price":       entry,
+            "pnl":         0,
+            "status":      "OPEN",
+            "timestamp":   ts,
+            "strategy":    strategy,
+            "option_type": option_type,
+            "strike":      strike,
+            "lot_size":    75,
+            "sl_price":    round(sl, 2),
+            "tp_price":    round(tp, 2),
+            "score":       score,
         }
         decision = {
-            "reasoning": f"{strategy} signal score={score:.1f}",
+            "reasoning": f"{strategy} score={score:.1f} | {option_type} strike={strike}",
             "confidence": min(score / 10.0, 1.0),
             "risk_level": "MEDIUM",
         }
         self.memory.log_trade(order, decision)
-        logger.info("[%s] ENTRY %s NIFTY @ ₹%.2f | SL=%.2f TP=%.2f score=%.1f",
-                    strategy, side, entry, sl, tp, score)
+        logger.info("[%s] ENTRY %s NIFTY %s%d @ ₹%.2f | SL=%.2f TP=%.2f score=%.1f",
+                    strategy, side, option_type, strike, entry, sl, tp, score)
         return {
             "strategy": strategy, "order_id": order_id, "symbol": "NIFTY",
             "side": side, "entry": entry, "sl": round(sl, 2), "tp": round(tp, 2),
             "qty": 75, "score": score, "timestamp": ts,
+            "option_type": option_type, "strike": strike,
         }
 
     def _close_trade(self, pos: dict, close_price: float, pnl: float, reason: str):
         ts = datetime.now().isoformat()
         order_id = f"{pos['strategy'].upper()}-CLOSE-{datetime.now().strftime('%Y%m%d%H%M%S')}"
         order = {
-            "order_id": order_id,
-            "symbol": pos["symbol"],
-            "side": "SELL" if pos["side"] == "BUY" else "BUY",
-            "quantity": pos["qty"],
-            "price": close_price,
-            "pnl": pnl,
-            "status": "COMPLETE",
-            "timestamp": ts,
+            "order_id":    order_id,
+            "symbol":      pos["symbol"],
+            "side":        "SELL" if pos["side"] == "BUY" else "BUY",
+            "quantity":    pos["qty"],
+            "price":       close_price,
+            "pnl":         pnl,
+            "status":      "COMPLETE",
+            "timestamp":   ts,
+            "strategy":    pos["strategy"],
+            "option_type": pos.get("option_type"),
+            "strike":      pos.get("strike"),
+            "lot_size":    pos["qty"],
+            "close_reason":reason,
+            "score":       pos.get("score"),
         }
         decision = {
             "reasoning": f"{pos['strategy']} closed: {reason} | PnL=₹{pnl:.2f}",
@@ -356,7 +372,6 @@ class BotRunner:
             "risk_level": "LOW",
         }
         self.memory.log_trade(order, decision)
-        # Also update the entry trade with closed_at
         self.memory.close_trade(pos["order_id"], pnl)
         logger.info("[%s] CLOSE %s @ ₹%.2f | PnL=₹%.2f | %s",
                     pos["strategy"], pos["symbol"], close_price, pnl, reason)

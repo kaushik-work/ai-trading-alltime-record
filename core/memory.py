@@ -32,7 +32,15 @@ def init_db():
                 risk_level TEXT,
                 timestamp TEXT NOT NULL,
                 closed_at TEXT,
-                mode TEXT DEFAULT 'paper'
+                mode TEXT DEFAULT 'paper',
+                strategy TEXT,
+                option_type TEXT,
+                strike REAL,
+                lot_size INTEGER DEFAULT 75,
+                sl_price REAL,
+                tp_price REAL,
+                close_reason TEXT,
+                score REAL
             );
 
             CREATE TABLE IF NOT EXISTS daily_summary (
@@ -54,6 +62,22 @@ def init_db():
                 timestamp TEXT NOT NULL
             );
         """)
+    # Migration: add new columns to existing databases
+    new_cols = [
+        ("strategy",    "TEXT"),
+        ("option_type", "TEXT"),
+        ("strike",      "REAL"),
+        ("lot_size",    "INTEGER DEFAULT 75"),
+        ("sl_price",    "REAL"),
+        ("tp_price",    "REAL"),
+        ("close_reason","TEXT"),
+        ("score",       "REAL"),
+    ]
+    with get_connection() as conn:
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(trades)")}
+        for col, typ in new_cols:
+            if col not in existing:
+                conn.execute(f"ALTER TABLE trades ADD COLUMN {col} {typ}")
     logger.info("Database initialized at %s", config.DB_PATH)
 
 
@@ -63,21 +87,31 @@ class TradeMemory:
         with get_connection() as conn:
             cursor = conn.execute("""
                 INSERT OR IGNORE INTO trades
-                (order_id, symbol, side, quantity, price, pnl, status, action_reason, confidence, risk_level, timestamp, mode)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (order_id, symbol, side, quantity, price, pnl, status, action_reason,
+                 confidence, risk_level, timestamp, mode,
+                 strategy, option_type, strike, lot_size, sl_price, tp_price, close_reason, score)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 order.get("order_id"),
                 order.get("symbol"),
                 order.get("side"),
                 order.get("quantity"),
                 order.get("price", 0),
-                order.get("pnl", 0),  # populated on SELL orders
+                order.get("pnl", 0),
                 order.get("status"),
                 decision.get("reasoning"),
                 decision.get("confidence", 0),
                 decision.get("risk_level"),
-                datetime.now().isoformat(),
+                order.get("timestamp", datetime.now().isoformat()),
                 "paper" if config.IS_PAPER else "live",
+                order.get("strategy"),
+                order.get("option_type"),
+                order.get("strike"),
+                order.get("lot_size", 75),
+                order.get("sl_price"),
+                order.get("tp_price"),
+                order.get("close_reason"),
+                order.get("score"),
             ))
             return cursor.lastrowid
 
