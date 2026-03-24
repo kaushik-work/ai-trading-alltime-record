@@ -1,0 +1,11 @@
+anthropic
+jugaad-trader
+apscheduler
+streamlit
+pandas
+python-dotenv
+cryptography
+yfinance
+fastapi
+uvicorn[standard]
+python-jose[cryptography]
