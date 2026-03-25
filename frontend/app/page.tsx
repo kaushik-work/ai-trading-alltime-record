@@ -167,18 +167,24 @@ export default function Home() {
                 <h2 className="text-base font-bold text-gray-900">Live Trade Feed</h2>
                 {/* Bot active/inactive indicator */}
                 {schedulerRunning === null ? null : botStatus === "running" ? (
-                  <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-green-100 text-green-700">
-                    <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse inline-block" />
+                  <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
+                        style={{ background: "#dcfce7", color: "#15803d" }}>
+                    <span className="w-1.5 h-1.5 rounded-full animate-pulse inline-block"
+                          style={{ background: "#22c55e" }} />
                     BOT ACTIVE
                   </span>
                 ) : botStatus === "paused" ? (
-                  <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
-                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block" />
+                  <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
+                        style={{ background: "#fef3c7", color: "#b45309" }}>
+                    <span className="w-1.5 h-1.5 rounded-full inline-block"
+                          style={{ background: "#f59e0b" }} />
                     BOT PAUSED
                   </span>
                 ) : (
-                  <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-100 text-red-600">
-                    <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" />
+                  <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
+                        style={{ background: "#fee2e2", color: "#dc2626" }}>
+                    <span className="w-1.5 h-1.5 rounded-full inline-block"
+                          style={{ background: "#ef4444" }} />
                     BOT STOPPED
                   </span>
                 )}
