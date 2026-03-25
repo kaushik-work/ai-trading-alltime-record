@@ -14,9 +14,12 @@ Strategies:
 import asyncio
 import logging
 from datetime import datetime, date, time as dtime
+from zoneinfo import ZoneInfo
 from typing import Optional
 
 import numpy as np
+
+IST = ZoneInfo("Asia/Kolkata")
 
 import config
 from core.memory import TradeMemory
@@ -51,7 +54,10 @@ def _fetch_intraday(symbol: str, interval: str):
         else:
             all_closes = df["Close"].values.astype(float)
 
-        bar_time = df.index[-1].time()
+        last_idx = df.index[-1]
+        if hasattr(last_idx, "tzinfo") and last_idx.tzinfo is not None:
+            last_idx = last_idx.astimezone(IST)
+        bar_time = last_idx.time()
         return (
             df["Open"].values.astype(float),
             df["High"].values.astype(float),
@@ -67,7 +73,7 @@ def _fetch_intraday(symbol: str, interval: str):
 
 
 def _is_market_hours() -> bool:
-    now = datetime.now()
+    now = datetime.now(IST)
     if now.weekday() >= 5:
         return False
     t = now.time()
@@ -173,7 +179,7 @@ class BotRunner:
                 score_signal, in_entry_window,
                 MAX_TRADES_DAY, SCORE_THRESHOLD, EOD_EXIT,
             )
-            now_t = datetime.now().time()
+            now_t = datetime.now(IST).time()
 
             result = await asyncio.get_event_loop().run_in_executor(
                 None, lambda: _fetch_intraday("NIFTY", "15m")
@@ -235,7 +241,7 @@ class BotRunner:
                 score_signal, in_entry_window,
                 MAX_TRADES_DAY, SCORE_THRESHOLD, EOD_EXIT,
             )
-            now_t = datetime.now().time()
+            now_t = datetime.now(IST).time()
 
             result = await asyncio.get_event_loop().run_in_executor(
                 None, lambda: _fetch_intraday("NIFTY", "5m")
