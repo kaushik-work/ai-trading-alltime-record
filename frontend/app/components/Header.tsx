@@ -77,6 +77,14 @@ export default function Header({ mode, connected, botStatus, onBotToggle }: Prop
           {mode === "live" ? "● LIVE" : "● PAPER"}
         </span>
 
+        {/* Strategies button */}
+        <button
+          onClick={() => router.push("/strategies")}
+          className="text-sm font-semibold px-4 py-2 border border-gray-300 hover:border-gray-400 text-gray-700 rounded-lg transition-colors bg-white"
+        >
+          Strategies
+        </button>
+
         {/* PPnL button */}
         <button
           onClick={() => router.push("/pnl")}
@@ -125,6 +133,12 @@ export default function Header({ mode, connected, botStatus, onBotToggle }: Prop
               <div className="px-3 py-2 text-[10px] text-gray-400 uppercase tracking-widest font-semibold">
                 Tools
               </div>
+              <button
+                onClick={() => { router.push("/debug"); setMenuOpen(false); }}
+                className="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
+              >
+                <span>🎯</span> Signal Radar
+              </button>
               <button
                 onClick={() => { router.push("/backtest"); setMenuOpen(false); }}
                 className="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2"
