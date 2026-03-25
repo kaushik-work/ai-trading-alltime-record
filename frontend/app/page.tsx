@@ -55,13 +55,14 @@ export default function Home() {
   }, []);
 
   const { data, connected } = useWebSocket(authed ? WS_URL : "");
-  const trades          = data?.recent_trades     ?? [];
-  const openPos         = data?.open_positions    ?? [];
-  const mode            = data?.mode              ?? "paper";
-  const botStatus       = data?.bot_status        ?? "unknown";
-  const prices          = data?.prices            ?? {};
-  const strategySummary = data?.strategy_summary  ?? {};
-  const todayJournal    = data?.today_journal     ?? [];
+  const trades            = data?.recent_trades     ?? [];
+  const openPos           = data?.open_positions    ?? [];
+  const mode              = data?.mode              ?? "paper";
+  const botStatus         = data?.bot_status        ?? "unknown";
+  const schedulerRunning  = data?.scheduler_running ?? null;
+  const prices            = data?.prices            ?? {};
+  const strategySummary   = data?.strategy_summary  ?? {};
+  const todayJournal      = data?.today_journal     ?? [];
 
   if (!authed) return null;
 
@@ -162,7 +163,26 @@ export default function Home() {
           {/* Section header with live prices */}
           <div className="flex items-center justify-between mb-4">
             <div>
-              <h2 className="text-base font-bold text-gray-900">Live Trade Feed</h2>
+              <div className="flex items-center gap-2">
+                <h2 className="text-base font-bold text-gray-900">Live Trade Feed</h2>
+                {/* Bot active/inactive indicator */}
+                {schedulerRunning === null ? null : botStatus === "running" ? (
+                  <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-green-100 text-green-700">
+                    <span className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse inline-block" />
+                    BOT ACTIVE
+                  </span>
+                ) : botStatus === "paused" ? (
+                  <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400 inline-block" />
+                    BOT PAUSED
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-red-100 text-red-600">
+                    <span className="w-1.5 h-1.5 rounded-full bg-red-500 inline-block" />
+                    BOT STOPPED
+                  </span>
+                )}
+              </div>
               <p className="text-xs text-gray-400">Updates every 5 seconds via WebSocket</p>
             </div>
             <div className="flex items-center gap-4">

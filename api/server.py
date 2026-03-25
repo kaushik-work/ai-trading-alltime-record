@@ -122,9 +122,19 @@ def _build_snapshot() -> dict:
         if t.get("status") == "COMPLETE" and t.get("strategy")
     ]
 
+    runner = get_runner()
+    scheduler_ok = runner.scheduler.running
+    if ipc.flag_exists(ipc.FLAG_PAUSE):
+        bot_status = "paused"
+    elif scheduler_ok:
+        bot_status = "running"
+    else:
+        bot_status = "stopped"
+
     return {
         "timestamp": datetime.now().isoformat(),
-        "bot_status": "paused" if ipc.flag_exists(ipc.FLAG_PAUSE) else "running",
+        "bot_status": bot_status,
+        "scheduler_running": scheduler_ok,
         "mode": "paper" if config.IS_PAPER else "live",
         "pnl": {
             "total": round(total_pnl, 2),
