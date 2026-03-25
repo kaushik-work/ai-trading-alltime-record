@@ -231,7 +231,7 @@ def health():
 
 @app.get("/api/bot/debug")
 def bot_debug(user: str = Depends(get_current_user)):
-    """Live signal scores for both strategies — no trades placed."""
+    """Live signal scores for all 3 strategies — no trades placed."""
     from zoneinfo import ZoneInfo
     from core.bot_runner import _fetch_intraday, _is_market_hours, IST
     from strategies.nifty_intraday import score_signal as musashi_score, SCORE_THRESHOLD as M_THRESH
@@ -239,10 +239,11 @@ def bot_debug(user: str = Depends(get_current_user)):
     runner = get_runner()
     now_ist = datetime.now(IST)
     result = {"time_ist": now_ist.isoformat(), "market_open": _is_market_hours(),
-              "last_heartbeat": runner.last_heartbeat, "strategies": {}}
+              "last_heartbeat": runner.last_heartbeat, "last_scores": runner.last_scores,
+              "strategies": {}}
     for name, fetch_interval, scorer, thresh in [
-        ("Musashi", "15m", musashi_score, M_THRESH),
-        ("Raijin",  "5m",  raijin_score,  R_THRESH),
+        ("Musashi",      "15m", musashi_score, M_THRESH),
+        ("Raijin",       "5m",  raijin_score,  R_THRESH),
     ]:
         try:
             data = _fetch_intraday("NIFTY", fetch_interval)
@@ -260,6 +261,23 @@ def bot_debug(user: str = Depends(get_current_user)):
             }
         except Exception as e:
             result["strategies"][name] = {"error": str(e)}
+
+    # ATR Intraday uses TrendStrategy (signal_scorer) — get its last known state
+    try:
+        from strategies.signal_scorer import SignalScorer
+        from data.market import RealMarketData
+        mkt = RealMarketData()
+        indicators = mkt.get_indicators("NIFTY")
+        scorer_atr = SignalScorer()
+        score_val, direction = scorer_atr.score(indicators)
+        result["strategies"]["ATR Intraday"] = {
+            "score": score_val, "direction": direction,
+            "threshold": 7, "will_trade": abs(score_val) >= 7,
+            "note": "score range -10 to +10, threshold ±7",
+        }
+    except Exception as e:
+        result["strategies"]["ATR Intraday"] = {"error": str(e)}
+
     return result
 
 @app.post("/api/bot/pause")

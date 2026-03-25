@@ -321,6 +321,7 @@ class BotRunner:
     # ── ATR Intraday (TrendStrategy / Claude) ─────────────────────────────────
 
     async def _atr_cycle(self):
+        self.last_heartbeat = datetime.now(IST).isoformat()
         if self.paused or not _is_market_hours():
             return
         try:
