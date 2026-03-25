@@ -134,26 +134,29 @@ class BotRunner:
         self.memory = TradeMemory()
         self.state = _DailyState()
         self._atr_strategy = None   # lazy-init TrendStrategy
+        self.last_heartbeat: Optional[str] = None   # ISO string, IST
+        self.last_scores: dict = {}                 # strategy → last signal scores
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
     def start(self):
         ipc.clear_all_flags()
+        now_ist = datetime.now(IST)
 
         # Musashi — every 15 min
         self.scheduler.add_job(
             self._musashi_cycle, "interval", minutes=15,
-            id="musashi", next_run_time=datetime.now(),
+            id="musashi", next_run_time=now_ist,
         )
         # Raijin — every 5 min
         self.scheduler.add_job(
             self._raijin_cycle, "interval", minutes=5,
-            id="raijin", next_run_time=datetime.now(),
+            id="raijin", next_run_time=now_ist,
         )
         # ATR Intraday — every 5 min
         self.scheduler.add_job(
             self._atr_cycle, "interval", minutes=5,
-            id="atr_intraday", next_run_time=datetime.now(),
+            id="atr_intraday", next_run_time=now_ist,
         )
         # EOD square-off at 15:15, journal save at 15:20
         self.scheduler.add_job(self._eod_squareoff, "cron", hour=15, minute=15, id="eod")
@@ -172,6 +175,7 @@ class BotRunner:
     # ── Musashi ───────────────────────────────────────────────────────────────
 
     async def _musashi_cycle(self):
+        self.last_heartbeat = datetime.now(IST).isoformat()
         if self.paused or not _is_market_hours():
             return
         try:
@@ -185,6 +189,7 @@ class BotRunner:
                 None, lambda: _fetch_intraday("NIFTY", "15m")
             )
             if result is None:
+                logger.warning("[Musashi] _fetch_intraday returned None — yfinance may have failed")
                 return
             opens, highs, lows, closes, volumes, all_closes, bar_time = result
 
@@ -208,11 +213,20 @@ class BotRunner:
 
             # ── look for entry ────────────────────────────────────────────────
             if not in_entry_window(now_t):
+                logger.info("[Musashi] Outside entry window (now_t=%s, bar_time=%s)", now_t, bar_time)
                 return
             if not self.state.can_trade("musashi", MAX_TRADES_DAY):
                 return
 
             sig = score_signal(opens, highs, lows, closes, volumes, all_closes)
+            self.last_scores["Musashi"] = {
+                "buy": sig.get("buy_score", 0), "sell": sig.get("sell_score", 0),
+                "action": sig.get("action"), "threshold": SCORE_THRESHOLD,
+                "in_window": True, "bar_time": str(bar_time), "now_t": str(now_t),
+            }
+            logger.info("[Musashi] score buy=%.1f sell=%.1f action=%s threshold=%.1f bar_time=%s now_t=%s",
+                        sig.get("buy_score", 0), sig.get("sell_score", 0),
+                        sig.get("action"), SCORE_THRESHOLD, bar_time, now_t)
             if sig["action"] == "HOLD":
                 return
 
@@ -234,6 +248,7 @@ class BotRunner:
     # ── Raijin ────────────────────────────────────────────────────────────────
 
     async def _raijin_cycle(self):
+        self.last_heartbeat = datetime.now(IST).isoformat()
         if self.paused or not _is_market_hours():
             return
         try:
@@ -247,6 +262,7 @@ class BotRunner:
                 None, lambda: _fetch_intraday("NIFTY", "5m")
             )
             if result is None:
+                logger.warning("[Raijin] _fetch_intraday returned None — yfinance may have failed")
                 return
             opens, highs, lows, closes, volumes, all_closes, bar_time = result
 
@@ -270,11 +286,20 @@ class BotRunner:
 
             # ── look for entry ────────────────────────────────────────────────
             if not in_entry_window(now_t):
+                logger.info("[Raijin] Outside entry window (now_t=%s, bar_time=%s)", now_t, bar_time)
                 return
             if not self.state.can_trade("raijin", MAX_TRADES_DAY):
                 return
 
             sig = score_signal(opens, highs, lows, closes, volumes, all_closes)
+            self.last_scores["Raijin"] = {
+                "buy": sig.get("buy_score", 0), "sell": sig.get("sell_score", 0),
+                "action": sig.get("action"), "threshold": SCORE_THRESHOLD,
+                "in_window": True, "bar_time": str(bar_time), "now_t": str(now_t),
+            }
+            logger.info("[Raijin] score buy=%.1f sell=%.1f action=%s threshold=%.1f bar_time=%s now_t=%s",
+                        sig.get("buy_score", 0), sig.get("sell_score", 0),
+                        sig.get("action"), SCORE_THRESHOLD, bar_time, now_t)
             if sig["action"] == "HOLD":
                 return
 

@@ -166,12 +166,19 @@ export default function Home() {
               <div className="flex items-center gap-2">
                 <h2 className="text-base font-bold text-gray-900">Live Trade Feed</h2>
                 {/* Bot active/inactive indicator */}
-                {schedulerRunning === null ? null : botStatus === "running" ? (
+                {botStatus === "running" ? (
                   <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
                         style={{ background: "#dcfce7", color: "#15803d" }}>
                     <span className="w-1.5 h-1.5 rounded-full animate-pulse inline-block"
                           style={{ background: "#22c55e" }} />
                     BOT ACTIVE
+                  </span>
+                ) : botStatus === "market_closed" ? (
+                  <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
+                        style={{ background: "#f3f4f6", color: "#6b7280" }}>
+                    <span className="w-1.5 h-1.5 rounded-full inline-block"
+                          style={{ background: "#9ca3af" }} />
+                    MARKET CLOSED
                   </span>
                 ) : botStatus === "paused" ? (
                   <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
@@ -180,14 +187,14 @@ export default function Home() {
                           style={{ background: "#f59e0b" }} />
                     BOT PAUSED
                   </span>
-                ) : (
+                ) : botStatus === "stopped" ? (
                   <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
                         style={{ background: "#fee2e2", color: "#dc2626" }}>
                     <span className="w-1.5 h-1.5 rounded-full inline-block"
                           style={{ background: "#ef4444" }} />
                     BOT STOPPED
                   </span>
-                )}
+                ) : null}
               </div>
               <p className="text-xs text-gray-400">Updates every 5 seconds via WebSocket</p>
             </div>
