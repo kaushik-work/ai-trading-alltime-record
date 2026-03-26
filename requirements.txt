@@ -5,7 +5,9 @@ streamlit
 pandas
 python-dotenv
 cryptography
-yfinance
+requests
+numpy
+pandas
 fastapi
 uvicorn[standard]
 python-jose[cryptography]

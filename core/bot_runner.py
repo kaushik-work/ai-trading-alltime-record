@@ -28,48 +28,41 @@ from core.trade_analyst import generate_entry_remark, generate_exit_remark
 
 logger = logging.getLogger(__name__)
 
-# ── yfinance helpers ──────────────────────────────────────────────────────────
-
-_YF_MAP = {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK"}
-
+# ── market data helpers ───────────────────────────────────────────────────────
 
 def _fetch_intraday(symbol: str, interval: str):
     """
-    Fetch today's intraday OHLCV + 60-day daily closes (for EMA/RSI stability).
+    Fetch today's intraday OHLCV + 60-day daily closes.
+
+    Priority:
+      1. Zerodha via jugaad-trader — real NSE data, correct volume
+      2. NSE India public API    — official source, no login needed
+
     Returns (opens, highs, lows, closes, volumes, all_closes, last_bar_time)
-    or None on failure.
+    or None if both sources fail.
     """
+    # ── 1. Zerodha (real data, real volume) ────────────────────────────────
     try:
-        import yfinance as yf
-        yf_sym = _YF_MAP.get(symbol, f"{symbol}.NS")
-        ticker = yf.Ticker(yf_sym)
-
-        df = ticker.history(period="1d", interval=interval, auto_adjust=True)
-        if df is None or df.empty or len(df) < 3:
-            return None
-
-        df_daily = ticker.history(period="60d", interval="1d", auto_adjust=True)
-        if df_daily is not None and not df_daily.empty:
-            all_closes = df_daily["Close"].values.astype(float)
-        else:
-            all_closes = df["Close"].values.astype(float)
-
-        last_idx = df.index[-1]
-        if hasattr(last_idx, "tzinfo") and last_idx.tzinfo is not None:
-            last_idx = last_idx.astimezone(IST)
-        bar_time = last_idx.time()
-        return (
-            df["Open"].values.astype(float),
-            df["High"].values.astype(float),
-            df["Low"].values.astype(float),
-            df["Close"].values.astype(float),
-            df["Volume"].values.astype(float),
-            all_closes,
-            bar_time,
-        )
+        from data.zerodha_fetcher import ZerodhaFetcher
+        result = ZerodhaFetcher.get().fetch_intraday(symbol, interval)
+        if result is not None:
+            return result
+        logger.warning("_fetch_intraday: Zerodha returned None for %s %s — trying NSE fallback", symbol, interval)
     except Exception as e:
-        logger.warning("_fetch_intraday %s %s failed: %s", symbol, interval, e)
-        return None
+        logger.warning("_fetch_intraday: Zerodha error (%s) — trying NSE fallback", e)
+
+    # ── 2. NSE India public API (official source, no volume for index) ─────
+    try:
+        from data.nse_fetcher import NseFetcher
+        result = NseFetcher.get().fetch_intraday(symbol, interval)
+        if result is not None:
+            logger.info("_fetch_intraday: using NSE India fallback for %s %s", symbol, interval)
+            return result
+        logger.error("_fetch_intraday: NSE fallback also returned None for %s %s — skipping cycle", symbol, interval)
+    except Exception as e:
+        logger.error("_fetch_intraday: NSE fallback error for %s %s: %s — skipping cycle", symbol, interval, e)
+
+    return None
 
 
 def _is_market_hours() -> bool:
@@ -141,6 +134,14 @@ class BotRunner:
 
     def start(self):
         ipc.clear_all_flags()
+
+        # Warm up Zerodha login so first cycle doesn't pay the auth cost
+        try:
+            from data.zerodha_fetcher import ZerodhaFetcher
+            ZerodhaFetcher.get()._ensure_logged_in()
+        except Exception as e:
+            logger.warning("Zerodha warm-up failed (will retry per cycle): %s", e)
+
         now_ist = datetime.now(IST)
 
         # Musashi — every 15 min

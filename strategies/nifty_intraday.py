@@ -55,7 +55,7 @@ EOD_EXIT        = time(15, 10)
 MAX_TRADES_DAY  = 2
 
 # ── Thresholds ────────────────────────────────────────────────────────────────
-SCORE_THRESHOLD     = 8.5
+SCORE_THRESHOLD     = 7.5
 PULLBACK_ZONE_PCT   = 0.004    # price within 0.4% of EMA21 = "at the level"
 RSI_MIN             = 35       # don't buy when RSI < 35 (possible continued weakness)
 RSI_MAX             = 65       # don't buy when RSI > 65 (overbought at entry)

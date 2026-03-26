@@ -26,8 +26,39 @@ from strategies.patterns import detect_patterns
 
 logger = logging.getLogger(__name__)
 
-_YF_MAP = {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK"}
-def _yf_sym(s): return _YF_MAP.get(s, f"{s}.NS")
+def _fetch_backtest_data(symbol: str, period: str, interval: str) -> pd.DataFrame:
+    """
+    Fetch historical OHLCV for backtesting.
+    Priority: Zerodha → NSE India. No yfinance.
+    """
+    days = {"60d": 60, "30d": 30, "90d": 90}.get(period, 60)
+
+    # 1. Zerodha
+    try:
+        from data.zerodha_fetcher import ZerodhaFetcher
+        df = ZerodhaFetcher.get().fetch_historical_df(symbol, interval, days=days)
+        if df is not None and len(df) >= 20:
+            logger.info("Backtest data: Zerodha — %d bars for %s %s", len(df), symbol, interval)
+            return df
+    except Exception as e:
+        logger.warning("Backtest fetch_data Zerodha failed: %s", e)
+
+    # 2. NSE India (daily only — no multi-day intraday from NSE public API)
+    if interval in ("1d", "day"):
+        try:
+            from data.nse_fetcher import NseFetcher
+            df = NseFetcher.get().fetch_daily_df(symbol, days=days)
+            if df is not None and len(df) >= 10:
+                df["_date"] = df.index.date
+                logger.info("Backtest data: NSE fallback — %d bars for %s", len(df), symbol)
+                return df
+        except Exception as e:
+            logger.warning("Backtest fetch_data NSE failed: %s", e)
+
+    raise ValueError(
+        f"No data available for {symbol} {interval} {period}. "
+        "Ensure Zerodha credentials are set and jugaad-trader can log in."
+    )
 
 TRADE_START = time(9, 45)
 TRADE_EXIT  = time(15, 10)
@@ -45,17 +76,10 @@ class BacktestEngine:
 
     def fetch_data(self, symbol: str, period: str = "60d",
                    interval: str = "15m") -> pd.DataFrame:
-        """Download OHLCV from yfinance, convert to IST naive index."""
-        import yfinance as yf
-        df = yf.Ticker(_yf_sym(symbol)).history(
-            period=period, interval=interval, auto_adjust=True
-        )
-        if df.empty:
-            raise ValueError(f"yfinance returned no data for {symbol}")
-        df.index = pd.to_datetime(df.index)
-        if df.index.tz is not None:
-            df.index = df.index.tz_convert("Asia/Kolkata").tz_localize(None)
-        df["_date"] = df.index.date
+        """Fetch OHLCV via Zerodha → NSE India. No yfinance."""
+        df = _fetch_backtest_data(symbol, period, interval)
+        if "_date" not in df.columns:
+            df["_date"] = df.index.date
         return df
 
     # ── Indicator computation (no lookahead) ──────────────────────────────────
