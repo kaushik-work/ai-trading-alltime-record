@@ -1,0 +1,34 @@
+{
+  "date": "2026-03-25",
+  "saved_at": "2026-03-25T05:27:01.827983",
+  "summary": {
+    "total_pnl": 0,
+    "total_trades": 0,
+    "completed_trades": 0,
+    "wins": 0,
+    "losses": 0,
+    "win_rate": 0.0
+  },
+  "strategy_breakdown": {
+    "Musashi": {
+      "trades": 0,
+      "pnl": 0,
+      "wins": 0,
+      "losses": 0
+    },
+    "Raijin": {
+      "trades": 0,
+      "pnl": 0,
+      "wins": 0,
+      "losses": 0
+    },
+    "ATR Intraday": {
+      "trades": 0,
+      "pnl": 0,
+      "wins": 0,
+      "losses": 0
+    }
+  },
+  "trades": [],
+  "learning_notes": ""
+}
