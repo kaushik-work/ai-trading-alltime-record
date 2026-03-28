@@ -1,5 +1,5 @@
 """
-ZerodhaFetcher — uses jugaad-trader to pull real NSE intraday bars.
+ZerodhaFetcher — uses Zerodha Kite Connect API to pull real NSE intraday bars.
 
 Replaces yfinance in bot_runner._fetch_intraday so strategies get
 correct OHLCV data (proper volume, no 15-min delay).
@@ -7,6 +7,8 @@ correct OHLCV data (proper volume, no 15-min delay).
 Instrument tokens (NSE index, does NOT change):
   NIFTY 50   : 256265
   BANK NIFTY : 260105
+
+Requires a valid ZERODHA_ACCESS_TOKEN in .env (run scripts/get_token.py daily).
 """
 
 import logging
@@ -41,8 +43,9 @@ class ZerodhaFetcher:
     _lock = threading.Lock()
 
     def __init__(self):
-        self._broker = None   # jugaad Zerodha session
+        self._broker = None   # KiteConnect session
         self._login_date: Optional[date] = None
+        self._failed_date: Optional[date] = None   # don't retry after failure same day
 
     # ── singleton access ──────────────────────────────────────────────────────
 
@@ -55,30 +58,44 @@ class ZerodhaFetcher:
     # ── login ─────────────────────────────────────────────────────────────────
 
     def _ensure_logged_in(self) -> bool:
-        """Login (or re-login) if session is missing or from a previous day."""
+        """Initialise Kite Connect session using the access token from config.
+
+        The access token is generated once per trading day via scripts/get_token.py
+        and stored in .env as ZERODHA_ACCESS_TOKEN.
+        """
         today = date.today()
         if self._broker is not None and self._login_date == today:
             return True
 
+        if self._failed_date == today:
+            return False
+
         with self._lock:
-            # Double-check after acquiring lock
             if self._broker is not None and self._login_date == today:
                 return True
+            if self._failed_date == today:
+                return False
             try:
-                from jugaad_trader import Zerodha
-                broker = Zerodha(
-                    user_id=config.ZERODHA_USER_ID,
-                    password=config.ZERODHA_PASSWORD,
-                    twofa=config.ZERODHA_TOTP_SECRET,
-                )
-                broker.login()
-                self._broker = broker
+                from kiteconnect import KiteConnect
+                if not config.ZERODHA_API_KEY or not config.ZERODHA_ACCESS_TOKEN:
+                    logger.error(
+                        "ZerodhaFetcher: ZERODHA_API_KEY or ZERODHA_ACCESS_TOKEN not set. "
+                        "Run scripts/get_token.py to generate today's token."
+                    )
+                    self._failed_date = today
+                    return False
+
+                kite = KiteConnect(api_key=config.ZERODHA_API_KEY)
+                kite.set_access_token(config.ZERODHA_ACCESS_TOKEN)
+                self._broker = kite
                 self._login_date = today
-                logger.info("ZerodhaFetcher: logged in as %s", config.ZERODHA_USER_ID)
+                self._failed_date = None
+                logger.info("ZerodhaFetcher: Kite Connect session ready for %s", config.ZERODHA_USER_ID or "user")
                 return True
             except Exception as e:
-                logger.error("ZerodhaFetcher login failed: %s", e)
+                logger.error("ZerodhaFetcher setup failed: %s", e)
                 self._broker = None
+                self._failed_date = today
                 return False
 
     # ── data fetch ────────────────────────────────────────────────────────────

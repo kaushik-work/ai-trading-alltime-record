@@ -93,26 +93,27 @@ class MockBroker:
         }
 
 
-class JugaadBroker:
-    """Live broker using jugaad-trader (free, no API key needed for Zerodha)."""
+class KiteBroker:
+    """Live broker using Zerodha Kite Connect API (https://kite.trade/docs/connect/v3/)."""
 
     def __init__(self):
         try:
-            from jugaad_trader import Zerodha
-            self.broker = Zerodha(
-                user_id=config.ZERODHA_USER_ID,
-                password=config.ZERODHA_PASSWORD,
-                twofa=config.ZERODHA_TOTP_SECRET,
-            )
-            self.broker.login()
-            logger.info("Jugaad-trader (Zerodha) connected successfully.")
+            from kiteconnect import KiteConnect
+            if not config.ZERODHA_API_KEY or not config.ZERODHA_ACCESS_TOKEN:
+                raise RuntimeError(
+                    "ZERODHA_API_KEY or ZERODHA_ACCESS_TOKEN not set. "
+                    "Run scripts/get_token.py to generate today's token."
+                )
+            self.kite = KiteConnect(api_key=config.ZERODHA_API_KEY)
+            self.kite.set_access_token(config.ZERODHA_ACCESS_TOKEN)
+            logger.info("Kite Connect broker connected successfully.")
         except ImportError:
-            raise RuntimeError("jugaad-trader not installed. Run: pip install jugaad-trader")
+            raise RuntimeError("kiteconnect not installed. Run: pip install kiteconnect")
         except Exception as e:
-            raise RuntimeError(f"Jugaad-trader connection failed: {e}")
+            raise RuntimeError(f"Kite Connect connection failed: {e}")
 
     def get_quote(self, symbol: str) -> dict:
-        data = self.broker.quote(f"NSE:{symbol}")
+        data = self.kite.quote([f"NSE:{symbol}"])
         instrument = data.get(f"NSE:{symbol}", {})
         return {
             "symbol": symbol,
@@ -121,31 +122,29 @@ class JugaadBroker:
         }
 
     def place_order(self, symbol: str, side: str, quantity: int, order_type: str = "MARKET", price: float = 0) -> dict:
-        from jugaad_trader import Zerodha
-        transaction = "BUY" if side == "BUY" else "SELL"
-        order_id = self.broker.place_order(
+        order_id = self.kite.place_order(
             variety="regular",
             exchange="NSE",
             tradingsymbol=symbol,
-            transaction_type=transaction,
+            transaction_type=side,
             quantity=quantity,
             product="CNC",
             order_type=order_type,
             price=price if order_type == "LIMIT" else None,
         )
-        logger.info("[LIVE/JUGAAD] %s %d %s | Order ID: %s", side, quantity, symbol, order_id)
+        logger.info("[LIVE/KITE] %s %d %s | Order ID: %s", side, quantity, symbol, order_id)
         return {"order_id": order_id, "symbol": symbol, "side": side, "quantity": quantity, "status": "PLACED"}
 
     def get_positions(self) -> dict:
-        positions = self.broker.positions()
+        positions = self.kite.positions()
         return {p["tradingsymbol"]: p for p in positions.get("net", [])}
 
     def get_portfolio_summary(self) -> dict:
-        margins = self.broker.margins()
+        margins = self.kite.margins()
         equity = margins.get("equity", {})
         return {
             "balance": equity.get("available", {}).get("cash", 0),
-            "pnl": sum(p.get("pnl", 0) for p in self.broker.positions().get("net", [])),
+            "pnl": sum(p.get("pnl", 0) for p in self.kite.positions().get("net", [])),
             "open_positions": len(self.get_positions()),
         }
 
@@ -155,4 +154,4 @@ def get_broker():
     if config.IS_PAPER:
         return MockBroker()
     else:
-        return JugaadBroker()
+        return KiteBroker()

@@ -67,26 +67,21 @@ def _test_broker_connection() -> dict:
         return {"status": "ok", "mode": "paper", "message": "Paper mode — no broker needed"}
 
     missing = [k for k, v in {
-        "ZERODHA_USER_ID": config.ZERODHA_USER_ID,
-        "ZERODHA_PASSWORD": config.ZERODHA_PASSWORD,
-        "ZERODHA_TOTP_SECRET": config.ZERODHA_TOTP_SECRET,
+        "ZERODHA_API_KEY": config.ZERODHA_API_KEY,
+        "ZERODHA_ACCESS_TOKEN": config.ZERODHA_ACCESS_TOKEN,
     }.items() if not v]
     if missing:
         return {"status": "misconfigured", "missing": missing,
                 "message": f"Missing: {', '.join(missing)}"}
     try:
-        from jugaad_trader import Zerodha
-        broker = Zerodha(
-            user_id=config.ZERODHA_USER_ID,
-            password=config.ZERODHA_PASSWORD,
-            twofa=config.ZERODHA_TOTP_SECRET,
-        )
-        broker.login()
-        margins = broker.margins()
+        from kiteconnect import KiteConnect
+        kite = KiteConnect(api_key=config.ZERODHA_API_KEY)
+        kite.set_access_token(config.ZERODHA_ACCESS_TOKEN)
+        margins = kite.margins()
         cash = margins.get("equity", {}).get("available", {}).get("cash", 0)
         return {"status": "ok", "mode": "live", "balance": cash, "message": "Connected"}
     except ImportError:
-        return {"status": "error", "message": "jugaad-trader not installed. Run: pip install jugaad-trader"}
+        return {"status": "error", "message": "kiteconnect not installed. Run: pip install kiteconnect"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -523,9 +518,9 @@ TRADING_MODE=live    # real trades — ensure credentials are set first
     # ── Credentials Status ────────────────────────────────────────────────────
     st.subheader("Credentials Status")
     creds = {
-        "ZERODHA_USER_ID": config.ZERODHA_USER_ID,
-        "ZERODHA_PASSWORD": config.ZERODHA_PASSWORD,
-        "ZERODHA_TOTP_SECRET": config.ZERODHA_TOTP_SECRET,
+        "ZERODHA_API_KEY": config.ZERODHA_API_KEY,
+        "ZERODHA_API_SECRET": config.ZERODHA_API_SECRET,
+        "ZERODHA_ACCESS_TOKEN": config.ZERODHA_ACCESS_TOKEN,
         "ANTHROPIC_API_KEY": config.ANTHROPIC_API_KEY,
     }
     for key, val in creds.items():
@@ -572,24 +567,24 @@ TRADING_MODE=live    # real trades — ensure credentials are set first
     # ── Setup Guide ───────────────────────────────────────────────────────────
     st.subheader("Step-by-step: Going Live")
     st.markdown(f"""
-### Step 1 — Get your Zerodha credentials
-1. Log in to [kite.zerodha.com](https://kite.zerodha.com)
-2. Your **User ID** is shown top-right (format: `AB1234`)
-3. Your **Password** is your Zerodha login password
+### Step 1 — Create a Kite Connect app
+1. Go to [developers.kite.trade](https://developers.kite.trade) and log in
+2. Click **Create new app** → choose **Connect** type
+3. Copy your **API Key** and **API Secret**
 
-### Step 2 — Set up TOTP (2-Factor Auth)
-1. Go to **My Account → Security** on the Zerodha web portal
-2. Enable **Two-Factor Authentication**
-3. When the QR code appears, click **"Can't scan? Get the key instead"**
-4. Copy the 32-character base32 secret — this is your `ZERODHA_TOTP_SECRET`
-
-### Step 3 — Fill your `.env` file
+### Step 2 — Fill your `.env` file
 ```
-ZERODHA_USER_ID=AB1234
-ZERODHA_PASSWORD=your_login_password
-ZERODHA_TOTP_SECRET=JBSWY3DPEHPK3PXP...
+ZERODHA_API_KEY=your_api_key
+ZERODHA_API_SECRET=your_api_secret
 TRADING_MODE=paper          # keep as paper until connection is verified
 ```
+
+### Step 3 — Generate today's access token (run every trading day)
+```
+python scripts/get_token.py
+```
+This opens the Zerodha login URL, you log in once in the browser, paste back the
+request token, and your `ZERODHA_ACCESS_TOKEN` in `.env` is updated automatically.
 
 ### Step 4 — Test the connection
 Click **"Test Zerodha Connection"** above. If it shows your cash balance, you're good.

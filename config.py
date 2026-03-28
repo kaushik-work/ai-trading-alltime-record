@@ -7,15 +7,11 @@ load_dotenv()
 TRADING_MODE = os.getenv("TRADING_MODE", "paper")  # "paper" or "live"
 IS_PAPER = TRADING_MODE == "paper"
 
-# Zerodha (jugaad-trader — free, no paid API key needed)
-ZERODHA_USER_ID = os.getenv("ZERODHA_USER_ID", "")
-ZERODHA_PASSWORD = os.getenv("ZERODHA_PASSWORD", "")
-ZERODHA_TOTP_SECRET = os.getenv("ZERODHA_TOTP_SECRET", "")
-
-# Zerodha Kite Connect (optional — upgrade later)
-KITE_API_KEY = os.getenv("KITE_API_KEY", "")
-KITE_API_SECRET = os.getenv("KITE_API_SECRET", "")
-KITE_ACCESS_TOKEN = os.getenv("KITE_ACCESS_TOKEN", "")
+# Zerodha Kite Connect API (https://kite.trade/docs/connect/v3/)
+ZERODHA_USER_ID   = os.getenv("ZERODHA_USER_ID", "")      # for logging only
+ZERODHA_API_KEY   = os.getenv("ZERODHA_API_KEY", "")
+ZERODHA_API_SECRET = os.getenv("ZERODHA_API_SECRET", "")
+ZERODHA_ACCESS_TOKEN = os.getenv("ZERODHA_ACCESS_TOKEN", "")  # generated daily via scripts/get_token.py
 
 # Claude API
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
