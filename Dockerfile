@@ -10,7 +10,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 # Create db directory for SQLite
-RUN mkdir -p db logs
+RUN mkdir -p db logs journals
 
 # Expose FastAPI port
 EXPOSE 8000
