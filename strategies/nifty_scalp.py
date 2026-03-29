@@ -63,7 +63,7 @@ EOD_EXIT        = time(15, 0)
 MAX_TRADES_DAY  = 3
 
 # ── Thresholds ────────────────────────────────────────────────────────────────
-SCORE_THRESHOLD  = 7.5   # lowered from 8.5 — allows ±1σ + RSI soft + HA flip setups
+SCORE_THRESHOLD  = 6.0   # 3 conditions needed: VWAP extreme + HA flip + RSI extreme
 MIN_VOLUME_RATIO = 1.5
 RSI_OVERSOLD     = 30
 RSI_OVERBOUGHT   = 70

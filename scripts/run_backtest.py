@@ -25,7 +25,7 @@ logging.basicConfig(level=logging.WARNING)   # suppress info noise during sweep
 from backtesting.engine import BacktestEngine
 from backtesting.metrics import compute_metrics
 
-INITIAL_CAPITAL = 20_000.0
+INITIAL_CAPITAL = 50_000.0   # mid-range of ₹20K-₹70K budget
 PERIOD          = "60d"
 
 # ── Permutation grids ────────────────────────────────────────────────────────
@@ -40,7 +40,7 @@ MUSASHI_GRID = {
 }
 
 RAIJIN_GRID = {
-    "min_score": [7.0, 7.5, 8.0],   # updated: internal threshold lowered to 7.5
+    "min_score": [6.0, 6.5, 7.0],   # threshold now 6.0 — 3 conditions sufficient
     "rr_ratio":  [1.5, 2.0, 2.5],
     "risk_pct":  [3.0, 4.0, 5.0],
 }
