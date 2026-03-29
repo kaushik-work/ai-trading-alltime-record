@@ -5,6 +5,8 @@ services:
     command: python main.py
     env_file: .env
     volumes:
+      - /root/ai-trading-alltime-record/.env:/app/.env
+      - /root/ai-trading-alltime-record/backtest_cache:/app/backtest_cache
       - app_data:/app/db
       - app_logs:/app/logs
       - app_journals:/app/journals
@@ -17,6 +19,8 @@ services:
     ports:
       - "8000:8000"
     volumes:
+      - /root/ai-trading-alltime-record/.env:/app/.env
+      - /root/ai-trading-alltime-record/backtest_cache:/app/backtest_cache
       - app_data:/app/db
       - app_logs:/app/logs
       - app_journals:/app/journals
