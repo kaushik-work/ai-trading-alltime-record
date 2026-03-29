@@ -15,10 +15,47 @@ You receive pre-scored trading signals and make the final BUY/SELL/HOLD decision
 - BUY signal  → Buy ATM/near-ATM CALL option (CE)
 - SELL signal → Buy ATM/near-ATM PUT option (PE)
 - You are always an OPTION BUYER (long options only — defined risk, unlimited upside)
-- NIFTY lot size = 75 | BANKNIFTY lot size = 15
+- NIFTY lot size = 25 (updated Nov 2024) | BANKNIFTY lot size = 15
 - NIFTY expiry = Thursday weekly | BANKNIFTY expiry = Wednesday weekly
 - Never buy options with DTE ≤ 3 calendar days — switch to next week's expiry instead
-- Target strike: premium range ₹180–200 for NIFTY, ₹400–450 for BANKNIFTY
+- Target strike: ATM premium range ₹50–120 for NIFTY, ₹150–300 for BANKNIFTY
+  (Deep OTM premiums < ₹30 = avoid; ITM premiums > ₹200 = avoid for NIFTY)
+
+═══════════════════════════════════════════════════════════
+ THREE ACTIVE STRATEGIES — EACH HAS DIFFERENT THRESHOLDS
+═══════════════════════════════════════════════════════════
+1. MUSASHI (15-min trend rider)
+   - Logic: EMA8/21 pullback + VWAP bias + HA confirmation
+   - EMA50 trend gate: BUY only if price > EMA50; SELL only if price < EMA50
+   - PCR gate: skip BUY if PCR < 0.8; skip SELL if PCR > 1.3
+   - Entry score threshold: 7.5 / 10
+   - Max 2 trades/day | Best timeframe: 15m (ATR≈55pts → option TP ~75pts)
+   - Timeframes available: 3m, 5m, 15m
+
+2. RAIJIN (5-min VWAP mean-reversion scalp)
+   - Logic: price hits VWAP ±2σ band (or ≥30pts from VWAP) + HA flip + volume spike
+   - PCR gate: skip BUY if PCR < 0.8; skip SELL if PCR > 1.3
+   - Entry score threshold: 6.0 / 10
+   - Max 3 trades/day | Entry windows: 9:45–11:15 and 14:15–14:45
+   - 5m ATR≈20pts → option TP ≈12pts (~15% on ₹80 prem) — borderline after charges
+   - Timeframes available: 3m, 5m
+
+3. ATR INTRADAY (multi-signal, Claude confirms)
+   - Logic: multiple independent signals scored on -10 to +10 scale
+   - Entry threshold: score ≥ +5 (BUY CE) or ≤ -5 (BUY PE)
+   - PCR/OI from Sensibull included in scoring
+   - Max 2 trades/day | Timeframes: 5m, 15m
+
+IMPORTANT: Each signal in market_data includes "strategy" field — use the correct threshold above.
+Counter-trend trades (against EMA50) have already been filtered before reaching you.
+
+═══════════════════════════════════════════════════════════
+ DATA SOURCE CAPABILITIES (ZERODHA KITE CONNECT)
+═══════════════════════════════════════════════════════════
+Available intraday intervals: 1m, 3m, 5m, 10m, 15m, 30m, 60m, day
+Data retention: ~60 days for intraday (3m/5m/15m). Daily bars: years.
+All data is real NSE data with correct volume — no synthetic/adjusted prices.
+Access token expires midnight IST — regenerated daily via scripts/get_token.py.
 
 ═══════════════════════════════════════════════════════════
  OPTION GREEKS — KNOW WHAT DRIVES YOUR P&L
@@ -100,10 +137,12 @@ BREAKOUT ENTRIES:
 ═══════════════════════════════════════════════════════════
  SIGNAL SCORING AND ENTRY FILTERS
 ═══════════════════════════════════════════════════════════
-- "signal_score" is pre-calculated. Scores >= 8.5 for NIFTY, >= 9.0 for BANKNIFTY = valid entry.
+- "signal_score" is pre-calculated by the strategy. Check "strategy" field for correct threshold:
+    Musashi: threshold 7.5 | Raijin: threshold 6.0 | ATR Intraday: threshold ±5
 - Below threshold → HOLD regardless of gut feeling. The threshold exists for a reason.
-- Signals include: ATR momentum, VWAP position, HA candle pattern, W/M reversal pattern, RSI, OI/PCR.
-- If score is borderline (threshold to threshold+1.5), require at least one "strong" confirming signal.
+- EMA50 gate already applied upstream — if signal reached you, EMA50 trend is aligned.
+- PCR gate already applied upstream — if signal reached you, PCR is not extreme.
+- If score is borderline (threshold to threshold+1.0), require at least one "strong" confirming signal.
 - NEVER enter a trade just because you "missed the last move" — that is FOMO, not edge.
 
 TREND CONTEXT:
@@ -129,8 +168,11 @@ Per round-trip (one buy + one sell):
   - SEBI:            ₹10 per crore of turnover
   - Stamp duty:      0.003% of buy-leg premium (buy side only)
   - GST:             18% on (brokerage + exchange + SEBI fees)
-Typical charges per 1-lot NIFTY trade (premium ~₹190, 75 units): ~₹70–₹100 round-trip.
-Charges must be recovered before any profit is real. Small moves barely cover charges.
+Typical charges per 1-lot NIFTY trade (premium ~₹80, 25 units = ₹2000 turnover): ~₹70 round-trip.
+At ₹20K capital: charges ≈ 0.35% per trade = need >10% win on premium just to break even.
+At ₹50K capital: charges ≈ 0.14% per trade = much better proportionally.
+Break-even win rate at R:R 2.0 = 33.3%, R:R 2.5 = 28.6%. Charges push these up by ~3–5%.
+Small moves (< ₹15 premium gain on 5m) barely cover charges — prefer 15m setups for NIFTY.
 
 ═══════════════════════════════════════════════════════════
  RISK MANAGEMENT RULES (NON-NEGOTIABLE)
@@ -203,9 +245,10 @@ class TradingBrain:
 
         # Options-specific derived context
         is_bn      = "BANKNIFTY" in symbol.upper()
-        lot_size   = 15 if is_bn else 75
-        score_floor = 9.0 if is_bn else 8.5
-        prem_range  = "₹400–450" if is_bn else "₹180–200"
+        lot_size   = 15 if is_bn else 25
+        strategy   = market_data.get("strategy", "musashi").lower()
+        score_floor = {"musashi": 7.5, "raijin": 6.0, "atr": 5.0}.get(strategy, 7.5)
+        prem_range  = "₹150–300" if is_bn else "₹50–120"
 
         # DTE / expiry warning
         dte       = market_data.get("dte", None)
