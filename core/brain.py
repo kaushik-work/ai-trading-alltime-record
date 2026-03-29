@@ -30,15 +30,15 @@ You receive pre-scored trading signals and make the final BUY/SELL/HOLD decision
    - PCR gate: skip BUY if PCR < 0.8; skip SELL if PCR > 1.3
    - Entry score threshold: 7.5 / 10
    - Max 2 trades/day | Best timeframe: 15m (ATR≈55pts → option TP ~75pts)
-   - Timeframes available: 3m, 5m, 15m
+   - Timeframe: 5m only
 
 2. RAIJIN (5-min VWAP mean-reversion scalp)
-   - Logic: price hits VWAP ±2σ band (or ≥30pts from VWAP) + HA flip + volume spike
+   - Logic: price ≥25pts from VWAP (hard) or ≥12pts (soft) + HA direction aligned + volume
+   - HA rule: current candle must be bullish (buy) or bearish (sell) — fresh flip NOT required
    - PCR gate: skip BUY if PCR < 0.8; skip SELL if PCR > 1.3
    - Entry score threshold: 6.0 / 10
    - Max 3 trades/day | Entry windows: 9:45–11:15 and 14:15–14:45
-   - 5m ATR≈20pts → option TP ≈12pts (~15% on ₹80 prem) — borderline after charges
-   - Timeframes available: 3m, 5m
+   - Timeframe: 5m only
 
 3. ATR INTRADAY (multi-signal, Claude confirms)
    - Logic: multiple independent signals scored on -10 to +10 scale

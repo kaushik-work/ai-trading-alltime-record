@@ -40,21 +40,23 @@ RUN_STRATEGY    = args.strategy.lower()
 
 # ── Permutation grids ─────────────────────────────────────────────────────────
 
-MUSASHI_INTERVALS = ["3m", "5m", "15m"]
+# 5m is the proven timeframe across all 3 strategies (backtest 2026-03-29).
+# 15m underperforms over 60d/90d. 3m data not reliably available from Kite (< 60d retention).
+MUSASHI_INTERVALS = ["5m"]
 MUSASHI_GRID = {
     "min_score": [7.5, 8.0, 8.5],
     "rr_ratio":  [2.0, 2.5, 3.0],
     "risk_pct":  [3.0, 4.0, 5.0],
 }
 
-RAIJIN_INTERVALS = ["3m", "5m"]
+RAIJIN_INTERVALS = ["5m"]
 RAIJIN_GRID = {
     "min_score": [6.0, 6.5, 7.0],
     "rr_ratio":  [1.5, 2.0, 2.5],
     "risk_pct":  [3.0, 4.0, 5.0],
 }
 
-ATR_INTERVALS = ["5m", "15m"]
+ATR_INTERVALS = ["5m"]
 ATR_GRID = {
     "min_score": [5, 6, 7],
     "rr_ratio":  [2.0, 2.5, 3.0],

@@ -15,25 +15,33 @@ Core Logic:
 -----------
 This strategy exploits MEAN REVERSION from VWAP extremes.
 
-When NIFTY gets overextended from its session VWAP (at the 2σ band),
-it almost always snaps back toward VWAP. We catch that snap by:
+When NIFTY gets overextended from its session VWAP, it snaps back.
+We enter when price is extended AND the current candle confirms reversal direction.
 
-1. VWAP EXTREME : Price reaches VWAP ± 2σ band (overextended)
-2. HA REVERSAL  : Heikin-Ashi candle changes colour (momentum reversal)
-3. RSI EXTREME  : RSI(9) < 30 (at lower band) OR > 70 (at upper band)
-4. VOLUME SPIKE : Volume ≥ 1.5× average (institutional activity, not noise)
-5. BODY CLOSE   : Current bar must close in reversal direction (body, not wick)
+1. VWAP EXTREME : Price ≥2σ from VWAP OR ≥25pts absolute distance (hard)
+                  Price ≥1σ from VWAP OR ≥12pts absolute distance (soft)
+2. HA ALIGNED   : Current Heikin-Ashi candle is in reversal direction
+                  (bull candle for buy, bear candle for sell — no flip required)
+3. RSI EXTREME  : RSI(9) < 30 (oversold) or > 70 (overbought) — bonus, not gate
+4. VOLUME SPIKE : Volume ≥ 1.5× average (institutional activity)
+5. BODY CLOSE   : Current bar closes in reversal direction
 
 Score system (0–10):
-  Price at/beyond 2σ band  : +3.0
-  Price between 1σ–2σ band : +1.5  (softer setup)
-  HA colour reversal        : +2.5
-  RSI < 30 or > 70          : +2.0
-  RSI < 35 or > 65          : +1.0  (softer)
-  Volume ≥ 1.5×             : +1.5
-  Body close in rev. dir.   : +1.0
+  Price at/beyond 2σ or ≥25pts  : +3.0
+  Price between 1σ–2σ or ≥12pts : +1.5  (softer setup)
+  HA direction aligned           : +2.0  (bull/bear candle, no fresh flip needed)
+  RSI < 30 or > 70               : +1.5
+  RSI < 35 or > 65               : +0.5  (softer)
+  Volume ≥ 1.5×                  : +1.5
+  Body close in rev. dir.        : +1.0
 
-Minimum entry score: 8.5 / 10
+Minimum entry score: 6.0 / 10
+
+Why HA direction (not flip):
+  Requiring a fresh HA flip AND VWAP extreme is anti-correlated — at the extreme,
+  candles are still in trend direction; the flip happens only after price has already
+  recovered. Direction alignment (bull candle at oversold VWAP level) is the correct
+  entry trigger.
 
 Target: VWAP (snap back to anchor)
 SL    : 0.6× ATR below/above the extreme wick tip
@@ -142,26 +150,26 @@ def score_signal(
     buy_details = {}
 
     # 1. VWAP band extreme: primary trigger
-    # Use both band levels AND absolute distance (30pts = ~1.5× 5m ATR for NIFTY)
+    # Hard: ≥2σ band OR ≥25pts absolute distance from VWAP
+    # Soft: ≥1σ band OR ≥12pts absolute distance
     vwap_dist_pts = vwap - price  # positive = price below VWAP
-    if price <= l2 or vwap_dist_pts >= 30:
+    if price <= l2 or vwap_dist_pts >= 25:
         buy_score += 3.0
         buy_details["vwap_band"] = 3.0
-    elif price <= l1 or vwap_dist_pts >= 15:
+    elif price <= l1 or vwap_dist_pts >= 12:
         buy_score += 1.5
         buy_details["vwap_band"] = 1.5
     else:
         buy_details["vwap_band"] = 0.0
 
-    # 2. HA reversal: colour just changed to bull
-    if ha_flipped and consec >= 1:
-        buy_score += 2.5
-        buy_details["ha_reversal"] = 2.5
-    elif consec >= 1:   # already bull but didn't just flip
-        buy_score += 1.0
-        buy_details["ha_reversal"] = 1.0
+    # 2. HA direction aligned: current candle is bullish (no fresh flip required)
+    # Rationale: at VWAP extreme, candles are still trending down — waiting for a
+    # fresh flip means price has already recovered. Bull candle = buying pressure NOW.
+    if consec >= 1:
+        buy_score += 2.0
+        buy_details["ha_aligned"] = 2.0
     else:
-        buy_details["ha_reversal"] = 0.0
+        buy_details["ha_aligned"] = 0.0
 
     # 3. RSI extreme: bonus (not required — RSI recovers too fast on 5m bars)
     if rsi9 <= RSI_OVERSOLD:
@@ -202,23 +210,20 @@ def score_signal(
     sell_details = {}
 
     vwap_dist_pts_sell = price - vwap  # positive = price above VWAP
-    if price >= u2 or vwap_dist_pts_sell >= 30:
+    if price >= u2 or vwap_dist_pts_sell >= 25:
         sell_score += 3.0
         sell_details["vwap_band"] = 3.0
-    elif price >= u1 or vwap_dist_pts_sell >= 15:
+    elif price >= u1 or vwap_dist_pts_sell >= 12:
         sell_score += 1.5
         sell_details["vwap_band"] = 1.5
     else:
         sell_details["vwap_band"] = 0.0
 
-    if ha_flipped and consec <= -1:
-        sell_score += 2.5
-        sell_details["ha_reversal"] = 2.5
-    elif consec <= -1:
-        sell_score += 1.0
-        sell_details["ha_reversal"] = 1.0
+    if consec <= -1:
+        sell_score += 2.0
+        sell_details["ha_aligned"] = 2.0
     else:
-        sell_details["ha_reversal"] = 0.0
+        sell_details["ha_aligned"] = 0.0
 
     if rsi9 >= RSI_OVERBOUGHT:
         sell_score += 1.5

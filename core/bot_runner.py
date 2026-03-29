@@ -6,7 +6,7 @@ The WebSocket loop in server.py already broadcasts _build_snapshot() every 5 s,
 so bot_runner only needs to write trades to TradeMemory — no separate broadcast needed.
 
 Strategies:
-  Musashi     — NIFTY 15-min EMA/VWAP/HA trend               (max 2 trades/day)
+  Musashi     — NIFTY 5-min EMA/VWAP/HA trend                (max 2 trades/day)
   Raijin      — NIFTY 5-min VWAP-band mean-reversion scalp   (max 3 trades/day)
   ATR Intraday — legacy TrendStrategy (Claude-based)          (via watchlist)
 """
@@ -164,7 +164,7 @@ class BotRunner:
         self.scheduler.add_job(self._save_journal,  "cron", hour=15, minute=20, id="journal")
 
         self.scheduler.start()
-        logger.info("BotRunner started — Musashi(15m) + Raijin(5m) + ATR(5m)")
+        logger.info("BotRunner started — Musashi(5m) + Raijin(5m) + ATR(5m)")
 
     def stop(self):
         self.scheduler.shutdown(wait=False)
@@ -187,7 +187,7 @@ class BotRunner:
             now_t = datetime.now(IST).time()
 
             result = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: _fetch_intraday("NIFTY", "15m")
+                None, lambda: _fetch_intraday("NIFTY", "5m")
             )
             if result is None:
                 logger.warning("[Musashi] _fetch_intraday returned None — yfinance may have failed")
