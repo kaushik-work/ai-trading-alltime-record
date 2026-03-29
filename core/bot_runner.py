@@ -152,6 +152,9 @@ class BotRunner:
 
         now_ist = datetime.now(IST)
 
+        # VIX fetch at 9:20 — before trading starts, once per day
+        self.scheduler.add_job(self._fetch_vix, "cron", hour=9, minute=20, id="vix_fetch")
+
         # ATR Intraday — every 5 min
         self.scheduler.add_job(
             self._atr_cycle, "interval", minutes=5,
@@ -171,11 +174,37 @@ class BotRunner:
     def paused(self) -> bool:
         return ipc.flag_exists(ipc.FLAG_PAUSE)
 
+    # ── VIX fetch (9:20 daily) ────────────────────────────────────────────────
+
+    async def _fetch_vix(self):
+        try:
+            from data.zerodha_fetcher import ZerodhaFetcher
+            loop = asyncio.get_event_loop()
+            vix = await loop.run_in_executor(None, ZerodhaFetcher.get().fetch_vix)
+            self.last_vix = vix
+            if vix is not None:
+                threshold = config.VIX_THRESHOLD
+                if vix > threshold:
+                    logger.warning("India VIX %.2f > threshold %.1f — all new entries BLOCKED today.", vix, threshold)
+                else:
+                    logger.info("India VIX %.2f — below threshold %.1f, trading allowed.", vix, threshold)
+        except Exception as e:
+            logger.warning("VIX fetch job failed: %s", e)
+
+    def _is_vix_blocked(self) -> bool:
+        """Return True if VIX was fetched and exceeds the configured threshold."""
+        if self.last_vix is None:
+            return False  # no data = don't block (fail open)
+        return self.last_vix > config.VIX_THRESHOLD
+
     # ── ATR Intraday (TrendStrategy / Claude) ─────────────────────────────────
 
     async def _atr_cycle(self):
         self.last_heartbeat = datetime.now(IST).isoformat()
         if self.paused or not _is_market_hours() or _is_event_blocked():
+            return
+        if self._is_vix_blocked():
+            logger.warning("ATR cycle skipped — India VIX %.2f > threshold %.1f", self.last_vix, config.VIX_THRESHOLD)
             return
         try:
             if self._atr_strategy is None:

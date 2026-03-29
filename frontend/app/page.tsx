@@ -63,6 +63,9 @@ export default function Home() {
   const prices            = data?.prices            ?? {};
   const strategySummary   = data?.strategy_summary  ?? {};
   const todayJournal      = data?.today_journal     ?? [];
+  const indiaVix          = data?.india_vix         ?? null;
+  const vixBlocked        = data?.vix_blocked       ?? false;
+  const vixThreshold      = data?.vix_threshold     ?? 20;
 
   if (!authed) return null;
 
@@ -195,6 +198,16 @@ export default function Home() {
                     BOT STOPPED
                   </span>
                 ) : null}
+                {/* India VIX badge */}
+                {indiaVix !== null && (
+                  <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
+                        style={vixBlocked
+                          ? { background: "#fee2e2", color: "#dc2626" }
+                          : { background: "#f0fdf4", color: "#15803d" }}>
+                    VIX {indiaVix.toFixed(1)}
+                    {vixBlocked && <span className="ml-0.5">⛔</span>}
+                  </span>
+                )}
               </div>
               <p className="text-xs text-gray-400">Updates every 5 seconds via WebSocket</p>
             </div>

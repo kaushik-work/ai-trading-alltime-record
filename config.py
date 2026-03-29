@@ -82,6 +82,12 @@ MARKET_CLOSE = "15:30"
 # ── Claude model ───────────────────────────────────────────────────────────────
 CLAUDE_MODEL = "claude-sonnet-4-6"
 
+# ── India VIX Gate ─────────────────────────────────────────────────────────────
+# Skip all new entries if India VIX is above this level at market open.
+# Normal: 12–16. Budget/RBI: 18–22. War/panic: 22–30+.
+# Set higher (e.g. 25) to only block extreme events, lower (18) to block RBI days too.
+VIX_THRESHOLD = float(os.getenv("VIX_THRESHOLD", 20.0))
+
 # ── Event Calendar — skip trading on these dates (IV crush guaranteed) ─────────
 # Budget / RBI MPC / election result days: premiums halve post-announcement.
 # Update this dict each quarter. Key = "YYYY-MM-DD", value = event label.

@@ -148,6 +148,9 @@ def _build_snapshot() -> dict:
     else:
         bot_status = "running"
 
+    vix = runner.last_vix
+    vix_blocked = vix is not None and vix > config.VIX_THRESHOLD
+
     return {
         "timestamp": now_ist.isoformat(),
         "bot_status": bot_status,
@@ -155,6 +158,9 @@ def _build_snapshot() -> dict:
         "market_open": market_open,
         "last_heartbeat": runner.last_heartbeat,
         "last_scores": runner.last_scores,
+        "india_vix": vix,
+        "vix_blocked": vix_blocked,
+        "vix_threshold": config.VIX_THRESHOLD,
         "mode": "paper" if config.IS_PAPER else "live",
         "pnl": {
             "total": round(total_pnl, 2),
