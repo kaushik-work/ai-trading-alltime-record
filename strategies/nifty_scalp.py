@@ -141,11 +141,13 @@ def score_signal(
     buy_score   = 0.0
     buy_details = {}
 
-    # 1. VWAP band extreme: the primary trigger
-    if price <= l2:
+    # 1. VWAP band extreme: primary trigger
+    # Use both band levels AND absolute distance (30pts = ~1.5× 5m ATR for NIFTY)
+    vwap_dist_pts = vwap - price  # positive = price below VWAP
+    if price <= l2 or vwap_dist_pts >= 30:
         buy_score += 3.0
         buy_details["vwap_band"] = 3.0
-    elif price <= l1:
+    elif price <= l1 or vwap_dist_pts >= 15:
         buy_score += 1.5
         buy_details["vwap_band"] = 1.5
     else:
@@ -199,10 +201,11 @@ def score_signal(
     sell_score   = 0.0
     sell_details = {}
 
-    if price >= u2:
+    vwap_dist_pts_sell = price - vwap  # positive = price above VWAP
+    if price >= u2 or vwap_dist_pts_sell >= 30:
         sell_score += 3.0
         sell_details["vwap_band"] = 3.0
-    elif price >= u1:
+    elif price >= u1 or vwap_dist_pts_sell >= 15:
         sell_score += 1.5
         sell_details["vwap_band"] = 1.5
     else:
