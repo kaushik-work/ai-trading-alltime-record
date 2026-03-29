@@ -93,6 +93,7 @@ def score_signal(
     day_volumes: np.ndarray,
     all_closes:  np.ndarray,   # full history for RSI stability
     pcr: float = None,         # live PCR from oi_data.get_pcr() — None = no filter
+    vix: float = None,         # India VIX — passed to output for brain context only
 ) -> dict:
     """
     Compute the Raijin signal score for the current 5-min bar.
@@ -292,6 +293,7 @@ def score_signal(
         "ha_flipped": ha_flipped,
         "vol_ratio":  vol_r,
         "price":      round(price, 2),
+        "vix":        vix,
     }
 
 
@@ -304,5 +306,5 @@ def _hold(reason: str = "") -> dict:
         "upper2": 0.0, "lower2": 0.0,
         "rsi9": 50.0, "ha_consec": 0,
         "ha_flipped": False, "vol_ratio": 1.0,
-        "price": 0.0, "reason": reason,
+        "price": 0.0, "vix": None, "reason": reason,
     }

@@ -289,6 +289,23 @@ class ZerodhaFetcher:
             self._broker = None
             return None
 
+    def fetch_vix(self) -> float:
+        """
+        Fetch the live India VIX value from Kite Connect.
+        India VIX instrument token = 264969 (NSE).
+        Returns the last traded price as a float, or None on failure.
+        """
+        if not self._ensure_logged_in():
+            return None
+        try:
+            data = self._broker.ltp(["NSE:INDIA VIX"])
+            vix = float(data.get("NSE:INDIA VIX", {}).get("last_price", 0.0))
+            logger.info("India VIX: %.2f", vix)
+            return vix if vix > 0 else None
+        except Exception as e:
+            logger.warning("fetch_vix failed: %s", e)
+            return None
+
     def fetch_historical_df(self, symbol: str, interval: str, days: int = 60):
         """
         Fetch multiple days of intraday bars — used by the backtest engine.

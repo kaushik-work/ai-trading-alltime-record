@@ -129,6 +129,7 @@ class BotRunner:
         self._atr_strategy = None   # lazy-init TrendStrategy
         self.last_heartbeat: Optional[str] = None   # ISO string, IST
         self.last_scores: dict = {}                 # strategy → last signal scores
+        self.last_vix: Optional[float] = None       # last fetched India VIX
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -194,6 +195,17 @@ class BotRunner:
                 return
             opens, highs, lows, closes, volumes, all_closes, bar_time = result
 
+            # ── fetch India VIX (non-blocking, best-effort) ───────────────────
+            try:
+                from data.zerodha_fetcher import ZerodhaFetcher as _ZF_VIX
+                vix_val = await asyncio.get_event_loop().run_in_executor(
+                    None, _ZF_VIX.get().fetch_vix
+                )
+                if vix_val is not None:
+                    self.last_vix = vix_val
+            except Exception:
+                vix_val = self.last_vix  # reuse cached if fetch fails
+
             # ── manage open position ──────────────────────────────────────────
             pos = self.state.get_position("musashi")
             if pos:
@@ -226,15 +238,17 @@ class BotRunner:
             if not self.state.can_trade("musashi", MAX_TRADES_DAY):
                 return
 
-            sig = score_signal(opens, highs, lows, closes, volumes, all_closes)
+            sig = score_signal(opens, highs, lows, closes, volumes, all_closes, vix=vix_val)
             self.last_scores["Musashi"] = {
                 "buy": sig.get("buy_score", 0), "sell": sig.get("sell_score", 0),
                 "action": sig.get("action"), "threshold": SCORE_THRESHOLD,
                 "in_window": True, "bar_time": str(bar_time), "now_t": str(now_t),
+                "vix": vix_val,
             }
-            logger.info("[Musashi] score buy=%.1f sell=%.1f action=%s threshold=%.1f bar_time=%s now_t=%s",
+            logger.info("[Musashi] score buy=%.1f sell=%.1f action=%s threshold=%.1f bar_time=%s now_t=%s vix=%s",
                         sig.get("buy_score", 0), sig.get("sell_score", 0),
-                        sig.get("action"), SCORE_THRESHOLD, bar_time, now_t)
+                        sig.get("action"), SCORE_THRESHOLD, bar_time, now_t,
+                        f"{vix_val:.1f}" if vix_val else "n/a")
             if sig["action"] == "HOLD":
                 return
 
@@ -290,6 +304,9 @@ class BotRunner:
                 return
             opens, highs, lows, closes, volumes, all_closes, bar_time = result
 
+            # ── reuse cached VIX (Musashi may have updated it already) ────────
+            vix_val = self.last_vix
+
             # ── manage open position ──────────────────────────────────────────
             pos = self.state.get_position("raijin")
             if pos:
@@ -320,15 +337,17 @@ class BotRunner:
             if not self.state.can_trade("raijin", MAX_TRADES_DAY):
                 return
 
-            sig = score_signal(opens, highs, lows, closes, volumes, all_closes)
+            sig = score_signal(opens, highs, lows, closes, volumes, all_closes, vix=vix_val)
             self.last_scores["Raijin"] = {
                 "buy": sig.get("buy_score", 0), "sell": sig.get("sell_score", 0),
                 "action": sig.get("action"), "threshold": SCORE_THRESHOLD,
                 "in_window": True, "bar_time": str(bar_time), "now_t": str(now_t),
+                "vix": vix_val,
             }
-            logger.info("[Raijin] score buy=%.1f sell=%.1f action=%s threshold=%.1f bar_time=%s now_t=%s",
+            logger.info("[Raijin] score buy=%.1f sell=%.1f action=%s threshold=%.1f bar_time=%s now_t=%s vix=%s",
                         sig.get("buy_score", 0), sig.get("sell_score", 0),
-                        sig.get("action"), SCORE_THRESHOLD, bar_time, now_t)
+                        sig.get("action"), SCORE_THRESHOLD, bar_time, now_t,
+                        f"{vix_val:.1f}" if vix_val else "n/a")
             if sig["action"] == "HOLD":
                 return
 

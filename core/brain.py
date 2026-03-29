@@ -79,15 +79,50 @@ THETA (time decay — the enemy of option buyers):
   - This is why retail option buyers lose money: they fight theta every single day.
 
 VEGA (implied volatility sensitivity):
-  - High IV (VIX > 18): premiums are expensive — require larger spot move to profit.
-  - Low IV (VIX < 12): premiums cheap — good time to buy options.
-  - IV crush post-events (budget, RBI): premiums can collapse even if direction is right.
-  - Check India VIX before entering. VIX > 20 = elevated fear = higher premiums.
+  - VIX drives IV. High VIX = expensive premiums — need a bigger spot move to profit.
+  - Low VIX = cheap premiums but small expected moves — theta kills buyers anyway.
+  - IV crush post-events (budget, RBI, elections): premium halves even if direction right.
+  - NEVER buy options on known event days — see VIX/Event section below.
 
 GAMMA:
   - Rate of change of delta. Highest at ATM, near expiry.
   - High gamma = option can move explosively in your favour on a big move.
   - High gamma also = rapid decay if spot stagnates. Double-edged sword.
+
+═══════════════════════════════════════════════════════════
+ INDIA VIX — REGIME, PREMIUMS, AND SIZING
+═══════════════════════════════════════════════════════════
+VIX = expected 30-day annualised volatility. Higher VIX = more expensive premiums.
+VIX does NOT block trading — it changes premium level, required size, and score buffer.
+
+REGIME TABLE:
+  VIX < 12    : Too quiet. Premiums cheap but moves are tiny. Theta destroys option buyers.
+                Only trade breakout setups with very high score. Avoid mean-reversion.
+  VIX 12–20   : Sweet spot. Normal ATM NIFTY premium ₹150–220. Standard thresholds apply.
+  VIX 20–28   : Elevated fear. ATM NIFTY premium ₹250–400. TRADABLE but adjust:
+                  → 1 lot only, regardless of capital.
+                  → Add +0.5 to minimum score threshold before entry.
+                  → SL must be wider (ATR is higher) — do NOT tighten SL to compensate.
+                  → Confirm ATM premium ≥ ₹180 still achievable at this VIX level.
+  VIX > 28    : Extreme fear. ATM premium ₹400–600. Wide bid-ask, gaps everywhere.
+                  → 1 lot only. Require score ≥ 9.0 (or threshold + 1.5). Near-perfect setup only.
+                  → After gap-down open, WAIT 30 min before any entry (let panic settle).
+                  → Seriously consider HOLD — risk/reward deteriorates at this level.
+
+CAPITAL IMPLICATION AT HIGH VIX:
+  VIX 25: ATM NIFTY premium ≈ ₹350–400. 1 lot × 65 units = ₹22,750–₹26,000.
+    → Need ₹70,000+ capital to trade safely. At ₹50K this is 45–52% per lot — too risky.
+  VIX 30: ATM NIFTY premium ≈ ₹450–550. 1 lot × 65 units = ₹29,250–₹35,750.
+    → Need ₹100,000+ capital. At ₹70K this is 42–51% — marginal at best.
+
+EVENT DAYS — HARD BLOCK (IV crush guaranteed, direction doesn't matter):
+  ✗ Union Budget day (~Feb 1 each year)
+  ✗ RBI MPC policy announcement (~6 times/year, every other month)
+  ✗ Lok Sabha / State election result days
+  ✗ Any day VIX spikes > 35 from previous close (treat as event-equivalent)
+  On these days: HOLD all positions, skip all new entries.
+  WHY: post-event IV crush halves ATM premium even if price moves in your direction.
+  The vega loss outweighs the delta gain. You can be right on direction and still lose.
 
 ═══════════════════════════════════════════════════════════
  WHY OPTION BUYING IS RISKY (AND HOW TO WIN)
@@ -271,10 +306,28 @@ class TradingBrain:
         if consec_losses >= 3:
             consec_loss_warn = "\n🛑  3 consecutive losses in recent history — risk management rule: HOLD only today."
 
+        # VIX regime context
+        vix_val = market_data.get("vix", None)
+        vix_context = ""
+        if vix_val is not None:
+            if vix_val < 12:
+                vix_regime = "TOO QUIET (< 12) — theta kills option buyers, moves too small"
+                vix_action = "Require confirmed breakout and score ≥ 9.0 before entry. Avoid mean-reversion."
+            elif vix_val < 20:
+                vix_regime = "SWEET SPOT (12–20) — ideal for option buyers"
+                vix_action = "Standard size and thresholds apply."
+            elif vix_val < 28:
+                vix_regime = "ELEVATED (20–28) — premiums expensive, market nervous"
+                vix_action = f"1 lot only. Add +0.5 to min score → effective threshold {score_floor + 0.5:.1f}. Verify ATM premium ≥ ₹180."
+            else:
+                vix_regime = "EXTREME (> 28) — fear spike, gaps, wide spreads"
+                vix_action = f"1 lot only. Require score ≥ 9.0 (threshold {score_floor + 1.5:.1f}). Wait 30 min after gap-down. Seriously consider HOLD."
+            vix_context = f"\n📊 India VIX = {vix_val:.1f} [{vix_regime}]\n   Guidance: {vix_action}"
+
         return f"""Analyze this NSE index options trading opportunity:
 
 SYMBOL: {symbol}  |  Lot Size: {lot_size}  |  Premium Target: {prem_range}
-Minimum Signal Score Required: {score_floor}{dte_warn}{consec_loss_warn}
+Minimum Signal Score Required: {score_floor}{dte_warn}{consec_loss_warn}{vix_context}
 
 CURRENT MARKET DATA:
 {json.dumps(market_data, indent=2)}
@@ -292,7 +345,7 @@ RECENT TRADE HISTORY FOR {symbol} (last 10):
 Decision guidance:
 - If signal_score < {score_floor}: respond with HOLD (insufficient edge).
 - If market is sideways/no clear VWAP direction: respond with HOLD (theta will kill you).
-- If India VIX > 20 in market_data: reduce lot size by 50% (premiums expensive).
+- VIX guidance already shown above — apply regime-appropriate threshold and sizing.
 - BUY signal → option_type CE | SELL signal → option_type PE
 - Suggest sl_premium_pct = 0.50 (exit if premium drops 50% from entry).
 - Suggest tp_premium_pct = 0.80 (take profit at 80% gain on premium).

@@ -76,6 +76,7 @@ def score_signal(
     day_volumes: np.ndarray,
     all_closes: np.ndarray,   # full history up to this bar (for EMA/RSI stability)
     pcr: float = None,        # live PCR from oi_data.get_pcr() — None = no filter
+    vix: float = None,        # India VIX — passed to output for brain context only
 ) -> dict:
     """
     Compute the Musashi signal score for the current bar.
@@ -314,6 +315,7 @@ def score_signal(
         "vol_ratio": vol_r,
         "structure": structure,
         "price":     round(price, 2),
+        "vix":       vix,
     }
 
 
@@ -325,5 +327,5 @@ def _hold(reason: str = "") -> dict:
         "ema8": 0.0, "ema21": 0.0, "rsi": 50.0,
         "ha_consec": 0, "vol_ratio": 1.0,
         "structure": "sideways", "price": 0.0,
-        "reason": reason,
+        "vix": None, "reason": reason,
     }
