@@ -1,5 +1,5 @@
 """
-Backtest permutation runner — Musashi + ATR Intraday
+Backtest permutation runner — ATR Intraday (27 combos)
 All timeframes x All periods (30d, 60d, 90d)
 
 Usage:
@@ -8,7 +8,6 @@ Usage:
     python scripts/run_backtest.py --period all        # 30d + 60d + 90d
     python scripts/run_backtest.py --capital 70000
     python scripts/run_backtest.py --no-cache          # force re-fetch from Zerodha
-    python scripts/run_backtest.py --strategy musashi  # single strategy
 """
 
 import sys, os, json, itertools, argparse
@@ -27,8 +26,8 @@ parser.add_argument("--capital",  type=float, default=50_000.0,
                     help="Starting capital INR (default 50000)")
 parser.add_argument("--period",   type=str,   default="60d",
                     help="30d | 60d | 90d | all  (default 60d)")
-parser.add_argument("--strategy", type=str,   default="all",
-                    help="musashi | atr | all  (default all)")
+parser.add_argument("--strategy", type=str,   default="atr",
+                    help="atr  (default atr)")
 parser.add_argument("--no-cache", action="store_true",
                     help="Force re-fetch data even if cache exists")
 args = parser.parse_args()
@@ -40,17 +39,8 @@ RUN_STRATEGY    = args.strategy.lower()
 
 # ── Permutation grids ─────────────────────────────────────────────────────────
 
-# 5m is the proven timeframe across all 3 strategies (backtest 2026-03-29).
-# 15m underperforms over 60d/90d. 3m data not reliably available from Kite (< 60d retention).
-# Musashi v2 score range: 0–13 (added EMA21 slope +1.0 and HA flip +1.5).
-# Grid updated to match new max — testing 8.0 / 8.5 / 9.0.
-MUSASHI_INTERVALS = ["5m"]
-MUSASHI_GRID = {
-    "min_score": [8.0, 8.5, 9.0],
-    "rr_ratio":  [2.0, 2.5, 3.0],
-    "risk_pct":  [2.0, 3.0, 4.0],
-}
-
+# 5m is the proven timeframe (backtest 2026-03-29).
+# Optimal config: score=6, R:R=2.0, risk=2% → 51.5% net, 45.2% WR, 13.1% DD (60d)
 ATR_INTERVALS = ["5m"]
 ATR_GRID = {
     "min_score": [5, 6, 7],
@@ -138,30 +128,6 @@ def _load_or_fetch(engine, symbol, period, interval):
 
 # ── Strategy runners ──────────────────────────────────────────────────────────
 
-def run_musashi(engine, dfs):
-    n = len(MUSASHI_INTERVALS) * len(PERIODS) * len(list(itertools.product(*MUSASHI_GRID.values())))
-    print(f"\nRunning Musashi permutations ({n} combos)...")
-    rows = []
-    keys = list(MUSASHI_GRID.keys())
-    for interval in MUSASHI_INTERVALS:
-        for period in PERIODS:
-            df = dfs.get((interval, period))
-            if df is None: continue
-            for vals in itertools.product(*MUSASHI_GRID.values()):
-                params = dict(zip(keys, vals))
-                try:
-                    result = engine.run_trend_rider(
-                        symbol="NIFTY", period=period, interval=interval,
-                        risk_pct=params["risk_pct"], rr_ratio=params["rr_ratio"],
-                        min_score=params["min_score"], _df=df,
-                    )
-                    rows.append(_summarise(result, "Musashi", params, interval, period))
-                    print(".", end="", flush=True)
-                except Exception as e:
-                    print(f"\n  [SKIP] {interval} {period} {params}: {e}")
-    print()
-    return rows
-
 def run_atr(engine, dfs):
     n = len(ATR_INTERVALS) * len(PERIODS) * len(list(itertools.product(*ATR_GRID.values())))
     print(f"\nRunning ATR Intraday permutations ({n} combos)...")
@@ -191,14 +157,10 @@ def run_atr(engine, dfs):
 if __name__ == "__main__":
     engine = BacktestEngine(initial_capital=INITIAL_CAPITAL)
 
-    # Collect all needed intervals across strategies
+    # Collect all needed intervals
     needed = set()
-    if RUN_STRATEGY in ("all", "musashi"):
-        for iv in MUSASHI_INTERVALS:
-            for p in PERIODS: needed.add((iv, p))
-    if RUN_STRATEGY in ("all", "atr"):
-        for iv in ATR_INTERVALS:
-            for p in PERIODS: needed.add((iv, p))
+    for iv in ATR_INTERVALS:
+        for p in PERIODS: needed.add((iv, p))
 
     print(f"\nFetching {len(needed)} datasets (capital=Rs{INITIAL_CAPITAL:,.0f}, periods={PERIODS})...")
     dfs = {}
@@ -210,12 +172,7 @@ if __name__ == "__main__":
 
     all_results = {}
 
-    if RUN_STRATEGY in ("all", "musashi"):
-        musashi_rows = run_musashi(engine, dfs)
-        _print_table(musashi_rows, "MUSASHI — sorted by net return %")
-        all_results["musashi"] = musashi_rows
-
-    if RUN_STRATEGY in ("all", "atr"):
+    if RUN_STRATEGY in ("atr", "all"):
         atr_rows = run_atr(engine, dfs)
         _print_table(atr_rows, "ATR INTRADAY — sorted by net return %")
         all_results["atr"] = atr_rows

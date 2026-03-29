@@ -51,7 +51,7 @@ from core.memory import TradeMemory
 
 logger = logging.getLogger(__name__)
 
-STRATEGIES = ["Musashi", "Raijin", "ATR Intraday"]
+STRATEGIES = ["ATR Intraday"]
 
 
 def _ensure_dir():

@@ -180,7 +180,7 @@ BREAKOUT ENTRIES:
  SIGNAL SCORING AND ENTRY FILTERS
 ═══════════════════════════════════════════════════════════
 - "signal_score" is pre-calculated by the strategy. Check "strategy" field for correct threshold:
-    Musashi: threshold 7.5 | Raijin: threshold 6.0 | ATR Intraday: threshold ±5
+    ATR Intraday: threshold ±6 (score range -10 to +10)
 - Below threshold → HOLD regardless of gut feeling. The threshold exists for a reason.
 - EMA50 gate already applied upstream — if signal reached you, EMA50 trend is aligned.
 - PCR gate already applied upstream — if signal reached you, PCR is not extreme.
@@ -289,8 +289,8 @@ class TradingBrain:
         # Options-specific derived context
         is_bn      = "BANKNIFTY" in symbol.upper()
         lot_size   = 30 if is_bn else 65
-        strategy   = market_data.get("strategy", "musashi").lower()
-        score_floor = {"musashi": 7.5, "raijin": 6.0, "atr": 5.0}.get(strategy, 7.5)
+        strategy   = market_data.get("strategy", "atr").lower()
+        score_floor = {"atr": 6.0}.get(strategy, 6.0)
         prem_range  = "₹300–450" if is_bn else "₹180–220"
 
         # DTE / expiry warning

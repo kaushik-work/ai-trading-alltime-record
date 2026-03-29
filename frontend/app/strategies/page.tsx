@@ -5,38 +5,6 @@ import Header from "../components/Header";
 
 const STRATEGIES = [
   {
-    id: "musashi",
-    name: "Musashi",
-    tag: "侍",
-    color: "#6366f1",
-    bg: "#eef2ff",
-    tagline: "Trend Rider",
-    timeframe: "15m",
-    rr: "1 : 2.5",
-    maxTrades: 2,
-    window: "9:45–11:30 + 13:30–14:30",
-    threshold: 8.5,
-    description: "Musashi waits for the perfect pullback in a confirmed trend. It only trades when price returns to the EMA21 level while the EMA stack, VWAP, and momentum all agree — then rides the resumption with 1:2.5 R:R.",
-    howItWorks: [
-      { icon: "📈", title: "EMA Stack", desc: "EMA8 above EMA21 = uptrend confirmed. EMA8 below EMA21 = downtrend." },
-      { icon: "〰️", title: "VWAP Bias", desc: "Price must be on the correct side of VWAP. Above VWAP = only buy CE. Below VWAP = only buy PE." },
-      { icon: "🎯", title: "Pullback Zone", desc: "Best entry when price pulls back to within 0.4% of EMA21 — not extended, not overbought." },
-      { icon: "🕯️", title: "HA Confirmation", desc: "At least 2 consecutive Heikin-Ashi candles in the trade direction before entry." },
-      { icon: "📊", title: "RSI Filter", desc: "RSI(14) must be between 35–65. Avoids entries at extreme overbought/oversold levels." },
-      { icon: "🔊", title: "Volume", desc: "Volume must be ≥ 1.2× the 20-bar average. Real buyers behind the move, not noise." },
-    ],
-    scoring: [
-      { label: "EMA Stack aligned", pts: "+2.5" },
-      { label: "Price above/below VWAP", pts: "+2.0" },
-      { label: "Pullback to EMA21 zone", pts: "+2.0" },
-      { label: "HA consecutive ≥ 2", pts: "+1.5" },
-      { label: "RSI in 38–62 zone", pts: "+1.0" },
-      { label: "Volume ≥ 1.2×", pts: "+1.0" },
-      { label: "Swing structure aligned", pts: "+0.5" },
-      { label: "Pin bar or engulfing at EMA21", pts: "+1.0" },
-    ],
-  },
-  {
     id: "atr",
     name: "ATR Intraday",
     tag: "旧",
@@ -71,7 +39,7 @@ const STRATEGIES = [
 
 export default function StrategiesPage() {
   const router = useRouter();
-  const [selected, setSelected] = useState("musashi");
+  const [selected, setSelected] = useState("atr");
   const strat = STRATEGIES.find(s => s.id === selected)!;
 
   return (
@@ -173,8 +141,7 @@ export default function StrategiesPage() {
             {/* Visual diagram */}
             <div className="bg-white rounded-xl border border-gray-200 p-4">
               <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3">Visual Setup</h3>
-              {strat.id === "musashi" && <MushashiDiagram />}
-              {strat.id === "atr"     && <AtrDiagram />}
+              <AtrDiagram />
             </div>
 
             {/* Score breakdown */}
@@ -199,67 +166,6 @@ export default function StrategiesPage() {
             </div>
           </div>
         </div>
-      </div>
-    </div>
-  );
-}
-
-/* ── Musashi Diagram — EMA pullback ───────────────────────────────────────── */
-function MushashiDiagram() {
-  return (
-    <div className="relative">
-      <svg viewBox="0 0 280 160" className="w-full" style={{ fontFamily: "monospace" }}>
-        {/* Background */}
-        <rect width="280" height="160" rx="8" fill="#f8faff" />
-
-        {/* Price path — trending up with pullback */}
-        <polyline points="10,130 30,120 50,105 70,95 90,100 110,85 130,75 150,80 170,70 190,60 210,55 230,45 250,38 270,32"
-                  fill="none" stroke="#94a3b8" strokeWidth="1.5" />
-
-        {/* EMA21 — orange */}
-        <polyline points="10,140 50,128 90,112 130,96 170,82 210,68 250,56 270,50"
-                  fill="none" stroke="#f97316" strokeWidth="2" strokeDasharray="4 2" />
-
-        {/* EMA8 — blue */}
-        <polyline points="10,135 50,120 90,104 130,87 170,74 210,60 250,48 270,42"
-                  fill="none" stroke="#6366f1" strokeWidth="2" />
-
-        {/* VWAP — purple dashed */}
-        <line x1="10" y1="95" x2="270" y2="70" stroke="#a855f7" strokeWidth="1" strokeDasharray="6 3" />
-
-        {/* Pullback zone highlight */}
-        <rect x="130" y="72" width="40" height="20" rx="3" fill="#22c55e" fillOpacity="0.15" stroke="#22c55e" strokeWidth="1" strokeDasharray="2 1" />
-
-        {/* Entry arrow */}
-        <line x1="155" y1="58" x2="155" y2="72" stroke="#22c55e" strokeWidth="2" markerEnd="url(#arrowGreen)" />
-        <circle cx="155" cy="82" r="4" fill="#22c55e" />
-
-        {/* TP line */}
-        <line x1="155" y1="40" x2="270" y2="32" stroke="#22c55e" strokeWidth="1" strokeDasharray="3 2" />
-        {/* SL line */}
-        <line x1="155" y1="96" x2="200" y2="92" stroke="#ef4444" strokeWidth="1" strokeDasharray="3 2" />
-
-        {/* Labels */}
-        <text x="14" y="143" fontSize="7" fill="#f97316">EMA21</text>
-        <text x="14" y="136" fontSize="7" fill="#6366f1">EMA8</text>
-        <text x="14" y="94" fontSize="7" fill="#a855f7">VWAP</text>
-        <text x="160" y="38" fontSize="7" fill="#22c55e">TP</text>
-        <text x="202" y="91" fontSize="7" fill="#ef4444">SL</text>
-        <text x="131" y="70" fontSize="6" fill="#15803d">Pull-</text>
-        <text x="131" y="79" fontSize="6" fill="#15803d">back</text>
-        <text x="148" y="56" fontSize="7" fill="#22c55e">ENTRY</text>
-
-        {/* Arrow def */}
-        <defs>
-          <marker id="arrowGreen" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
-            <path d="M0,0 L0,6 L6,3 z" fill="#22c55e" />
-          </marker>
-        </defs>
-      </svg>
-      <div className="flex items-center gap-3 mt-2 text-[10px] justify-center">
-        <span className="flex items-center gap-1"><span style={{ background: "#6366f1", width: 14, height: 2, display: "inline-block", borderRadius: 1 }} />EMA8</span>
-        <span className="flex items-center gap-1"><span style={{ background: "#f97316", width: 14, height: 2, display: "inline-block", borderRadius: 1 }} />EMA21</span>
-        <span className="flex items-center gap-1"><span style={{ background: "#a855f7", width: 14, height: 2, display: "inline-block", borderRadius: 1 }} />VWAP</span>
       </div>
     </div>
   );
