@@ -32,7 +32,7 @@ TRADING_PHASE = os.getenv("TRADING_PHASE", "A")  # "A", "B", or "C"
 STARTING_BUDGET      = int(os.getenv("STARTING_BUDGET", 20000))
 TARGET_PHASE_A       = 150000    # ₹1.5L — unlock Phase B
 TARGET_PHASE_B       = 1500000   # ₹15L  — unlock options selling (Phase C)
-RISK_PER_TRADE_PCT   = float(os.getenv("RISK_PER_TRADE_PCT", 5.0))   # % of budget at risk per trade
+RISK_PER_TRADE_PCT   = float(os.getenv("RISK_PER_TRADE_PCT", 2.0))   # % of budget at risk per trade (backtest optimal: 2% → 51.5% net / 13.1% DD)
 MAX_DAILY_LOSS_PCT   = float(os.getenv("MAX_DAILY_LOSS_PCT", 10.0))  # % of budget — auto-pause if hit
 
 # Derived risk amounts (budget-relative, update these when budget grows)
@@ -62,7 +62,7 @@ STOP_LOSS_PCT    = float(os.getenv("STOP_LOSS_PCT",    1.5))   # intraday: tight
 TAKE_PROFIT_PCT  = float(os.getenv("TAKE_PROFIT_PCT",  3.0))   # target 1:2 R:R → 3% TP
 
 # ── Strategy Parameters (AishDoc) ─────────────────────────────────────────────
-MIN_SIGNAL_SCORE = int(os.getenv("MIN_SIGNAL_SCORE", 5))  # trade only when score ≥ 5/10
+MIN_SIGNAL_SCORE = int(os.getenv("MIN_SIGNAL_SCORE", 6))  # trade only when score ≥ 6/10 (backtest optimal: 45.2% WR at 6 vs 44.7% at 5)
 
 # ── Watchlist — NIFTY & BANKNIFTY only ────────────────────────────────────────
 WATCHLIST = {
