@@ -160,11 +160,6 @@ class BotRunner:
             self._musashi_cycle, "interval", minutes=15,
             id="musashi", next_run_time=now_ist,
         )
-        # Raijin — every 5 min
-        self.scheduler.add_job(
-            self._raijin_cycle, "interval", minutes=5,
-            id="raijin", next_run_time=now_ist,
-        )
         # ATR Intraday — every 5 min
         self.scheduler.add_job(
             self._atr_cycle, "interval", minutes=5,
@@ -175,7 +170,7 @@ class BotRunner:
         self.scheduler.add_job(self._save_journal,  "cron", hour=15, minute=20, id="journal")
 
         self.scheduler.start()
-        logger.info("BotRunner started — Musashi(5m) + Raijin(5m) + ATR(5m)")
+        logger.info("BotRunner started — Musashi(15m) + ATR(5m)")
 
     def stop(self):
         self.scheduler.shutdown(wait=False)
@@ -306,105 +301,6 @@ class BotRunner:
         except Exception as e:
             logger.error("Musashi cycle: %s", e, exc_info=True)
 
-    # ── Raijin ────────────────────────────────────────────────────────────────
-
-    async def _raijin_cycle(self):
-        self.last_heartbeat = datetime.now(IST).isoformat()
-        if self.paused or not _is_market_hours() or _is_event_blocked():
-            return
-        try:
-            from strategies.nifty_scalp import (
-                score_signal, in_entry_window,
-                MAX_TRADES_DAY, SCORE_THRESHOLD, EOD_EXIT,
-            )
-            now_t = datetime.now(IST).time()
-
-            result = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: _fetch_intraday("NIFTY", "5m")
-            )
-            if result is None:
-                logger.warning("[Raijin] _fetch_intraday returned None — yfinance may have failed")
-                return
-            opens, highs, lows, closes, volumes, all_closes, bar_time = result
-
-            # ── reuse cached VIX + PCR (Musashi may have updated them already) ─
-            vix_val = self.last_vix
-            pcr_val = self.last_pcr
-
-            # ── manage open position ──────────────────────────────────────────
-            pos = self.state.get_position("raijin")
-            if pos:
-                from data.zerodha_fetcher import ZerodhaFetcher as _ZF
-                expiry = date.fromisoformat(pos["expiry"])
-                _, opt_price = await asyncio.get_event_loop().run_in_executor(
-                    None, lambda: _ZF.get().get_option_ltp("NIFTY", pos["strike"], pos["option_type"], expiry)
-                )
-                if opt_price is None or opt_price <= 0:
-                    nifty_move = float(closes[-1]) - pos["nifty_entry"]
-                    direction  = 1 if pos["option_type"] == "CE" else -1
-                    opt_price  = max(pos["entry"] + nifty_move * 0.5 * direction, 0.05)
-                hit_sl = opt_price <= pos["sl"]
-                hit_tp = opt_price >= pos["tp"]
-                eod    = now_t >= EOD_EXIT
-                if hit_sl or hit_tp or eod:
-                    reason = "SL" if hit_sl else ("TP" if hit_tp else "EOD")
-                    pnl = round((opt_price - pos["entry"]) * pos["qty"], 2)
-                    self._close_trade(pos, opt_price, pnl, reason)
-                    self.state.set_position("raijin", None)
-                    asyncio.ensure_future(self._generate_exit_remark(pos, opt_price, pnl, reason))
-                return
-
-            # ── look for entry ────────────────────────────────────────────────
-            if not in_entry_window(now_t):
-                logger.info("[Raijin] Outside entry window (now_t=%s, bar_time=%s)", now_t, bar_time)
-                return
-            if not self.state.can_trade("raijin", MAX_TRADES_DAY):
-                return
-
-            sig = score_signal(opens, highs, lows, closes, volumes, all_closes, pcr=pcr_val, vix=vix_val)
-            self.last_scores["Raijin"] = {
-                "buy": sig.get("buy_score", 0), "sell": sig.get("sell_score", 0),
-                "action": sig.get("action"), "threshold": SCORE_THRESHOLD,
-                "in_window": True, "bar_time": str(bar_time), "now_t": str(now_t),
-                "vix": vix_val, "pcr": pcr_val,
-            }
-            logger.info("[Raijin] score buy=%.1f sell=%.1f action=%s threshold=%.1f bar_time=%s now_t=%s vix=%s pcr=%s",
-                        sig.get("buy_score", 0), sig.get("sell_score", 0),
-                        sig.get("action"), SCORE_THRESHOLD, bar_time, now_t,
-                        f"{vix_val:.1f}" if vix_val else "n/a",
-                        f"{pcr_val:.2f}" if pcr_val else "n/a")
-            if sig["action"] == "HOLD":
-                return
-
-            entry_spot = float(closes[-1])
-            atr_v      = sig["atr"] or 1.0
-            option_type = "CE" if sig["action"] == "BUY" else "PE"
-            strike      = round(entry_spot / 50) * 50
-
-            from data.zerodha_fetcher import ZerodhaFetcher as _ZF
-            expiry   = _ZF.nearest_weekly_expiry()
-            opt_sym, entry_prem = await asyncio.get_event_loop().run_in_executor(
-                None, lambda: _ZF.get().get_option_ltp("NIFTY", strike, option_type, expiry)
-            )
-            if entry_prem is None or entry_prem < 1:
-                opt_sym    = f"NIFTY_SYN_{expiry}_{strike}{option_type}"
-                entry_prem = max(atr_v * 1.5, 50.0)
-                logger.warning("[Raijin] Option LTP unavailable — synthetic premium ₹%.2f", entry_prem)
-
-            delta = 0.5
-            sl = max(entry_prem - 0.6 * atr_v * delta, entry_prem * 0.10)
-            tp = entry_prem + 1.2 * atr_v * delta
-
-            pos = self._open_trade("Raijin", sig["action"], entry_spot, sl, tp, sig["score"],
-                                   option_type=option_type, strike=strike, expiry=expiry,
-                                   opt_sym=opt_sym, entry_prem=entry_prem)
-            self.state.set_position("raijin", pos)
-            self.state.record_trade("raijin")
-            asyncio.ensure_future(self._generate_entry_remark(pos, sig))
-
-        except Exception as e:
-            logger.error("Raijin cycle: %s", e, exc_info=True)
-
     # ── ATR Intraday (TrendStrategy / Claude) ─────────────────────────────────
 
     async def _atr_cycle(self):
@@ -425,11 +321,10 @@ class BotRunner:
 
     async def _eod_squareoff(self):
         logger.info("EOD square-off triggered")
-        for strat in ("musashi", "raijin"):
-            pos = self.state.get_position(strat)
-            if pos:
-                self._close_trade(pos, pos["entry"], 0.0, "EOD")
-                self.state.set_position(strat, None)
+        pos = self.state.get_position("musashi")
+        if pos:
+            self._close_trade(pos, pos["entry"], 0.0, "EOD")
+            self.state.set_position("musashi", None)
         if self._atr_strategy:
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, self._atr_strategy.square_off_all)

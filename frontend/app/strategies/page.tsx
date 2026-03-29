@@ -37,37 +37,6 @@ const STRATEGIES = [
     ],
   },
   {
-    id: "raijin",
-    name: "Raijin",
-    tag: "雷",
-    color: "#f59e0b",
-    bg: "#fffbeb",
-    tagline: "Mean Reversion Scalper",
-    timeframe: "5m",
-    rr: "1 : 2.0",
-    maxTrades: 3,
-    window: "9:45–10:45 + 14:15–14:45",
-    threshold: 8.5,
-    description: "Raijin exploits overextension. When NIFTY reaches the VWAP ±2σ band and shows a reversal flip, it snaps back to VWAP. Raijin catches that snap — quick, precise, and exits near VWAP.",
-    howItWorks: [
-      { icon: "🎯", title: "VWAP Extreme", desc: "Price reaches VWAP +2σ (overbought) or −2σ (oversold) band — the trigger zone." },
-      { icon: "🕯️", title: "HA Reversal Flip", desc: "Heikin-Ashi candle just changed colour. Bull flip at lower band = buy CE. Bear flip at upper band = buy PE." },
-      { icon: "📊", title: "RSI Extreme", desc: "RSI(9) < 30 at lower band (sellers exhausted) or > 70 at upper band (buyers exhausted)." },
-      { icon: "🔊", title: "Volume Spike", desc: "Volume ≥ 1.5× average. Institutional activity stepping in, not retail noise." },
-      { icon: "🕯️", title: "Body Close", desc: "Current bar must close in reversal direction — body confirms the flip, not just a wick." },
-    ],
-    scoring: [
-      { label: "Price at/beyond 2σ band", pts: "+3.0" },
-      { label: "Price between 1σ–2σ band", pts: "+1.5" },
-      { label: "HA colour reversal flip", pts: "+2.5" },
-      { label: "RSI < 30 or > 70", pts: "+2.0" },
-      { label: "RSI < 35 or > 65 (soft)", pts: "+1.0" },
-      { label: "Volume ≥ 1.5×", pts: "+1.5" },
-      { label: "Body close in reversal dir.", pts: "+1.0" },
-      { label: "Engulfing candle bonus", pts: "+0.5" },
-    ],
-  },
-  {
     id: "atr",
     name: "ATR Intraday",
     tag: "旧",
@@ -205,7 +174,6 @@ export default function StrategiesPage() {
             <div className="bg-white rounded-xl border border-gray-200 p-4">
               <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3">Visual Setup</h3>
               {strat.id === "musashi" && <MushashiDiagram />}
-              {strat.id === "raijin"  && <RaijinDiagram />}
               {strat.id === "atr"     && <AtrDiagram />}
             </div>
 
@@ -293,63 +261,6 @@ function MushashiDiagram() {
         <span className="flex items-center gap-1"><span style={{ background: "#f97316", width: 14, height: 2, display: "inline-block", borderRadius: 1 }} />EMA21</span>
         <span className="flex items-center gap-1"><span style={{ background: "#a855f7", width: 14, height: 2, display: "inline-block", borderRadius: 1 }} />VWAP</span>
       </div>
-    </div>
-  );
-}
-
-/* ── Raijin Diagram — VWAP bands mean reversion ───────────────────────────── */
-function RaijinDiagram() {
-  return (
-    <div className="relative">
-      <svg viewBox="0 0 280 160" className="w-full">
-        <rect width="280" height="160" rx="8" fill="#fffdf0" />
-
-        {/* Upper 2σ band */}
-        <line x1="10" y1="25" x2="270" y2="25" stroke="#ef4444" strokeWidth="1" strokeDasharray="4 3" />
-        {/* Upper 1σ band */}
-        <line x1="10" y1="50" x2="270" y2="50" stroke="#fca5a5" strokeWidth="1" strokeDasharray="4 3" />
-        {/* VWAP */}
-        <line x1="10" y1="80" x2="270" y2="80" stroke="#f59e0b" strokeWidth="2" />
-        {/* Lower 1σ band */}
-        <line x1="10" y1="110" x2="270" y2="110" stroke="#86efac" strokeWidth="1" strokeDasharray="4 3" />
-        {/* Lower 2σ band */}
-        <line x1="10" y1="135" x2="270" y2="135" stroke="#22c55e" strokeWidth="1" strokeDasharray="4 3" />
-
-        {/* Band fills */}
-        <rect x="10" y="10" width="260" height="15" fill="#ef4444" fillOpacity="0.07" />
-        <rect x="10" y="125" width="260" height="15" fill="#22c55e" fillOpacity="0.07" />
-
-        {/* Price path — oscillates, hits lower band, snaps back */}
-        <polyline points="10,80 30,85 50,90 70,100 90,115 110,128 120,135 130,128 140,115 155,98 170,87 185,82 200,80 220,78 240,80"
-                  fill="none" stroke="#374151" strokeWidth="2" />
-
-        {/* Touch point at lower band */}
-        <circle cx="120" cy="135" r="5" fill="#22c55e" fillOpacity="0.3" stroke="#22c55e" strokeWidth="2" />
-
-        {/* Entry arrow up */}
-        <line x1="120" y1="125" x2="120" y2="112" stroke="#22c55e" strokeWidth="2" markerEnd="url(#arrowUp)" />
-
-        {/* Target at VWAP */}
-        <circle cx="200" cy="80" r="4" fill="#f59e0b" />
-        <line x1="125" y1="135" x2="195" y2="80" stroke="#22c55e" strokeWidth="1" strokeDasharray="3 2" opacity="0.5" />
-
-        {/* Labels */}
-        <text x="235" y="23" fontSize="7" fill="#ef4444">+2σ SELL</text>
-        <text x="238" y="49" fontSize="7" fill="#f97316">+1σ</text>
-        <text x="240" y="79" fontSize="7" fill="#f59e0b">VWAP</text>
-        <text x="238" y="109" fontSize="7" fill="#16a34a">−1σ</text>
-        <text x="232" y="134" fontSize="7" fill="#16a34a">−2σ BUY</text>
-
-        <text x="108" y="148" fontSize="7" fill="#22c55e">ENTRY (CE)</text>
-        <text x="188" y="76" fontSize="7" fill="#f59e0b">TARGET</text>
-
-        <defs>
-          <marker id="arrowUp" markerWidth="6" markerHeight="6" refX="3" refY="3" orient="auto">
-            <path d="M0,6 L3,0 L6,6 z" fill="#22c55e" />
-          </marker>
-        </defs>
-      </svg>
-      <p className="text-[10px] text-gray-400 text-center mt-1">Price hits −2σ band → HA flip → snap back to VWAP</p>
     </div>
   );
 }

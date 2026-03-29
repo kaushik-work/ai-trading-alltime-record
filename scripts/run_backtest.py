@@ -1,6 +1,6 @@
 """
-Backtest permutation runner — Musashi + Raijin + ATR Intraday
-All timeframes (3m, 5m, 15m) x All periods (30d, 60d, 90d)
+Backtest permutation runner — Musashi + ATR Intraday
+All timeframes x All periods (30d, 60d, 90d)
 
 Usage:
     python scripts/run_backtest.py                     # default: 60d, 50K capital
@@ -28,7 +28,7 @@ parser.add_argument("--capital",  type=float, default=50_000.0,
 parser.add_argument("--period",   type=str,   default="60d",
                     help="30d | 60d | 90d | all  (default 60d)")
 parser.add_argument("--strategy", type=str,   default="all",
-                    help="musashi | raijin | atr | all  (default all)")
+                    help="musashi | atr | all  (default all)")
 parser.add_argument("--no-cache", action="store_true",
                     help="Force re-fetch data even if cache exists")
 args = parser.parse_args()
@@ -46,13 +46,6 @@ MUSASHI_INTERVALS = ["5m"]
 MUSASHI_GRID = {
     "min_score": [7.5, 8.0, 8.5],
     "rr_ratio":  [2.0, 2.5, 3.0],
-    "risk_pct":  [3.0, 4.0, 5.0],
-}
-
-RAIJIN_INTERVALS = ["5m"]
-RAIJIN_GRID = {
-    "min_score": [6.0, 6.5, 7.0],
-    "rr_ratio":  [1.5, 2.0, 2.5],
     "risk_pct":  [3.0, 4.0, 5.0],
 }
 
@@ -167,30 +160,6 @@ def run_musashi(engine, dfs):
     print()
     return rows
 
-def run_raijin(engine, dfs):
-    n = len(RAIJIN_INTERVALS) * len(PERIODS) * len(list(itertools.product(*RAIJIN_GRID.values())))
-    print(f"\nRunning Raijin permutations ({n} combos)...")
-    rows = []
-    keys = list(RAIJIN_GRID.keys())
-    for interval in RAIJIN_INTERVALS:
-        for period in PERIODS:
-            df = dfs.get((interval, period))
-            if df is None: continue
-            for vals in itertools.product(*RAIJIN_GRID.values()):
-                params = dict(zip(keys, vals))
-                try:
-                    result = engine.run_vwap_snap(
-                        symbol="NIFTY", period=period, interval=interval,
-                        risk_pct=params["risk_pct"], rr_ratio=params["rr_ratio"],
-                        min_score=params["min_score"], _df=df,
-                    )
-                    rows.append(_summarise(result, "Raijin", params, interval, period))
-                    print(".", end="", flush=True)
-                except Exception as e:
-                    print(f"\n  [SKIP] {interval} {period} {params}: {e}")
-    print()
-    return rows
-
 def run_atr(engine, dfs):
     n = len(ATR_INTERVALS) * len(PERIODS) * len(list(itertools.product(*ATR_GRID.values())))
     print(f"\nRunning ATR Intraday permutations ({n} combos)...")
@@ -225,9 +194,6 @@ if __name__ == "__main__":
     if RUN_STRATEGY in ("all", "musashi"):
         for iv in MUSASHI_INTERVALS:
             for p in PERIODS: needed.add((iv, p))
-    if RUN_STRATEGY in ("all", "raijin"):
-        for iv in RAIJIN_INTERVALS:
-            for p in PERIODS: needed.add((iv, p))
     if RUN_STRATEGY in ("all", "atr"):
         for iv in ATR_INTERVALS:
             for p in PERIODS: needed.add((iv, p))
@@ -246,11 +212,6 @@ if __name__ == "__main__":
         musashi_rows = run_musashi(engine, dfs)
         _print_table(musashi_rows, "MUSASHI — sorted by net return %")
         all_results["musashi"] = musashi_rows
-
-    if RUN_STRATEGY in ("all", "raijin"):
-        raijin_rows = run_raijin(engine, dfs)
-        _print_table(raijin_rows, "RAIJIN — sorted by net return %")
-        all_results["raijin"] = raijin_rows
 
     if RUN_STRATEGY in ("all", "atr"):
         atr_rows = run_atr(engine, dfs)
