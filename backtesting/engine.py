@@ -443,12 +443,17 @@ class BacktestEngine:
 
     # ── Strike selection ─────────────────────────────────────────────────────
 
-    # Target premium range per symbol (₹) — ATM weekly options, Phase A budget.
-    # NIFTY ATM weekly (DTE 4-9, ATR≈50):  ≈ ₹50-100.  Keep ATM for max delta efficiency.
-    # BANKNIFTY ATM weekly (DTE 4-9):       ≈ ₹150-250.
+    # Target premium range per symbol (₹) — ATM weekly options.
+    # WHY ₹180-220 for NIFTY (not lower):
+    #   Same 20pt adverse spot move on a ₹200 option = ₹9 drop = 4.5% loss.
+    #   Same move on a ₹80 option = ₹9 drop = 11.25% loss — SL hits on noise.
+    #   Low-premium (OTM/near-expiry) options decay faster proportionally.
+    #   ₹180-220 = ATM, 4-7 DTE, proper delta 0.45 — maximum theta/delta efficiency.
+    # Capital implication: 1 lot NIFTY @ ₹200 × 65 units = ₹13,000 per lot.
+    #   Min recommended capital: ₹50K (1 lot = 26% of capital).
     PREMIUM_TARGET = {
-        "NIFTY":     (50, 120),
-        "BANKNIFTY": (150, 300),
+        "NIFTY":     (150, 220),
+        "BANKNIFTY": (300, 450),
     }
 
     @staticmethod
@@ -986,7 +991,7 @@ class BacktestEngine:
 
                 option_type              = "CE" if action == "BUY" else "PE"
                 expiry_date, dte         = self._expiry_for_trade(ts.date(), symbol)
-                t_min, t_max             = self.PREMIUM_TARGET.get(symbol, (50, 120))
+                t_min, t_max             = self.PREMIUM_TARGET.get(symbol, (150, 220))
                 strike, entry_prem, delta_trade = self._select_strike(
                     entry, atr_v, dte, strike_gap, action, interval, t_min, t_max
                 )

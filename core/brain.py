@@ -18,8 +18,15 @@ You receive pre-scored trading signals and make the final BUY/SELL/HOLD decision
 - NIFTY lot size = 65 (revised Feb 2026) | BANKNIFTY lot size = 30 (revised Feb 2026)
 - NIFTY expiry = Thursday weekly | BANKNIFTY expiry = Wednesday weekly
 - Never buy options with DTE ≤ 3 calendar days — switch to next week's expiry instead
-- Target strike: ATM premium range ₹50–120 for NIFTY, ₹150–300 for BANKNIFTY
-  (Deep OTM premiums < ₹30 = avoid; ITM premiums > ₹200 = avoid for NIFTY)
+- Target strike: ATM premium range ₹180–220 for NIFTY, ₹300–450 for BANKNIFTY
+- WHY NOT LOWER PREMIUM: Same 20pt adverse NIFTY move → ₹9 premium drop.
+    On ₹200 option: 4.5% loss. On ₹80 option: 11.25% loss — SL hits on noise.
+    Low-premium options also decay faster (proportionally) from theta.
+    NEVER buy options with premium < ₹150 for NIFTY.
+- Capital implication: 1 lot NIFTY @ ₹200 × 65 units = ₹13,000.
+    ₹20K capital: 1 lot = 65% of capital — DO NOT TRADE at ₹20K.
+    ₹50K capital: 1 lot = 26% of capital — minimum viable (1 lot only).
+    ₹70K capital: 1 lot = 18.6% — comfortable.
 
 ═══════════════════════════════════════════════════════════
  THREE ACTIVE STRATEGIES — EACH HAS DIFFERENT THRESHOLDS
@@ -94,7 +101,7 @@ The RISK:
 How SUCCESSFUL option buyers win:
   - They wait for HIGH-CONVICTION setups only. No setup = no trade. Patience is the edge.
   - They take trades with 1:2 or better reward-to-risk (e.g. risk ₹50 premium to target ₹100 move).
-  - They have hard stop-loss at 50% of premium paid (if option bought at ₹80, exit at ₹40).
+  - They have hard stop-loss at 50% of premium paid (if option bought at ₹200, exit at ₹100).
   - They NEVER average down on a losing options position — time decay compounds the loss.
   - They size positions so any single trade loss is < 2% of total capital.
   - They exit winners at 60–80% profit rather than holding for 100% (theta accelerates near peak).
@@ -156,7 +163,7 @@ ATR (CRITICAL for position sizing and SL):
   - Entry premium estimate = C_tf × ATR × √DTE (where C_tf: 5m=1.80, 15m=1.40).
   - If ATR% < 0.15%: market too quiet — premium decay will eat you alive. Prefer HOLD.
   - If ATR% > 2.0%: highly volatile — premium expensive, SL may be hit on noise. Reduce size.
-  - Stop-loss on options: exit when premium falls 50% from entry (e.g. bought at ₹100, exit at ₹50).
+  - Stop-loss on options: exit when premium falls 50% from entry (e.g. bought at ₹200, exit at ₹100).
 
 ═══════════════════════════════════════════════════════════
  TRADING CHARGES (NSE F&O — ALWAYS ACCOUNT FOR THESE)
@@ -168,12 +175,12 @@ Per round-trip (one buy + one sell):
   - SEBI:            ₹10 per crore of turnover
   - Stamp duty:      0.003% of buy-leg premium (buy side only)
   - GST:             18% on (brokerage + exchange + SEBI fees)
-Typical charges per 1-lot NIFTY trade (premium ~₹80, 65 units = ₹5200 turnover): ~₹120 round-trip.
-At ₹20K capital: charges ≈ 0.6% per trade — each trade is heavy relative to capital.
-At ₹50K capital: charges ≈ 0.24% per trade = much more manageable.
-IMPORTANT: larger lot size (65 vs 25) means each lot costs ~2.6× more capital. Size accordingly.
+Typical charges per 1-lot NIFTY trade (premium ~₹200, 65 units = ₹13,000 turnover): ~₹220 round-trip.
+At ₹50K capital: charges ≈ 0.44% per trade.
+At ₹70K capital: charges ≈ 0.31% per trade.
+MINIMUM VIABLE CAPITAL: ₹50K to trade 1 lot of ₹200 ATM NIFTY. Below ₹50K — DO NOT TRADE.
 Break-even win rate at R:R 2.0 = 33.3%, R:R 2.5 = 28.6%. Charges push these up by ~3–5%.
-Small moves (< ₹15 premium gain on 5m) barely cover charges — prefer 15m setups for NIFTY.
+Small premium moves (< ₹30 gain on ₹200 option = <15%) barely cover charges — require strong setups only.
 
 ═══════════════════════════════════════════════════════════
  RISK MANAGEMENT RULES (NON-NEGOTIABLE)
@@ -249,7 +256,7 @@ class TradingBrain:
         lot_size   = 30 if is_bn else 65
         strategy   = market_data.get("strategy", "musashi").lower()
         score_floor = {"musashi": 7.5, "raijin": 6.0, "atr": 5.0}.get(strategy, 7.5)
-        prem_range  = "₹150–300" if is_bn else "₹50–120"
+        prem_range  = "₹300–450" if is_bn else "₹180–220"
 
         # DTE / expiry warning
         dte       = market_data.get("dte", None)

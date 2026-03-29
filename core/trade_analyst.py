@@ -20,7 +20,7 @@ Strategy context:
 - MUSASHI (15m trend): EMA50 aligned + VWAP bias + HA flip. Threshold 7.5/10. ATR≈55pts.
 - RAIJIN (5m mean-reversion): Price at VWAP ±2σ or ≥30pts from VWAP. Threshold 6.0/10. ATR≈20pts.
 - ATR INTRADAY: Multi-signal -10 to +10 scale. Threshold ±5. Claude-confirmed.
-- NIFTY lot size = 65 (Feb 2026) | ATM premium target ₹50–120 | Charges ≈ ₹120/round-trip
+- NIFTY lot size = 65 (Feb 2026) | ATM premium ₹180–220 | 1 lot = ₹13K | Charges ≈ ₹220/round-trip
 
 Be concise, specific, and trader-focused. No fluff.
 
@@ -39,7 +39,7 @@ Strategy context:
 - MUSASHI (15m trend): EMA50 aligned + VWAP bias + HA flip. Threshold 7.5/10. ATR≈55pts.
 - RAIJIN (5m mean-reversion): Price at VWAP ±2σ or ≥30pts from VWAP. Threshold 6.0/10. ATR≈20pts.
 - ATR INTRADAY: Multi-signal -10 to +10 scale. Threshold ±5. Claude-confirmed.
-- NIFTY lot size = 65 (Feb 2026) | ATM premium ₹50–120 | Charges ≈ ₹120/trade
+- NIFTY lot size = 65 (Feb 2026) | ATM premium ₹180–220 | 1 lot = ₹13K | Charges ≈ ₹220/trade
 - Break-even: R:R 2.0 needs >33% win rate; charges add ~3–5% to that requirement
 
 Be honest, specific, and constructive. No fluff.
