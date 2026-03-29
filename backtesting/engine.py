@@ -57,7 +57,7 @@ def _fetch_backtest_data(symbol: str, period: str, interval: str) -> pd.DataFram
 
     raise ValueError(
         f"No data available for {symbol} {interval} {period}. "
-        "Ensure Zerodha credentials are set and jugaad-trader can log in."
+        "Ensure Zerodha credentials are set (run scripts/get_token.py for today's token)."
     )
 
 TRADE_START = time(9, 45)

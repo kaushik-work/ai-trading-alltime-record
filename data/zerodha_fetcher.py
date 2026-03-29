@@ -27,6 +27,7 @@ _TOKENS = {
 }
 
 _INTERVAL_MAP = {
+    "3m":  "3minute",
     "5m":  "5minute",
     "15m": "15minute",
     "1d":  "day",
