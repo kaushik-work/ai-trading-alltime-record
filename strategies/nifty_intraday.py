@@ -324,7 +324,7 @@ def _hold(reason: str = "") -> dict:
         "action": "HOLD", "score": 0.0,
         "buy_score": 0.0, "sell_score": 0.0,
         "details": {}, "atr": 0.0, "vwap": 0.0,
-        "ema8": 0.0, "ema21": 0.0, "rsi": 50.0,
+        "ema8": 0.0, "ema21": 0.0, "ema50": 0.0, "rsi": 50.0,
         "ha_consec": 0, "vol_ratio": 1.0,
         "structure": "sideways", "price": 0.0,
         "vix": None, "reason": reason,

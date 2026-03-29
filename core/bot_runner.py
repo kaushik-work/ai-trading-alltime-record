@@ -73,6 +73,15 @@ def _is_market_hours() -> bool:
     return dtime(9, 15) <= t <= dtime(15, 30)
 
 
+def _is_event_blocked() -> bool:
+    """Return True if today is in EVENT_BLOCK_DATES (Budget/RBI MPC etc.)."""
+    today_str = date.today().isoformat()
+    blocked = config.EVENT_BLOCK_DATES.get(today_str)
+    if blocked:
+        logger.warning("Trading BLOCKED today — %s (%s). Skipping all cycles.", today_str, blocked)
+    return bool(blocked)
+
+
 # ── per-day state (reset at midnight) ─────────────────────────────────────────
 
 class _DailyState:
@@ -130,6 +139,7 @@ class BotRunner:
         self.last_heartbeat: Optional[str] = None   # ISO string, IST
         self.last_scores: dict = {}                 # strategy → last signal scores
         self.last_vix: Optional[float] = None       # last fetched India VIX
+        self.last_pcr: Optional[float] = None       # last fetched NIFTY PCR
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -178,7 +188,7 @@ class BotRunner:
 
     async def _musashi_cycle(self):
         self.last_heartbeat = datetime.now(IST).isoformat()
-        if self.paused or not _is_market_hours():
+        if self.paused or not _is_market_hours() or _is_event_blocked():
             return
         try:
             from strategies.nifty_intraday import (
@@ -205,6 +215,18 @@ class BotRunner:
                     self.last_vix = vix_val
             except Exception:
                 vix_val = self.last_vix  # reuse cached if fetch fails
+
+            # ── fetch NIFTY PCR (non-blocking, best-effort, 5-min cache in oi_data) ──
+            try:
+                from data.oi_data import get_pcr as _get_pcr
+                pcr_data = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: _get_pcr("NIFTY")
+                )
+                pcr_val = pcr_data.get("pcr")
+                if pcr_val is not None:
+                    self.last_pcr = pcr_val
+            except Exception:
+                pcr_val = self.last_pcr  # reuse cached if fetch fails
 
             # ── manage open position ──────────────────────────────────────────
             pos = self.state.get_position("musashi")
@@ -238,17 +260,18 @@ class BotRunner:
             if not self.state.can_trade("musashi", MAX_TRADES_DAY):
                 return
 
-            sig = score_signal(opens, highs, lows, closes, volumes, all_closes, vix=vix_val)
+            sig = score_signal(opens, highs, lows, closes, volumes, all_closes, pcr=pcr_val, vix=vix_val)
             self.last_scores["Musashi"] = {
                 "buy": sig.get("buy_score", 0), "sell": sig.get("sell_score", 0),
                 "action": sig.get("action"), "threshold": SCORE_THRESHOLD,
                 "in_window": True, "bar_time": str(bar_time), "now_t": str(now_t),
-                "vix": vix_val,
+                "vix": vix_val, "pcr": pcr_val,
             }
-            logger.info("[Musashi] score buy=%.1f sell=%.1f action=%s threshold=%.1f bar_time=%s now_t=%s vix=%s",
+            logger.info("[Musashi] score buy=%.1f sell=%.1f action=%s threshold=%.1f bar_time=%s now_t=%s vix=%s pcr=%s",
                         sig.get("buy_score", 0), sig.get("sell_score", 0),
                         sig.get("action"), SCORE_THRESHOLD, bar_time, now_t,
-                        f"{vix_val:.1f}" if vix_val else "n/a")
+                        f"{vix_val:.1f}" if vix_val else "n/a",
+                        f"{pcr_val:.2f}" if pcr_val else "n/a")
             if sig["action"] == "HOLD":
                 return
 
@@ -287,7 +310,7 @@ class BotRunner:
 
     async def _raijin_cycle(self):
         self.last_heartbeat = datetime.now(IST).isoformat()
-        if self.paused or not _is_market_hours():
+        if self.paused or not _is_market_hours() or _is_event_blocked():
             return
         try:
             from strategies.nifty_scalp import (
@@ -304,8 +327,9 @@ class BotRunner:
                 return
             opens, highs, lows, closes, volumes, all_closes, bar_time = result
 
-            # ── reuse cached VIX (Musashi may have updated it already) ────────
+            # ── reuse cached VIX + PCR (Musashi may have updated them already) ─
             vix_val = self.last_vix
+            pcr_val = self.last_pcr
 
             # ── manage open position ──────────────────────────────────────────
             pos = self.state.get_position("raijin")
@@ -337,17 +361,18 @@ class BotRunner:
             if not self.state.can_trade("raijin", MAX_TRADES_DAY):
                 return
 
-            sig = score_signal(opens, highs, lows, closes, volumes, all_closes, vix=vix_val)
+            sig = score_signal(opens, highs, lows, closes, volumes, all_closes, pcr=pcr_val, vix=vix_val)
             self.last_scores["Raijin"] = {
                 "buy": sig.get("buy_score", 0), "sell": sig.get("sell_score", 0),
                 "action": sig.get("action"), "threshold": SCORE_THRESHOLD,
                 "in_window": True, "bar_time": str(bar_time), "now_t": str(now_t),
-                "vix": vix_val,
+                "vix": vix_val, "pcr": pcr_val,
             }
-            logger.info("[Raijin] score buy=%.1f sell=%.1f action=%s threshold=%.1f bar_time=%s now_t=%s vix=%s",
+            logger.info("[Raijin] score buy=%.1f sell=%.1f action=%s threshold=%.1f bar_time=%s now_t=%s vix=%s pcr=%s",
                         sig.get("buy_score", 0), sig.get("sell_score", 0),
                         sig.get("action"), SCORE_THRESHOLD, bar_time, now_t,
-                        f"{vix_val:.1f}" if vix_val else "n/a")
+                        f"{vix_val:.1f}" if vix_val else "n/a",
+                        f"{pcr_val:.2f}" if pcr_val else "n/a")
             if sig["action"] == "HOLD":
                 return
 
@@ -384,7 +409,7 @@ class BotRunner:
 
     async def _atr_cycle(self):
         self.last_heartbeat = datetime.now(IST).isoformat()
-        if self.paused or not _is_market_hours():
+        if self.paused or not _is_market_hours() or _is_event_blocked():
             return
         try:
             if self._atr_strategy is None:

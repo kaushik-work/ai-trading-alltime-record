@@ -81,3 +81,16 @@ MARKET_CLOSE = "15:30"
 
 # ── Claude model ───────────────────────────────────────────────────────────────
 CLAUDE_MODEL = "claude-sonnet-4-6"
+
+# ── Event Calendar — skip trading on these dates (IV crush guaranteed) ─────────
+# Budget / RBI MPC / election result days: premiums halve post-announcement.
+# Update this dict each quarter. Key = "YYYY-MM-DD", value = event label.
+EVENT_BLOCK_DATES: dict[str, str] = {
+    "2026-02-01": "Union Budget",
+    "2026-02-07": "RBI MPC Policy",
+    "2026-04-09": "RBI MPC Policy",
+    "2026-06-06": "RBI MPC Policy",
+    "2026-08-06": "RBI MPC Policy",
+    "2026-10-08": "RBI MPC Policy",
+    "2026-12-05": "RBI MPC Policy",
+}
