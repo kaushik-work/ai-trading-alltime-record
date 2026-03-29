@@ -202,7 +202,8 @@ class BacktestEngine:
             risk_pct: float = 2.0,
             daily_loss_limit_pct: float = 3.0,
             rr_ratio: float = 2.0,
-            strategy: str = "ATR Intraday") -> dict:
+            strategy: str = "ATR Intraday",
+            _df=None) -> dict:
         """
         Bar-by-bar replay. Returns trades list + daily equity curve.
 
@@ -211,6 +212,7 @@ class BacktestEngine:
             min_score            : signal score threshold (default 7 — high conviction only)
             risk_pct             : % of equity risked per trade (default 2%)
             daily_loss_limit_pct : stop trading for the day after losing this % of day-start equity
+            _df                  : pre-fetched DataFrame slice (skips fetch_data if provided)
         """
 
         if strategy == "Raijin":
@@ -221,7 +223,12 @@ class BacktestEngine:
         mins_per_bar = {"1m":1,"2m":2,"5m":5,"15m":15,"30m":30}.get(interval, 15)
         logger.info("Backtest: %s  period=%s  interval=%s  min_score=%d  risk=%.1f%%",
                     symbol, period, interval, min_score, risk_pct)
-        df   = self.fetch_data(symbol, period, interval=interval)
+        if _df is not None:
+            df = _df.copy()
+            if "_date" not in df.columns:
+                df["_date"] = df.index.date
+        else:
+            df = self.fetch_data(symbol, period, interval=interval)
         days = sorted(df["_date"].unique())
 
         equity       = self.initial_capital
