@@ -114,7 +114,7 @@ def _build_snapshot() -> dict:
             "option_type": t.get("option_type", "—"),
             "strike":      t.get("strike"),
             "side":        t.get("side"),
-            "lot_size":    t.get("lot_size", 75),
+            "lot_size":    t.get("lot_size", 65),
             "entry_price": t.get("price"),
             "pnl":         round(t.get("pnl", 0), 2),
             "close_reason": t.get("close_reason", "—"),

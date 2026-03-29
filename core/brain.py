@@ -15,7 +15,7 @@ You receive pre-scored trading signals and make the final BUY/SELL/HOLD decision
 - BUY signal  → Buy ATM/near-ATM CALL option (CE)
 - SELL signal → Buy ATM/near-ATM PUT option (PE)
 - You are always an OPTION BUYER (long options only — defined risk, unlimited upside)
-- NIFTY lot size = 25 (updated Nov 2024) | BANKNIFTY lot size = 15
+- NIFTY lot size = 65 (revised Feb 2026) | BANKNIFTY lot size = 30 (revised Feb 2026)
 - NIFTY expiry = Thursday weekly | BANKNIFTY expiry = Wednesday weekly
 - Never buy options with DTE ≤ 3 calendar days — switch to next week's expiry instead
 - Target strike: ATM premium range ₹50–120 for NIFTY, ₹150–300 for BANKNIFTY
@@ -168,9 +168,10 @@ Per round-trip (one buy + one sell):
   - SEBI:            ₹10 per crore of turnover
   - Stamp duty:      0.003% of buy-leg premium (buy side only)
   - GST:             18% on (brokerage + exchange + SEBI fees)
-Typical charges per 1-lot NIFTY trade (premium ~₹80, 25 units = ₹2000 turnover): ~₹70 round-trip.
-At ₹20K capital: charges ≈ 0.35% per trade = need >10% win on premium just to break even.
-At ₹50K capital: charges ≈ 0.14% per trade = much better proportionally.
+Typical charges per 1-lot NIFTY trade (premium ~₹80, 65 units = ₹5200 turnover): ~₹120 round-trip.
+At ₹20K capital: charges ≈ 0.6% per trade — each trade is heavy relative to capital.
+At ₹50K capital: charges ≈ 0.24% per trade = much more manageable.
+IMPORTANT: larger lot size (65 vs 25) means each lot costs ~2.6× more capital. Size accordingly.
 Break-even win rate at R:R 2.0 = 33.3%, R:R 2.5 = 28.6%. Charges push these up by ~3–5%.
 Small moves (< ₹15 premium gain on 5m) barely cover charges — prefer 15m setups for NIFTY.
 
@@ -245,7 +246,7 @@ class TradingBrain:
 
         # Options-specific derived context
         is_bn      = "BANKNIFTY" in symbol.upper()
-        lot_size   = 15 if is_bn else 25
+        lot_size   = 30 if is_bn else 65
         strategy   = market_data.get("strategy", "musashi").lower()
         score_floor = {"musashi": 7.5, "raijin": 6.0, "atr": 5.0}.get(strategy, 7.5)
         prem_range  = "₹150–300" if is_bn else "₹50–120"

@@ -64,7 +64,7 @@ def estimate_atm_premium(atr: float, dte: float = 5.0) -> float:
 def compute_charges(
     entry_premium_per_unit: float,   # estimated ATM premium at entry (pts)
     exit_premium_per_unit: float,    # estimated ATM premium at exit (pts)
-    lot_size: int,                   # NSE lot size  (NIFTY=25, BANKNIFTY=15 as of Nov 2024)
+    lot_size: int,                   # NSE lot size  (NIFTY=65, BANKNIFTY=30 as of Feb 2026)
     num_lots: int,                   # number of lots traded
 ) -> dict:
     """

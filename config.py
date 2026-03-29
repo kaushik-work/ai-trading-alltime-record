@@ -41,8 +41,12 @@ MAX_DAILY_LOSS   = int(os.getenv("MAX_DAILY_LOSS",   2000))    # ₹2000 daily l
 
 # ── Lot Sizes (NSE) ────────────────────────────────────────────────────────────
 LOT_SIZES = {
-    "NIFTY":     25,   # 1 lot = 25 units (NSE standard, verify before live trading)
-    "BANKNIFTY": 15,   # 1 lot = 15 units
+    "NIFTY":     65,   # 1 lot = 65 units (revised Feb 2026 — source: Zerodha support)
+    "BANKNIFTY": 30,   # 1 lot = 30 units (revised Feb 2026)
+    # NOTE: lot sizes change on monthly expiry cycles when SEBI revises them.
+    # Contracts in the current monthly series keep the OLD lot size until expiry.
+    # New monthly (and weekly) contracts starting after the revision date use the NEW lot size.
+    # Always verify at: https://support.zerodha.com/category/trading-and-markets/trading-faqs/f-otrading/articles/lot-size-for-index-derivatives
 }
 MAX_OPEN_POSITIONS = int(os.getenv("MAX_OPEN_POSITIONS", 2))   # max 2 concurrent for Phase A
 

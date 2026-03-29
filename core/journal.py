@@ -26,7 +26,7 @@ Structure:
         "side":         "BUY",
         "entry_price":  220.50,
         "exit_price":   265.30,   # from close SELL row, or null if still open
-        "lot_size":     75,
+        "lot_size":     65,
         "pnl":          3360.00,
         "close_reason": "TP",
         "score":        7.5,

@@ -585,7 +585,7 @@ class BacktestEngine:
 
         # ── Per-symbol config ────────────────────────────────────────────────
         # BankNifty is ~2.5x more volatile than Nifty on 5m — wider SL needed.
-        # Options lot sizes: NIFTY=75, BANKNIFTY=15 (NSE standard).
+        # Options lot sizes from config.LOT_SIZES (NIFTY=65, BANKNIFTY=30 as of Feb 2026).
         # ATM option delta ≈ 0.45 (used to convert spot-point P&L → premium P&L).
         is_bn        = symbol == "BANKNIFTY"
         sl_mult      = 1.5  if is_bn else 1.0   # ATR multiplier for SL
