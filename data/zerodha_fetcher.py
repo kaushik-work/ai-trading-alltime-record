@@ -46,6 +46,8 @@ class ZerodhaFetcher:
         self._broker = None   # KiteConnect session
         self._login_date: Optional[date] = None
         self._failed_date: Optional[date] = None   # don't retry after failure same day
+        self._instruments: Optional[list] = None       # cached NFO instrument list
+        self._instruments_date: Optional[date] = None  # date when cache was built
 
     # ── singleton access ──────────────────────────────────────────────────────
 
@@ -175,6 +177,77 @@ class ZerodhaFetcher:
             # Session may have expired — force re-login next call
             self._broker = None
             return None
+
+    # ── options helpers ───────────────────────────────────────────────────────
+
+    @staticmethod
+    def nearest_weekly_expiry() -> date:
+        """Return the nearest upcoming NIFTY weekly expiry (Thursday).
+
+        If today is Thursday and market is still open (before 15:30 IST),
+        returns today. Otherwise returns the next Thursday.
+        """
+        from zoneinfo import ZoneInfo
+        today = date.today()
+        now_ist = datetime.now(ZoneInfo("Asia/Kolkata"))
+        days_to_thu = (3 - today.weekday()) % 7  # 0 if today is Thu
+        if days_to_thu == 0:
+            # Today is Thursday — use next week's if market already closed
+            if now_ist.hour > 15 or (now_ist.hour == 15 and now_ist.minute >= 30):
+                days_to_thu = 7
+        return today + timedelta(days=days_to_thu)
+
+    def _nfo_instruments(self) -> list:
+        """Return cached NFO instrument list, refreshed once per calendar day."""
+        today = date.today()
+        if self._instruments_date == today and self._instruments is not None:
+            return self._instruments
+        instruments = self._broker.instruments("NFO")
+        self._instruments = [
+            i for i in instruments
+            if i["name"] in ("NIFTY", "BANKNIFTY") and i["instrument_type"] in ("CE", "PE")
+        ]
+        self._instruments_date = today
+        logger.info("ZerodhaFetcher: cached %d NIFTY/BANKNIFTY option instruments", len(self._instruments))
+        return self._instruments
+
+    def get_option_ltp(self, symbol: str, strike: int, option_type: str, expiry: date):
+        """Return (tradingsymbol, last_traded_price) for the given option.
+
+        symbol      : "NIFTY" or "BANKNIFTY"
+        strike      : integer ATM strike (e.g. 23000)
+        option_type : "CE" or "PE"
+        expiry      : date of weekly/monthly expiry
+
+        Returns (None, None) on any failure — caller must handle gracefully.
+        """
+        if not self._ensure_logged_in():
+            return None, None
+        try:
+            instruments = self._nfo_instruments()
+            match = next(
+                (i for i in instruments
+                 if i["name"] == symbol
+                 and int(i["strike"]) == strike
+                 and i["instrument_type"] == option_type
+                 and i["expiry"] == expiry),
+                None,
+            )
+            if match is None:
+                logger.warning(
+                    "get_option_ltp: no instrument for %s %s strike=%d %s",
+                    symbol, expiry, strike, option_type,
+                )
+                return None, None
+            ts = match["tradingsymbol"]
+            data = self._broker.ltp([f"NFO:{ts}"])
+            ltp = float(data.get(f"NFO:{ts}", {}).get("last_price", 0.0))
+            logger.info("get_option_ltp: %s = ₹%.2f", ts, ltp)
+            return ts, ltp
+        except Exception as e:
+            logger.error("get_option_ltp %s strike=%d %s %s: %s", symbol, strike, option_type, expiry, e)
+            self._broker = None  # force re-login next call
+            return None, None
 
     def fetch_daily_df(self, symbol: str, days: int = 90):
         """

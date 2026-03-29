@@ -28,7 +28,9 @@ class MockBroker:
         price += random.uniform(-price * 0.01, price * 0.01)
         return {"symbol": symbol, "last_price": round(price, 2), "timestamp": datetime.now().isoformat()}
 
-    def place_order(self, symbol: str, side: str, quantity: int, order_type: str = "MARKET", price: float = 0) -> dict:
+    def place_order(self, symbol: str, side: str, quantity: int,
+                    order_type: str = "MARKET", price: float = 0,
+                    exchange: str = "NFO", product: str = "MIS") -> dict:
         order = {
             "order_id": f"PAPER-{len(self.orders)+1:04d}",
             "symbol": symbol,
@@ -121,18 +123,25 @@ class KiteBroker:
             "timestamp": datetime.now().isoformat(),
         }
 
-    def place_order(self, symbol: str, side: str, quantity: int, order_type: str = "MARKET", price: float = 0) -> dict:
+    def place_order(self, symbol: str, side: str, quantity: int,
+                    order_type: str = "MARKET", price: float = 0,
+                    exchange: str = "NFO", product: str = "MIS") -> dict:
+        """Place an order on Kite.
+
+        Defaults: exchange=NFO, product=MIS (intraday options/futures).
+        Pass exchange="NSE", product="CNC" for equity delivery orders.
+        """
         order_id = self.kite.place_order(
             variety="regular",
-            exchange="NSE",
+            exchange=exchange,
             tradingsymbol=symbol,
             transaction_type=side,
             quantity=quantity,
-            product="CNC",
+            product=product,
             order_type=order_type,
             price=price if order_type == "LIMIT" else None,
         )
-        logger.info("[LIVE/KITE] %s %d %s | Order ID: %s", side, quantity, symbol, order_id)
+        logger.info("[LIVE/KITE] %s %d %s@%s | Order ID: %s", side, quantity, symbol, exchange, order_id)
         return {"order_id": order_id, "symbol": symbol, "side": side, "quantity": quantity, "status": "PLACED"}
 
     def get_positions(self) -> dict:

@@ -14,3 +14,6 @@ frontend/.env.local
 *.egg-info/
 dist/
 build/
+
+backtest_cache/
+backtest_results.json

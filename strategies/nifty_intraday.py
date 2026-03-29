@@ -75,6 +75,7 @@ def score_signal(
     day_closes: np.ndarray,
     day_volumes: np.ndarray,
     all_closes: np.ndarray,   # full history up to this bar (for EMA/RSI stability)
+    pcr: float = None,        # live PCR from oi_data.get_pcr() — None = no filter
 ) -> dict:
     """
     Compute the Musashi signal score for the current bar.
@@ -283,6 +284,20 @@ def score_signal(
         score   = sell_score
         details = sell_details
 
+    # ── EMA50 trend gate (AishDoc) ────────────────────────────────────────────
+    # Only trade in the direction EMA50 permits — eliminates counter-trend entries.
+    if action == "BUY" and price < ema50_val:
+        action, score, details = "HOLD", 0.0, {}
+    elif action == "SELL" and price > ema50_val:
+        action, score, details = "HOLD", 0.0, {}
+
+    # ── PCR gate (Sensibull) ──────────────────────────────────────────────────
+    # Skip BUY when market is too bearish; skip SELL when too bullish.
+    if pcr is not None and action == "BUY" and pcr < 0.8:
+        action, score, details = "HOLD", 0.0, {}
+    elif pcr is not None and action == "SELL" and pcr > 1.3:
+        action, score, details = "HOLD", 0.0, {}
+
     return {
         "action":    action,
         "score":     round(score, 2),
@@ -293,6 +308,7 @@ def score_signal(
         "vwap":      round(vwap, 2),
         "ema8":      round(ema8_val, 2),
         "ema21":     round(ema21_val, 2),
+        "ema50":     round(ema50_val, 2),
         "rsi":       round(rsi14, 2),
         "ha_consec": consec,
         "vol_ratio": vol_r,

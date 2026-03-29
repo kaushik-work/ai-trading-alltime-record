@@ -56,14 +56,14 @@ from strategies.indicators import (
 
 # ── Timing constants ──────────────────────────────────────────────────────────
 TRADE_START_AM  = time(9, 45)
-TRADE_END_AM    = time(10, 45)
+TRADE_END_AM    = time(11, 15)   # extended from 10:45 — captures mid-morning setups
 TRADE_START_PM  = time(14, 15)
 TRADE_END_PM    = time(14, 45)
 EOD_EXIT        = time(15, 0)
 MAX_TRADES_DAY  = 3
 
 # ── Thresholds ────────────────────────────────────────────────────────────────
-SCORE_THRESHOLD  = 8.5
+SCORE_THRESHOLD  = 7.5   # lowered from 8.5 — allows ±1σ + RSI soft + HA flip setups
 MIN_VOLUME_RATIO = 1.5
 RSI_OVERSOLD     = 30
 RSI_OVERBOUGHT   = 70
@@ -84,6 +84,7 @@ def score_signal(
     day_closes:  np.ndarray,
     day_volumes: np.ndarray,
     all_closes:  np.ndarray,   # full history for RSI stability
+    pcr: float = None,         # live PCR from oi_data.get_pcr() — None = no filter
 ) -> dict:
     """
     Compute the Raijin signal score for the current 5-min bar.
@@ -259,6 +260,12 @@ def score_signal(
         action  = "SELL"
         score   = sell_score
         details = sell_details
+
+    # ── PCR gate (Sensibull) ──────────────────────────────────────────────────
+    if pcr is not None and action == "BUY" and pcr < 0.8:
+        action, score, details = "HOLD", 0.0, {}
+    elif pcr is not None and action == "SELL" and pcr > 1.3:
+        action, score, details = "HOLD", 0.0, {}
 
     return {
         "action":     action,

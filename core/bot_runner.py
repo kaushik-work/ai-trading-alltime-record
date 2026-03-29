@@ -197,19 +197,26 @@ class BotRunner:
             # ── manage open position ──────────────────────────────────────────
             pos = self.state.get_position("musashi")
             if pos:
-                price = float(closes[-1])
-                hit_sl = (price <= pos["sl"]) if pos["side"] == "BUY" else (price >= pos["sl"])
-                hit_tp = (price >= pos["tp"]) if pos["side"] == "BUY" else (price <= pos["tp"])
+                from data.zerodha_fetcher import ZerodhaFetcher as _ZF
+                expiry = date.fromisoformat(pos["expiry"])
+                _, opt_price = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: _ZF.get().get_option_ltp("NIFTY", pos["strike"], pos["option_type"], expiry)
+                )
+                if opt_price is None or opt_price <= 0:
+                    # Paper fallback: delta-approximate from NIFTY spot
+                    nifty_move = float(closes[-1]) - pos["nifty_entry"]
+                    direction  = 1 if pos["option_type"] == "CE" else -1
+                    opt_price  = max(pos["entry"] + nifty_move * 0.5 * direction, 0.05)
+                # SL/TP are stored in option premium terms
+                hit_sl = opt_price <= pos["sl"]
+                hit_tp = opt_price >= pos["tp"]
                 eod    = now_t >= EOD_EXIT
                 if hit_sl or hit_tp or eod:
                     reason = "SL" if hit_sl else ("TP" if hit_tp else "EOD")
-                    pnl = (price - pos["entry"]) * pos["qty"]
-                    if pos["side"] == "SELL":
-                        pnl = -pnl
-                    pnl = round(pnl, 2)
-                    self._close_trade(pos, price, pnl, reason)
+                    pnl = round((opt_price - pos["entry"]) * pos["qty"], 2)
+                    self._close_trade(pos, opt_price, pnl, reason)
                     self.state.set_position("musashi", None)
-                    asyncio.ensure_future(self._generate_exit_remark(pos, price, pnl, reason))
+                    asyncio.ensure_future(self._generate_exit_remark(pos, opt_price, pnl, reason))
                 return
 
             # ── look for entry ────────────────────────────────────────────────
@@ -231,14 +238,30 @@ class BotRunner:
             if sig["action"] == "HOLD":
                 return
 
-            entry = float(closes[-1])
-            atr_v = sig["atr"] or 1.0
-            if sig["action"] == "BUY":
-                sl, tp = entry - 1.25 * atr_v, entry + 3.125 * atr_v
-            else:
-                sl, tp = entry + 1.25 * atr_v, entry - 3.125 * atr_v
+            entry_spot = float(closes[-1])
+            atr_v      = sig["atr"] or 1.0
+            option_type = "CE" if sig["action"] == "BUY" else "PE"
+            strike      = round(entry_spot / 50) * 50  # nearest ATM 50-pt strike
 
-            pos = self._open_trade("Musashi", sig["action"], entry, sl, tp, sig["score"])
+            from data.zerodha_fetcher import ZerodhaFetcher as _ZF
+            expiry   = _ZF.nearest_weekly_expiry()
+            opt_sym, entry_prem = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: _ZF.get().get_option_ltp("NIFTY", strike, option_type, expiry)
+            )
+            if entry_prem is None or entry_prem < 1:
+                # Paper fallback: rough synthetic premium (ATR × 1.5)
+                opt_sym    = f"NIFTY_SYN_{expiry}_{strike}{option_type}"
+                entry_prem = max(atr_v * 1.5, 50.0)
+                logger.warning("[Musashi] Option LTP unavailable — synthetic premium ₹%.2f", entry_prem)
+
+            # SL/TP in option premium terms using delta = 0.5 (ATM)
+            delta = 0.5
+            sl = max(entry_prem - 1.25 * atr_v * delta, entry_prem * 0.10)
+            tp = entry_prem + 3.125 * atr_v * delta
+
+            pos = self._open_trade("Musashi", sig["action"], entry_spot, sl, tp, sig["score"],
+                                   option_type=option_type, strike=strike, expiry=expiry,
+                                   opt_sym=opt_sym, entry_prem=entry_prem)
             self.state.set_position("musashi", pos)
             self.state.record_trade("musashi")
             asyncio.ensure_future(self._generate_entry_remark(pos, sig))
@@ -270,19 +293,24 @@ class BotRunner:
             # ── manage open position ──────────────────────────────────────────
             pos = self.state.get_position("raijin")
             if pos:
-                price = float(closes[-1])
-                hit_sl = (price <= pos["sl"]) if pos["side"] == "BUY" else (price >= pos["sl"])
-                hit_tp = (price >= pos["tp"]) if pos["side"] == "BUY" else (price <= pos["tp"])
+                from data.zerodha_fetcher import ZerodhaFetcher as _ZF
+                expiry = date.fromisoformat(pos["expiry"])
+                _, opt_price = await asyncio.get_event_loop().run_in_executor(
+                    None, lambda: _ZF.get().get_option_ltp("NIFTY", pos["strike"], pos["option_type"], expiry)
+                )
+                if opt_price is None or opt_price <= 0:
+                    nifty_move = float(closes[-1]) - pos["nifty_entry"]
+                    direction  = 1 if pos["option_type"] == "CE" else -1
+                    opt_price  = max(pos["entry"] + nifty_move * 0.5 * direction, 0.05)
+                hit_sl = opt_price <= pos["sl"]
+                hit_tp = opt_price >= pos["tp"]
                 eod    = now_t >= EOD_EXIT
                 if hit_sl or hit_tp or eod:
                     reason = "SL" if hit_sl else ("TP" if hit_tp else "EOD")
-                    pnl = (price - pos["entry"]) * pos["qty"]
-                    if pos["side"] == "SELL":
-                        pnl = -pnl
-                    pnl = round(pnl, 2)
-                    self._close_trade(pos, price, pnl, reason)
+                    pnl = round((opt_price - pos["entry"]) * pos["qty"], 2)
+                    self._close_trade(pos, opt_price, pnl, reason)
                     self.state.set_position("raijin", None)
-                    asyncio.ensure_future(self._generate_exit_remark(pos, price, pnl, reason))
+                    asyncio.ensure_future(self._generate_exit_remark(pos, opt_price, pnl, reason))
                 return
 
             # ── look for entry ────────────────────────────────────────────────
@@ -304,14 +332,28 @@ class BotRunner:
             if sig["action"] == "HOLD":
                 return
 
-            entry = float(closes[-1])
-            atr_v = sig["atr"] or 1.0
-            if sig["action"] == "BUY":
-                sl, tp = entry - 0.6 * atr_v, entry + 1.2 * atr_v
-            else:
-                sl, tp = entry + 0.6 * atr_v, entry - 1.2 * atr_v
+            entry_spot = float(closes[-1])
+            atr_v      = sig["atr"] or 1.0
+            option_type = "CE" if sig["action"] == "BUY" else "PE"
+            strike      = round(entry_spot / 50) * 50
 
-            pos = self._open_trade("Raijin", sig["action"], entry, sl, tp, sig["score"])
+            from data.zerodha_fetcher import ZerodhaFetcher as _ZF
+            expiry   = _ZF.nearest_weekly_expiry()
+            opt_sym, entry_prem = await asyncio.get_event_loop().run_in_executor(
+                None, lambda: _ZF.get().get_option_ltp("NIFTY", strike, option_type, expiry)
+            )
+            if entry_prem is None or entry_prem < 1:
+                opt_sym    = f"NIFTY_SYN_{expiry}_{strike}{option_type}"
+                entry_prem = max(atr_v * 1.5, 50.0)
+                logger.warning("[Raijin] Option LTP unavailable — synthetic premium ₹%.2f", entry_prem)
+
+            delta = 0.5
+            sl = max(entry_prem - 0.6 * atr_v * delta, entry_prem * 0.10)
+            tp = entry_prem + 1.2 * atr_v * delta
+
+            pos = self._open_trade("Raijin", sig["action"], entry_spot, sl, tp, sig["score"],
+                                   option_type=option_type, strike=strike, expiry=expiry,
+                                   opt_sym=opt_sym, entry_prem=entry_prem)
             self.state.set_position("raijin", pos)
             self.state.record_trade("raijin")
             asyncio.ensure_future(self._generate_entry_remark(pos, sig))
@@ -386,42 +428,60 @@ class BotRunner:
         except Exception as e:
             logger.debug("Exit remark failed: %s", e)
 
-    def _open_trade(self, strategy: str, side: str, entry: float,
-                    sl: float, tp: float, score: float) -> dict:
-        ts = datetime.now().isoformat()
+    def _open_trade(self, strategy: str, side: str, entry_spot: float,
+                    sl: float, tp: float, score: float,
+                    option_type: str = "CE", strike: int = 0,
+                    expiry=None, opt_sym: str = "", entry_prem: float = 0.0) -> dict:
+        ts       = datetime.now().isoformat()
         order_id = f"{strategy.upper()}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
-        option_type = "CE" if side == "BUY" else "PE"
-        strike = round(entry / 50) * 50   # nearest ATM 50-point strike
+        lot_qty  = config.LOT_SIZES.get("NIFTY", 25)
+        expiry_str = expiry.isoformat() if expiry and hasattr(expiry, "isoformat") else str(expiry or "")
         order = {
             "order_id":    order_id,
-            "symbol":      "NIFTY",
+            "symbol":      opt_sym or f"NIFTY{strike}{option_type}",
             "side":        side,
-            "quantity":    75,
-            "price":       entry,
+            "quantity":    lot_qty,
+            "price":       round(entry_prem, 2),     # option premium paid
             "pnl":         0,
             "status":      "OPEN",
             "timestamp":   ts,
             "strategy":    strategy,
             "option_type": option_type,
             "strike":      strike,
-            "lot_size":    75,
+            "lot_size":    lot_qty,
+            "expiry":      expiry_str,
             "sl_price":    round(sl, 2),
             "tp_price":    round(tp, 2),
             "score":       score,
+            "nifty_entry": round(entry_spot, 2),     # spot at entry (for fallback delta calc)
         }
         decision = {
-            "reasoning": f"{strategy} score={score:.1f} | {option_type} strike={strike}",
+            "reasoning": (f"{strategy} score={score:.1f} | {option_type} strike={strike} "
+                          f"prem=₹{entry_prem:.2f} spot={entry_spot:.0f}"),
             "confidence": min(score / 10.0, 1.0),
             "risk_level": "MEDIUM",
         }
         self.memory.log_trade(order, decision)
-        logger.info("[%s] ENTRY %s NIFTY %s%d @ ₹%.2f | SL=%.2f TP=%.2f score=%.1f",
-                    strategy, side, option_type, strike, entry, sl, tp, score)
+        logger.info(
+            "[%s] ENTRY %s %s @ ₹%.2f (NIFTY spot=%.0f) | SL=%.2f TP=%.2f score=%.1f lot=%d",
+            strategy, side, opt_sym or f"{option_type}{strike}",
+            entry_prem, entry_spot, sl, tp, score, lot_qty,
+        )
         return {
-            "strategy": strategy, "order_id": order_id, "symbol": "NIFTY",
-            "side": side, "entry": entry, "sl": round(sl, 2), "tp": round(tp, 2),
-            "qty": 75, "score": score, "timestamp": ts,
-            "option_type": option_type, "strike": strike,
+            "strategy":    strategy,
+            "order_id":    order_id,
+            "symbol":      opt_sym or f"NIFTY{strike}{option_type}",
+            "side":        side,
+            "entry":       round(entry_prem, 2),   # entry = option premium
+            "nifty_entry": round(entry_spot, 2),
+            "sl":          round(sl, 2),
+            "tp":          round(tp, 2),
+            "qty":         lot_qty,
+            "score":       score,
+            "timestamp":   ts,
+            "option_type": option_type,
+            "strike":      strike,
+            "expiry":      expiry_str,
         }
 
     def _close_trade(self, pos: dict, close_price: float, pnl: float, reason: str):

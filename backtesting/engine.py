@@ -267,7 +267,7 @@ class BacktestEngine:
 
                 # Options config (same for both strategies — both trade CE/PE)
                 is_bn_atr    = symbol == "BANKNIFTY"
-                lot_size_atr = 15 if is_bn_atr else 75
+                lot_size_atr = config.LOT_SIZES.get("BANKNIFTY", 15) if is_bn_atr else config.LOT_SIZES.get("NIFTY", 25)
                 opt_delta    = 0.45
                 strike_gap   = 100 if is_bn_atr else 50
 
@@ -404,8 +404,11 @@ class BacktestEngine:
                 )
 
                 # Re-size with the actual delta of the chosen strike
-                max_loss_per_lot = atr * opt_delta_trade * lot_size_atr
-                num_lots         = max(1, int(risk_amt / max(1, max_loss_per_lot)))
+                max_loss_per_lot  = atr * opt_delta_trade * lot_size_atr
+                num_lots          = max(1, int(risk_amt / max(1, max_loss_per_lot)))
+                cost_per_lot      = max(1.0, entry_premium * lot_size_atr)
+                max_lots_capital  = max(1, int(config.MAX_TRADE_AMOUNT / cost_per_lot))
+                num_lots          = min(num_lots, max_lots_capital)
 
                 position = {
                     "symbol":        symbol,
@@ -440,10 +443,12 @@ class BacktestEngine:
 
     # ── Strike selection ─────────────────────────────────────────────────────
 
-    # Target premium range per symbol (₹).  ATM is used if no match found.
+    # Target premium range per symbol (₹) — ATM weekly options, Phase A budget.
+    # NIFTY ATM weekly (DTE 4-9, ATR≈50):  ≈ ₹50-100.  Keep ATM for max delta efficiency.
+    # BANKNIFTY ATM weekly (DTE 4-9):       ≈ ₹150-250.
     PREMIUM_TARGET = {
-        "NIFTY":     (180, 200),   # NIFTY weekly options target premium range
-        "BANKNIFTY": (400, 450),   # BankNifty weekly options target premium range
+        "NIFTY":     (50, 120),
+        "BANKNIFTY": (150, 300),
     }
 
     @staticmethod
@@ -584,7 +589,7 @@ class BacktestEngine:
         # ATM option delta ≈ 0.45 (used to convert spot-point P&L → premium P&L).
         is_bn        = symbol == "BANKNIFTY"
         sl_mult      = 1.5  if is_bn else 1.0   # ATR multiplier for SL
-        lot_size     = 15   if is_bn else 75     # options lot size
+        lot_size     = config.LOT_SIZES.get("BANKNIFTY", 15) if is_bn else config.LOT_SIZES.get("NIFTY", 25)
         opt_delta    = 0.45                      # ATM CE/PE delta approximation
         # Enforce a floor on min_score per symbol regardless of UI setting:
         #   NIFTY    ≥ 8.5  → forces W/M + HAC + VWAP (4+3+1.5)
@@ -783,8 +788,11 @@ class BacktestEngine:
                 )
 
                 # Re-size with actual delta of the chosen strike
-                max_loss_per_lot = sl_dist * opt_delta_trade * lot_size
-                num_lots         = max(1, int(risk_amt / max(1, max_loss_per_lot)))
+                max_loss_per_lot  = sl_dist * opt_delta_trade * lot_size
+                num_lots          = max(1, int(risk_amt / max(1, max_loss_per_lot)))
+                cost_per_lot      = max(1.0, entry_premium * lot_size)
+                max_lots_capital  = max(1, int(config.MAX_TRADE_AMOUNT / cost_per_lot))
+                num_lots          = min(num_lots, max_lots_capital)
 
                 position = {
                     "symbol":        symbol,
@@ -828,6 +836,8 @@ class BacktestEngine:
         risk_pct: float = 4.0,
         rr_ratio: float = 2.5,
         daily_loss_limit_pct: float = 8.0,
+        min_score: float = None,   # post-filter: skip trades below this score (None = use strategy default)
+        _df: pd.DataFrame = None,  # pre-fetched data to reuse across permutations
     ) -> dict:
         """
         Musashi — NIFTY intraday options backtest.
@@ -847,12 +857,12 @@ class BacktestEngine:
         )
         from backtesting.charges import charges_for_trade
 
-        lot_size   = 75   # NIFTY only
+        lot_size   = config.LOT_SIZES.get("NIFTY", 25)
         opt_delta  = 0.45
         strike_gap = 50
         sl_mult    = 1.25  # 1.25× ATR stop
 
-        df   = self.fetch_data(symbol, period, interval=interval)
+        df   = _df if _df is not None else self.fetch_data(symbol, period, interval=interval)
         days = sorted(df["_date"].unique())
 
         global_offset = 0
@@ -956,6 +966,8 @@ class BacktestEngine:
                 action = sig["action"]
                 if action not in ("BUY", "SELL"):
                     continue
+                if min_score is not None and sig["score"] < min_score:
+                    continue
 
                 entry  = float(row["Close"])
                 atr_v  = sig["atr"]
@@ -974,13 +986,16 @@ class BacktestEngine:
 
                 option_type              = "CE" if action == "BUY" else "PE"
                 expiry_date, dte         = self._expiry_for_trade(ts.date(), symbol)
-                t_min, t_max             = self.PREMIUM_TARGET.get(symbol, (180, 200))
+                t_min, t_max             = self.PREMIUM_TARGET.get(symbol, (50, 120))
                 strike, entry_prem, delta_trade = self._select_strike(
                     entry, atr_v, dte, strike_gap, action, interval, t_min, t_max
                 )
 
-                max_loss_lot = sl_dist * delta_trade * lot_size
-                num_lots     = max(1, int(risk_amt / max(1, max_loss_lot)))
+                max_loss_lot      = sl_dist * delta_trade * lot_size
+                num_lots          = max(1, int(risk_amt / max(1, max_loss_lot)))
+                cost_per_lot      = max(1.0, entry_prem * lot_size)
+                max_lots_capital  = max(1, int(config.MAX_TRADE_AMOUNT / cost_per_lot))
+                num_lots          = min(num_lots, max_lots_capital)
 
                 position = {
                     "symbol":        symbol,
@@ -1030,6 +1045,8 @@ class BacktestEngine:
         risk_pct: float = 4.0,
         rr_ratio: float = 2.0,
         daily_loss_limit_pct: float = 8.0,
+        min_score: float = None,
+        _df: pd.DataFrame = None,
     ) -> dict:
         """
         Raijin — NIFTY scalp options backtest.
@@ -1048,12 +1065,12 @@ class BacktestEngine:
         )
         from backtesting.charges import charges_for_trade
 
-        lot_size   = 75   # NIFTY only
+        lot_size   = config.LOT_SIZES.get("NIFTY", 25)
         opt_delta  = 0.45
         strike_gap = 50
         sl_mult    = 0.6  # tight SL for scalp
 
-        df   = self.fetch_data(symbol, period, interval=interval)
+        df   = _df if _df is not None else self.fetch_data(symbol, period, interval=interval)
         days = sorted(df["_date"].unique())
 
         global_offset = 0
@@ -1157,6 +1174,8 @@ class BacktestEngine:
                 action = sig["action"]
                 if action not in ("BUY", "SELL"):
                     continue
+                if min_score is not None and sig["score"] < min_score:
+                    continue
 
                 entry  = float(row["Close"])
                 atr_v  = sig["atr"]
@@ -1180,8 +1199,11 @@ class BacktestEngine:
                     entry, atr_v, dte, strike_gap, action, interval, t_min, t_max
                 )
 
-                max_loss_lot = sl_dist * delta_trade * lot_size
-                num_lots     = max(1, int(risk_amt / max(1, max_loss_lot)))
+                max_loss_lot      = sl_dist * delta_trade * lot_size
+                num_lots          = max(1, int(risk_amt / max(1, max_loss_lot)))
+                cost_per_lot      = max(1.0, entry_prem * lot_size)
+                max_lots_capital  = max(1, int(config.MAX_TRADE_AMOUNT / cost_per_lot))
+                num_lots          = min(num_lots, max_lots_capital)
 
                 position = {
                     "symbol":        symbol,
