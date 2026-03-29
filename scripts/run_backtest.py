@@ -42,11 +42,13 @@ RUN_STRATEGY    = args.strategy.lower()
 
 # 5m is the proven timeframe across all 3 strategies (backtest 2026-03-29).
 # 15m underperforms over 60d/90d. 3m data not reliably available from Kite (< 60d retention).
+# Musashi v2 score range: 0–13 (added EMA21 slope +1.0 and HA flip +1.5).
+# Grid updated to match new max — testing 8.0 / 8.5 / 9.0.
 MUSASHI_INTERVALS = ["5m"]
 MUSASHI_GRID = {
-    "min_score": [7.5, 8.0, 8.5],
+    "min_score": [8.0, 8.5, 9.0],
     "rr_ratio":  [2.0, 2.5, 3.0],
-    "risk_pct":  [3.0, 4.0, 5.0],
+    "risk_pct":  [2.0, 3.0, 4.0],
 }
 
 ATR_INTERVALS = ["5m"]
