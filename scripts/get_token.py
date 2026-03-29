@@ -52,7 +52,7 @@ try:
     access_token = data["access_token"]
 
     env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
-    set_key(env_path, "ZERODHA_ACCESS_TOKEN", access_token)
+    set_key(env_path, "ZERODHA_ACCESS_TOKEN", access_token, quote_mode="never")
 
     print(f"\nSuccess! Access token saved to .env")
     print(f"Token: {access_token[:8]}...{access_token[-4:]}")
