@@ -12,7 +12,7 @@ Output:
     Full results saved to backtest_results.json in project root.
 """
 
-import sys, os, json, itertools
+import sys, os, json, itertools, argparse
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # Force UTF-8 output on Windows (avoids cp1252 UnicodeEncodeError)
@@ -25,8 +25,15 @@ logging.basicConfig(level=logging.WARNING)   # suppress info noise during sweep
 from backtesting.engine import BacktestEngine
 from backtesting.metrics import compute_metrics
 
-INITIAL_CAPITAL = 50_000.0   # mid-range of ₹20K-₹70K budget
-PERIOD          = "60d"
+parser = argparse.ArgumentParser()
+parser.add_argument("--capital", type=float, default=50_000.0, help="Starting capital in INR (default 50000)")
+parser.add_argument("--period",  type=str,   default="60d",    help="Lookback period: 30d, 60d, 90d (default 60d)")
+parser.add_argument("--no-cache", action="store_true",         help="Force re-fetch data even if cache exists")
+args = parser.parse_args()
+
+INITIAL_CAPITAL = args.capital
+PERIOD          = args.period
+FORCE_REFETCH   = args.no_cache
 
 # ── Permutation grids ────────────────────────────────────────────────────────
 # min_score: post-filter on the strategy's internal score output.
@@ -162,7 +169,7 @@ def _load_or_fetch(engine, symbol, period, interval):
     """Load from local CSV cache if available; otherwise fetch from Zerodha and cache."""
     os.makedirs(CACHE_DIR, exist_ok=True)
     cache_file = os.path.join(CACHE_DIR, f"{symbol}_{interval}_{period}.csv")
-    if os.path.exists(cache_file):
+    if os.path.exists(cache_file) and not FORCE_REFETCH:
         import pandas as pd
         df = pd.read_csv(cache_file, index_col=0, parse_dates=True)
         if "_date" not in df.columns:

@@ -163,13 +163,13 @@ def score_signal(
     else:
         buy_details["ha_reversal"] = 0.0
 
-    # 3. RSI extreme: sellers exhausted
+    # 3. RSI extreme: bonus (not required — RSI recovers too fast on 5m bars)
     if rsi9 <= RSI_OVERSOLD:
-        buy_score += 2.0
-        buy_details["rsi_extreme"] = 2.0
+        buy_score += 1.5
+        buy_details["rsi_extreme"] = 1.5
     elif rsi9 <= RSI_SOFT_OS:
-        buy_score += 1.0
-        buy_details["rsi_extreme"] = 1.0
+        buy_score += 0.5
+        buy_details["rsi_extreme"] = 0.5
     else:
         buy_details["rsi_extreme"] = 0.0
 
@@ -221,11 +221,11 @@ def score_signal(
         sell_details["ha_reversal"] = 0.0
 
     if rsi9 >= RSI_OVERBOUGHT:
-        sell_score += 2.0
-        sell_details["rsi_extreme"] = 2.0
+        sell_score += 1.5
+        sell_details["rsi_extreme"] = 1.5
     elif rsi9 >= RSI_SOFT_OB:
-        sell_score += 1.0
-        sell_details["rsi_extreme"] = 1.0
+        sell_score += 0.5
+        sell_details["rsi_extreme"] = 0.5
     else:
         sell_details["rsi_extreme"] = 0.0
 
