@@ -311,22 +311,22 @@ export default function Home() {
             )}
 
             {/* Day Bias panel */}
-            <div className="w-72 flex-shrink-0">
+            <div className="flex-1 min-w-0">
               <div className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">Day Bias</div>
               <div className="bg-white rounded-xl border border-gray-200 p-3 space-y-3">
                 {/* Bias buttons */}
                 <div className="flex gap-2">
                   {(["BULLISH", "NEUTRAL", "BEARISH"] as const).map(b => {
-                    const active = dayBiasData.bias === b;
+                    const active = !!dayBiasData.set_at && dayBiasData.bias === b;
                     const cfg = {
-                      BULLISH: { active: "bg-green-500 text-white border-green-500", idle: "border-gray-200 text-gray-500 hover:border-green-300" },
-                      NEUTRAL: { active: "bg-gray-500 text-white border-gray-500", idle: "border-gray-200 text-gray-500 hover:border-gray-400" },
-                      BEARISH: { active: "bg-red-500 text-white border-red-500",   idle: "border-gray-200 text-gray-500 hover:border-red-300" },
+                      BULLISH: { active: "bg-green-500 text-white border-green-500", idle: "border-gray-200 text-gray-500 hover:bg-green-50 hover:border-green-400 hover:text-green-700" },
+                      NEUTRAL: { active: "bg-gray-500 text-white border-gray-500",   idle: "border-gray-200 text-gray-500 hover:bg-gray-100 hover:border-gray-400" },
+                      BEARISH: { active: "bg-red-500 text-white border-red-500",     idle: "border-gray-200 text-gray-500 hover:bg-red-50 hover:border-red-400 hover:text-red-700" },
                     }[b];
                     return (
                       <button key={b} onClick={() => saveBias(b, biasNote)} disabled={biasSaving}
-                              className={`flex-1 text-[11px] font-bold py-1.5 rounded-lg border transition-all ${active ? cfg.active : cfg.idle}`}>
-                        {b === "BULLISH" ? "▲ Bull" : b === "BEARISH" ? "▼ Bear" : "— Neutral"}
+                              className={`flex-1 text-xs font-bold py-2 px-3 rounded-lg border transition-all whitespace-nowrap ${active ? cfg.active : cfg.idle}`}>
+                        {b === "BULLISH" ? "▲ Bullish" : b === "BEARISH" ? "▼ Bearish" : "— Neutral"}
                       </button>
                     );
                   })}
@@ -335,10 +335,10 @@ export default function Home() {
                 {/* Note textarea */}
                 <div className="relative">
                   <textarea
-                    rows={2}
+                    rows={3}
                     value={biasNote}
                     onChange={e => { setBiasNote(e.target.value); setBiasEdit(true); }}
-                    placeholder="Add note e.g. FII selling, wait for reversal..."
+                    placeholder="Add note e.g. FII selling, wait for reversal... or type: BUY CE 22500 SL 50 TP 150"
                     className="w-full text-xs text-gray-700 border border-gray-200 rounded-lg px-2.5 py-2 resize-none focus:outline-none focus:border-indigo-300 placeholder-gray-300"
                   />
                   {biasEdit && (

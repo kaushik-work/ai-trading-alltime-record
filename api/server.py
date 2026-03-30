@@ -161,7 +161,7 @@ def _build_snapshot() -> dict:
         "india_vix": vix,
         "vix_blocked": vix_blocked,
         "vix_threshold": config.VIX_THRESHOLD,
-        "token_set_at": config.ZERODHA_TOKEN_SET_AT or None,
+        "token_set_at": _read_token_set_at(),
         "day_bias": ipc.read_day_bias(),
         "mode": "paper" if config.IS_PAPER else "live",
         "pnl": {
@@ -244,6 +244,17 @@ def health():
     from zoneinfo import ZoneInfo
     return {"status": "ok", "time": datetime.now(ZoneInfo("Asia/Kolkata")).isoformat()}
 
+def _read_token_set_at() -> str | None:
+    """Read ZERODHA_TOKEN_SET_AT fresh from .env on every call (config is frozen at startup)."""
+    try:
+        from dotenv import dotenv_values
+        import os
+        env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+        return dotenv_values(env_path).get("ZERODHA_TOKEN_SET_AT") or None
+    except Exception:
+        return None
+
+
 @app.get("/api/bot/debug")
 def bot_debug(user: str = Depends(get_current_user)):
     """Live signal scores for ATR Intraday strategy — no trades placed."""
@@ -251,13 +262,23 @@ def bot_debug(user: str = Depends(get_current_user)):
     from core.bot_runner import _is_market_hours, IST
     runner = get_runner()
     now_ist = datetime.now(IST)
+
+    # VIX: use cached value; if missing, try a fresh fetch now
     vix = runner.last_vix
+    if vix is None:
+        try:
+            from data.zerodha_fetcher import ZerodhaFetcher
+            vix = ZerodhaFetcher.get().fetch_vix()
+            runner.last_vix = vix
+        except Exception:
+            pass
+
     result = {"time_ist": now_ist.isoformat(), "market_open": _is_market_hours(),
               "last_heartbeat": runner.last_heartbeat, "last_scores": runner.last_scores,
               "india_vix": vix,
               "vix_blocked": vix is not None and vix > config.VIX_THRESHOLD,
               "vix_threshold": config.VIX_THRESHOLD,
-              "token_set_at": config.ZERODHA_TOKEN_SET_AT or None,
+              "token_set_at": _read_token_set_at(),
               "strategies": {}}
 
     # ATR Intraday uses TrendStrategy (signal_scorer) — get its last known state

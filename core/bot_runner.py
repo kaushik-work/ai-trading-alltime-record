@@ -206,8 +206,15 @@ class BotRunner:
         if self.paused or not _is_market_hours() or _is_event_blocked():
             return
         if self._is_vix_blocked():
-            logger.warning("ATR cycle skipped — India VIX %.2f > threshold %.1f", self.last_vix, config.VIX_THRESHOLD)
-            return
+            # Allow cycle if trader has explicitly set a directional bias (they know the risk)
+            bias = ipc.read_day_bias()
+            if bias.get("bias", "NEUTRAL") == "NEUTRAL" or not bias.get("set_at"):
+                logger.warning("ATR cycle skipped — India VIX %.2f > threshold %.1f", self.last_vix, config.VIX_THRESHOLD)
+                return
+            logger.warning(
+                "India VIX %.2f > threshold %.1f but trader bias is %s — proceeding (trader override).",
+                self.last_vix, config.VIX_THRESHOLD, bias["bias"],
+            )
         try:
             if self._atr_strategy is None:
                 from strategies.trend_strategy import TrendStrategy
