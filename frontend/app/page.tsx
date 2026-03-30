@@ -45,10 +45,9 @@ export default function Home() {
   const indiaVix          = data?.india_vix         ?? null;
   const vixBlocked        = data?.vix_blocked       ?? false;
   const vixThreshold      = data?.vix_threshold     ?? 20;
-  const tokenSetAt        = data?.token_set_at      ?? null;
-  const tokenToday        = tokenSetAt
-    ? new Date(tokenSetAt).toDateString() === new Date().toDateString()
-    : false;
+  const tokenStatus       = data?.token_set_at       ?? null;
+  const tokenLive         = tokenStatus?.live        ?? false;
+  const tokenSetAt        = tokenStatus?.set_at      ?? null;
   const dayBiasData       = data?.day_bias          ?? { bias: "NEUTRAL", note: "", set_at: null };
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -233,11 +232,11 @@ export default function Home() {
                 )}
                 {/* Zerodha token badge */}
                 {data && (
-                  tokenToday ? (
+                  tokenLive ? (
                     <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
                           style={{ background: "#f0fdf4", color: "#15803d" }}>
                       <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ background: "#22c55e" }} />
-                      TOKEN LIVE {new Date(tokenSetAt!).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+                      TOKEN LIVE{tokenSetAt ? ` ${new Date(tokenSetAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}` : ""}
                     </span>
                   ) : (
                     <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
@@ -319,9 +318,9 @@ export default function Home() {
                   {(["BULLISH", "NEUTRAL", "BEARISH"] as const).map(b => {
                     const active = !!dayBiasData.set_at && dayBiasData.bias === b;
                     const cfg = {
-                      BULLISH: { active: "bg-green-500 text-white border-green-500", idle: "border-gray-200 text-gray-500 hover:bg-green-50 hover:border-green-400 hover:text-green-700" },
-                      NEUTRAL: { active: "bg-gray-500 text-white border-gray-500",   idle: "border-gray-200 text-gray-500 hover:bg-gray-100 hover:border-gray-400" },
-                      BEARISH: { active: "bg-red-500 text-white border-red-500",     idle: "border-gray-200 text-gray-500 hover:bg-red-50 hover:border-red-400 hover:text-red-700" },
+                      BULLISH: { active: "bg-green-500 text-white border-green-500", idle: "bg-white text-gray-700 border-gray-300 hover:bg-green-50 hover:border-green-400 hover:text-green-700" },
+                      NEUTRAL: { active: "bg-gray-600 text-white border-gray-600",   idle: "bg-white text-gray-700 border-gray-300 hover:bg-gray-100 hover:border-gray-400" },
+                      BEARISH: { active: "bg-red-500 text-white border-red-500",     idle: "bg-white text-gray-700 border-gray-300 hover:bg-red-50 hover:border-red-400 hover:text-red-700" },
                     }[b];
                     return (
                       <button key={b} onClick={() => saveBias(b, biasNote)} disabled={biasSaving}

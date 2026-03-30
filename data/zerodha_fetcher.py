@@ -101,6 +101,16 @@ class ZerodhaFetcher:
                 self._failed_date = today
                 return False
 
+    def is_token_live(self) -> bool:
+        """Verify the token is actually valid by calling kite.profile(). Fast — ~100ms."""
+        if not self._ensure_logged_in():
+            return False
+        try:
+            self._broker.profile()
+            return True
+        except Exception:
+            return False
+
     # ── data fetch ────────────────────────────────────────────────────────────
 
     def fetch_intraday(self, symbol: str, interval: str):
