@@ -163,6 +163,8 @@ class BotRunner:
         # EOD square-off at 15:15, journal save at 15:20
         self.scheduler.add_job(self._eod_squareoff, "cron", hour=15, minute=15, id="eod")
         self.scheduler.add_job(self._save_journal,  "cron", hour=15, minute=20, id="journal")
+        # Reset day bias to NEUTRAL at 20:00 IST each evening
+        self.scheduler.add_job(self._reset_day_bias, "cron", hour=20, minute=0, id="bias_reset")
 
         self.scheduler.start()
         logger.info("BotRunner started — ATR Intraday(5m)")
@@ -233,6 +235,14 @@ class BotRunner:
             logger.info("Journal saved: %s", path)
         except Exception as e:
             logger.error("Journal save failed: %s", e, exc_info=True)
+
+    async def _reset_day_bias(self):
+        """Reset day bias to NEUTRAL at 20:00 IST each evening."""
+        try:
+            ipc.write_day_bias("NEUTRAL", "")
+            logger.info("Day bias reset to NEUTRAL for tomorrow.")
+        except Exception as e:
+            logger.error("Bias reset failed: %s", e)
 
     # ── trade helpers ─────────────────────────────────────────────────────────
 

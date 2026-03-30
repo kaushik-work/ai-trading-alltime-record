@@ -51,8 +51,13 @@ try:
     data = kite.generate_session(request_token, api_secret=api_secret)
     access_token = data["access_token"]
 
+    from datetime import datetime, timezone, timedelta
+    ist = timezone(timedelta(hours=5, minutes=30))
+    token_set_at = datetime.now(ist).isoformat()
+
     env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
     set_key(env_path, "ZERODHA_ACCESS_TOKEN", access_token, quote_mode="never")
+    set_key(env_path, "ZERODHA_TOKEN_SET_AT", token_set_at, quote_mode="never")
 
     print(f"\nSuccess! Access token saved to .env")
     print(f"Token: {access_token[:8]}...{access_token[-4:]}")

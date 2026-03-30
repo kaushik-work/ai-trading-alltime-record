@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { useWebSocket } from "./hooks/useWebSocket";
 import Header from "./components/Header";
@@ -8,37 +8,16 @@ const WS_URL  = process.env.NEXT_PUBLIC_WS_URL  || "ws://localhost:8000/ws";
 
 const STRATEGIES = [
   {
-    name: "Musashi",
-    tag: "侍",
-    symbols: ["NIFTY"],
-    timeframe: "15m",
-    status: "active",
-    description: "EMA stack + VWAP pullback + HA confirmation + swing structure. 2 trades/day. R:R 1:2.5.",
-    target: "30–40% / mo",
-    rr: "1:2.5",
-    color: "indigo",
-  },
-  {
-    name: "Raijin",
-    tag: "雷",
-    symbols: ["NIFTY"],
-    timeframe: "5m",
-    status: "active",
-    description: "VWAP ±2σ mean reversion + HA flip + RSI extreme. 3 scalps/day. R:R 1:2.",
-    target: "30–40% / mo",
-    rr: "1:2.0",
-    color: "amber",
-  },
-  {
     name: "ATR Intraday",
     tag: "旧",
     symbols: ["NIFTY"],
     timeframe: "15m",
-    status: "legacy",
+    status: "active",
     description: "VWAP + ORB + PDH/PDL + 12 candlestick patterns. Score -10 to +10.",
     target: "—",
     rr: "1:2.0",
-    color: "gray",
+    risk: "2%",
+    color: "indigo",
   },
 ];
 
@@ -66,6 +45,50 @@ export default function Home() {
   const indiaVix          = data?.india_vix         ?? null;
   const vixBlocked        = data?.vix_blocked       ?? false;
   const vixThreshold      = data?.vix_threshold     ?? 20;
+  const tokenSetAt        = data?.token_set_at      ?? null;
+  const tokenToday        = tokenSetAt
+    ? new Date(tokenSetAt).toDateString() === new Date().toDateString()
+    : false;
+  const dayBiasData       = data?.day_bias          ?? { bias: "NEUTRAL", note: "", set_at: null };
+
+  const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  const [biasSaving, setBiasSaving]   = useState(false);
+  const [biasEdit, setBiasEdit]       = useState(false);
+  const [biasNote, setBiasNote]       = useState("");
+  const [savedBias, setSavedBias]     = useState<string | null>(null);
+  const [parseFlash, setParseFlash]   = useState<{type: string; msg: string} | null>(null);
+  const prevBiasRef = useRef<string>("");
+
+  // Sync note from websocket when not in edit mode
+  useEffect(() => {
+    if (!biasEdit && dayBiasData.note !== undefined) {
+      setBiasNote(dayBiasData.note);
+    }
+  }, [dayBiasData.note, biasEdit]);
+
+  async function saveBias(bias: string, note: string) {
+    setBiasSaving(true);
+    setParseFlash(null);
+    try {
+      const token = localStorage.getItem("aq_token");
+      const res = await fetch(`${API_URL}/api/bot/bias`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ bias, note }),
+      });
+      const json = await res.json();
+      const p = json.parsed;
+      if (p && p.type !== "none" && p.explanation) {
+        setParseFlash({ type: p.type, msg: p.explanation });
+        setTimeout(() => setParseFlash(null), 8000);
+      }
+      setSavedBias(bias);
+      setBiasEdit(false);
+      setTimeout(() => setSavedBias(null), 2000);
+    } finally {
+      setBiasSaving(false);
+    }
+  }
 
   if (!authed) return null;
 
@@ -142,7 +165,7 @@ export default function Home() {
                       </div>
                       <div className="flex-1 bg-white/70 rounded-lg px-2 py-1 text-center">
                         <div className="text-[9px] text-gray-400 uppercase font-semibold">Risk</div>
-                        <div className="text-[11px] font-bold text-gray-700">4%</div>
+                        <div className="text-[11px] font-bold text-gray-700">{s.risk}</div>
                       </div>
                     </div>
                   )}
@@ -208,6 +231,22 @@ export default function Home() {
                     {vixBlocked && <span className="ml-0.5">⛔</span>}
                   </span>
                 )}
+                {/* Zerodha token badge */}
+                {data && (
+                  tokenToday ? (
+                    <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
+                          style={{ background: "#f0fdf4", color: "#15803d" }}>
+                      <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ background: "#22c55e" }} />
+                      TOKEN LIVE {new Date(tokenSetAt!).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+                    </span>
+                  ) : (
+                    <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
+                          style={{ background: "#fee2e2", color: "#dc2626" }}>
+                      <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ background: "#ef4444" }} />
+                      TOKEN EXPIRED
+                    </span>
+                  )
+                )}
               </div>
               <p className="text-xs text-gray-400">Updates every 5 seconds via WebSocket</p>
             </div>
@@ -247,27 +286,101 @@ export default function Home() {
             </div>
           )}
 
-          {/* Strategy summary cards */}
-          {Object.keys(strategySummary).length > 0 && (
-            <div className="mb-4">
-              <div className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">Today's Strategy P&L</div>
-              <div className="grid grid-cols-3 gap-3">
-                {Object.entries(strategySummary).map(([name, s]: any) => (
-                  <div key={name} className="bg-white rounded-xl border border-gray-200 p-3">
-                    <div className="text-xs font-bold text-gray-700 mb-2">{name}</div>
-                    <div className={`text-lg font-bold ${s.pnl >= 0 ? "text-green-600" : "text-red-500"}`}>
-                      {s.pnl >= 0 ? "+" : ""}₹{s.pnl.toLocaleString("en-IN")}
+          {/* Strategy P&L + Day Bias row */}
+          <div className="flex gap-4 mb-4 items-start">
+            {/* Today's Strategy P&L */}
+            {Object.keys(strategySummary).length > 0 && (
+              <div className="flex-1">
+                <div className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">Today's Strategy P&L</div>
+                <div className="grid grid-cols-2 gap-3">
+                  {Object.entries(strategySummary).map(([name, s]: any) => (
+                    <div key={name} className="bg-white rounded-xl border border-gray-200 p-3">
+                      <div className="text-xs font-bold text-gray-700 mb-2">{name}</div>
+                      <div className={`text-lg font-bold ${s.pnl >= 0 ? "text-green-600" : "text-red-500"}`}>
+                        {s.pnl >= 0 ? "+" : ""}₹{s.pnl.toLocaleString("en-IN")}
+                      </div>
+                      <div className="flex gap-3 mt-1 text-xs text-gray-400">
+                        <span>{s.trades} trades</span>
+                        <span className="text-green-600">{s.wins}W</span>
+                        <span className="text-red-500">{s.losses}L</span>
+                      </div>
                     </div>
-                    <div className="flex gap-3 mt-1 text-xs text-gray-400">
-                      <span>{s.trades} trades</span>
-                      <span className="text-green-600">{s.wins}W</span>
-                      <span className="text-red-500">{s.losses}L</span>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Day Bias panel */}
+            <div className="w-72 flex-shrink-0">
+              <div className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">Day Bias</div>
+              <div className="bg-white rounded-xl border border-gray-200 p-3 space-y-3">
+                {/* Bias buttons */}
+                <div className="flex gap-2">
+                  {(["BULLISH", "NEUTRAL", "BEARISH"] as const).map(b => {
+                    const active = dayBiasData.bias === b;
+                    const cfg = {
+                      BULLISH: { active: "bg-green-500 text-white border-green-500", idle: "border-gray-200 text-gray-500 hover:border-green-300" },
+                      NEUTRAL: { active: "bg-gray-500 text-white border-gray-500", idle: "border-gray-200 text-gray-500 hover:border-gray-400" },
+                      BEARISH: { active: "bg-red-500 text-white border-red-500",   idle: "border-gray-200 text-gray-500 hover:border-red-300" },
+                    }[b];
+                    return (
+                      <button key={b} onClick={() => saveBias(b, biasNote)} disabled={biasSaving}
+                              className={`flex-1 text-[11px] font-bold py-1.5 rounded-lg border transition-all ${active ? cfg.active : cfg.idle}`}>
+                        {b === "BULLISH" ? "▲ Bull" : b === "BEARISH" ? "▼ Bear" : "— Neutral"}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Note textarea */}
+                <div className="relative">
+                  <textarea
+                    rows={2}
+                    value={biasNote}
+                    onChange={e => { setBiasNote(e.target.value); setBiasEdit(true); }}
+                    placeholder="Add note e.g. FII selling, wait for reversal..."
+                    className="w-full text-xs text-gray-700 border border-gray-200 rounded-lg px-2.5 py-2 resize-none focus:outline-none focus:border-indigo-300 placeholder-gray-300"
+                  />
+                  {biasEdit && (
+                    <div className="flex gap-1.5 mt-1">
+                      <button onClick={() => saveBias(dayBiasData.bias, biasNote)} disabled={biasSaving}
+                              className="flex-1 text-[11px] font-bold py-1 rounded-lg bg-indigo-500 text-white hover:bg-indigo-600 transition-colors disabled:opacity-50">
+                        {biasSaving ? "Saving…" : "Save"}
+                      </button>
+                      <button onClick={() => { setBiasNote(dayBiasData.note || ""); setBiasEdit(false); }}
+                              className="flex-1 text-[11px] font-bold py-1 rounded-lg border border-gray-200 text-gray-500 hover:border-gray-400 transition-colors">
+                        Cancel
+                      </button>
                     </div>
+                  )}
+                </div>
+
+                {/* Parse flash */}
+                {parseFlash && (
+                  <div className={`text-[11px] px-2.5 py-2 rounded-lg leading-snug ${
+                    parseFlash.type === "force_trade" ? "bg-green-50 text-green-700 border border-green-200" :
+                    parseFlash.type === "bias"        ? "bg-blue-50 text-blue-700 border border-blue-200" :
+                    parseFlash.type === "unclear"     ? "bg-red-50 text-red-600 border border-red-200" :
+                    "bg-gray-50 text-gray-500"
+                  }`}>
+                    {parseFlash.type === "force_trade" && <span className="font-bold">✓ </span>}
+                    {parseFlash.type === "bias"        && <span className="font-bold">→ </span>}
+                    {parseFlash.type === "unclear"     && <span className="font-bold">✗ </span>}
+                    {parseFlash.msg}
                   </div>
-                ))}
+                )}
+
+                {/* Status line */}
+                <div className="text-[10px] text-gray-400">
+                  {savedBias ? (
+                    <span className="text-green-600 font-semibold">Saved — bot updated</span>
+                  ) : dayBiasData.set_at ? (
+                    <>Set {new Date(dayBiasData.set_at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}</>
+                  ) : "Not set today"}
+                </div>
               </div>
             </div>
-          )}
+          </div>
 
           {/* Today's trade journal */}
           {todayJournal.length > 0 && (

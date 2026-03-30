@@ -40,11 +40,43 @@ def clear_all_flags() -> None:
 FLAG_FORCE_TRADE = "force_trade.json"
 
 
-def write_force_trade(symbol: str, side: str, quantity: int, reason: str = "Manual override") -> None:
+def write_force_trade(symbol: str, side: str, quantity: int, reason: str = "Manual override",
+                      option_type: str = None, strike: int = None,
+                      sl: float = None, tp: float = None) -> None:
     """Dashboard writes this to queue a manual trade for the bot to execute."""
     import json
-    (FLAGS_DIR / FLAG_FORCE_TRADE).write_text(
-        json.dumps({"symbol": symbol, "side": side, "quantity": quantity, "reason": reason})
+    payload = {"symbol": symbol, "side": side, "quantity": quantity, "reason": reason}
+    if option_type: payload["option_type"] = option_type
+    if strike:      payload["strike"]      = strike
+    if sl:          payload["sl"]          = sl
+    if tp:          payload["tp"]          = tp
+    (FLAGS_DIR / FLAG_FORCE_TRADE).write_text(json.dumps(payload))
+
+
+def read_day_bias() -> dict:
+    """Return current day bias. Default NEUTRAL if not set."""
+    import json
+    f = FLAGS_DIR / "day_bias.json"
+    if not f.exists():
+        return {"bias": "NEUTRAL", "note": "", "set_at": None}
+    try:
+        return json.loads(f.read_text())
+    except Exception:
+        return {"bias": "NEUTRAL", "note": "", "set_at": None}
+
+
+def write_day_bias(bias: str, note: str = "", parsed: dict = None) -> None:
+    """Dashboard writes trader's directional bias for the day."""
+    import json
+    from datetime import datetime, timezone, timedelta
+    ist = timezone(timedelta(hours=5, minutes=30))
+    (FLAGS_DIR / "day_bias.json").write_text(
+        json.dumps({
+            "bias": bias.upper(),
+            "note": note,
+            "parsed": parsed or {},
+            "set_at": datetime.now(ist).isoformat(),
+        })
     )
 
 

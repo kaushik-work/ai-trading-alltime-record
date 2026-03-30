@@ -324,10 +324,22 @@ class TradingBrain:
                 vix_action = f"1 lot only. Require score ≥ 9.0 (threshold {score_floor + 1.5:.1f}). Wait 30 min after gap-down. Seriously consider HOLD."
             vix_context = f"\n📊 India VIX = {vix_val:.1f} [{vix_regime}]\n   Guidance: {vix_action}"
 
+        # Trader day bias
+        day_bias_raw = market_data.get("day_bias", {})
+        bias_val  = day_bias_raw.get("bias", "NEUTRAL") if day_bias_raw else "NEUTRAL"
+        bias_note = day_bias_raw.get("note", "") if day_bias_raw else ""
+        bias_context = ""
+        if bias_val == "BULLISH":
+            bias_context = f"\n📋 TRADER DAY BIAS: BULLISH — only consider BUY CE trades. Skip any PE/SELL signals."
+        elif bias_val == "BEARISH":
+            bias_context = f"\n📋 TRADER DAY BIAS: BEARISH — only consider BUY PE trades. Skip any CE/BUY signals."
+        if bias_note:
+            bias_context += f"\n   Trader note: \"{bias_note}\""
+
         return f"""Analyze this NSE index options trading opportunity:
 
 SYMBOL: {symbol}  |  Lot Size: {lot_size}  |  Premium Target: {prem_range}
-Minimum Signal Score Required: {score_floor}{dte_warn}{consec_loss_warn}{vix_context}
+Minimum Signal Score Required: {score_floor}{dte_warn}{consec_loss_warn}{vix_context}{bias_context}
 
 CURRENT MARKET DATA:
 {json.dumps(market_data, indent=2)}

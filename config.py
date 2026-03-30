@@ -12,6 +12,7 @@ ZERODHA_USER_ID   = os.getenv("ZERODHA_USER_ID", "")      # for logging only
 ZERODHA_API_KEY   = os.getenv("ZERODHA_API_KEY", "")
 ZERODHA_API_SECRET = os.getenv("ZERODHA_API_SECRET", "")
 ZERODHA_ACCESS_TOKEN = os.getenv("ZERODHA_ACCESS_TOKEN", "")  # generated daily via scripts/get_token.py
+ZERODHA_TOKEN_SET_AT = os.getenv("ZERODHA_TOKEN_SET_AT", "")  # ISO timestamp written by get_token.py
 
 # Claude API
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")

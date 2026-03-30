@@ -20,6 +20,7 @@ import logging
 from datetime import datetime, time as dtime
 from typing import Optional
 import config
+from core import ipc
 from core.broker import get_broker
 from core.brain import TradingBrain
 from core.memory import TradeMemory
@@ -270,6 +271,7 @@ class TrendStrategy:
             "take_profit_pct": config.TAKE_PROFIT_PCT,
             "must_exit_by": config.INTRADAY_EXIT_BY,
             "lot_size": config.LOT_SIZES.get(symbol, 1),
+            "day_bias": ipc.read_day_bias(),
         }
 
         decision = self.brain.analyze(symbol, enriched, trade_history, portfolio)

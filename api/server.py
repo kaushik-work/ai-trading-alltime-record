@@ -161,6 +161,8 @@ def _build_snapshot() -> dict:
         "india_vix": vix,
         "vix_blocked": vix_blocked,
         "vix_threshold": config.VIX_THRESHOLD,
+        "token_set_at": config.ZERODHA_TOKEN_SET_AT or None,
+        "day_bias": ipc.read_day_bias(),
         "mode": "paper" if config.IS_PAPER else "live",
         "pnl": {
             "total": round(total_pnl, 2),
@@ -249,8 +251,13 @@ def bot_debug(user: str = Depends(get_current_user)):
     from core.bot_runner import _is_market_hours, IST
     runner = get_runner()
     now_ist = datetime.now(IST)
+    vix = runner.last_vix
     result = {"time_ist": now_ist.isoformat(), "market_open": _is_market_hours(),
               "last_heartbeat": runner.last_heartbeat, "last_scores": runner.last_scores,
+              "india_vix": vix,
+              "vix_blocked": vix is not None and vix > config.VIX_THRESHOLD,
+              "vix_threshold": config.VIX_THRESHOLD,
+              "token_set_at": config.ZERODHA_TOKEN_SET_AT or None,
               "strategies": {}}
 
     # ATR Intraday uses TrendStrategy (signal_scorer) — get its last known state
@@ -269,6 +276,58 @@ def bot_debug(user: str = Depends(get_current_user)):
     except Exception as e:
         result["strategies"]["ATR Intraday"] = {"error": str(e)}
 
+    return result
+
+@app.get("/api/bot/bias")
+def get_bias(user: str = Depends(get_current_user)):
+    return ipc.read_day_bias()
+
+@app.post("/api/bot/bias")
+def set_bias(body: dict, user: str = Depends(get_current_user)):
+    from core.note_parser import parse_trade_note
+    bias = body.get("bias", "NEUTRAL").upper()
+    if bias not in ("BULLISH", "BEARISH", "NEUTRAL"):
+        raise HTTPException(status_code=400, detail="bias must be BULLISH, BEARISH, or NEUTRAL")
+    note = body.get("note", "")
+
+    parsed = parse_trade_note(note)
+
+    # If natural language bias detected, upgrade the explicit bias selection
+    if parsed["type"] == "bias" and bias == "NEUTRAL":
+        bias = parsed["bias"]
+
+    # Build VIX warning if applicable
+    runner = get_runner()
+    vix = runner.last_vix
+    vix_warn = ""
+    if vix is not None and vix > config.VIX_THRESHOLD:
+        if parsed["type"] == "force_trade":
+            vix_warn = f" ⚠️ VIX={vix:.1f} is high — trade will execute but premiums are expensive."
+        else:
+            vix_warn = f" ⚠️ VIX={vix:.1f} > {config.VIX_THRESHOLD} — bot is currently blocked from taking new entries."
+    if vix_warn:
+        parsed["explanation"] = parsed.get("explanation", "") + vix_warn
+
+    # Queue force trade (bypasses signal scorer)
+    if parsed["type"] == "force_trade":
+        if ipc.flag_exists(ipc.FLAG_FORCE_TRADE):
+            parsed["explanation"] = "A trade is already queued — wait for it to execute first."
+            parsed["type"] = "unclear"
+        else:
+            ipc.write_force_trade(
+                symbol      = parsed.get("symbol", "NIFTY"),
+                side        = parsed["direction"],
+                quantity    = 1,
+                reason      = f"Note trade: {note}",
+                option_type = parsed.get("option_type"),
+                strike      = parsed.get("strike"),
+                sl          = parsed.get("sl"),
+                tp          = parsed.get("tp"),
+            )
+
+    ipc.write_day_bias(bias, note, parsed)
+    result = ipc.read_day_bias()
+    result["parsed"] = parsed
     return result
 
 @app.post("/api/bot/pause")

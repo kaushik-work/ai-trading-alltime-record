@@ -61,13 +61,17 @@ def trading_cycle():
         try:
             market_data = strategy.market.get_indicators(force["symbol"])
             decision = {
-                "action": force["side"],
-                "symbol": force["symbol"],
-                "quantity": force["quantity"],
-                "confidence": 1.0,
-                "reasoning": force["reason"],
-                "risk_level": "MANUAL",
+                "action":      force["side"],
+                "symbol":      force["symbol"],
+                "quantity":    force["quantity"],
+                "confidence":  1.0,
+                "reasoning":   force["reason"],
+                "risk_level":  "MANUAL",
             }
+            if force.get("option_type"): decision["option_type"] = force["option_type"]
+            if force.get("strike"):      decision["strike"]      = force["strike"]
+            if force.get("sl"):          decision["sl"]          = force["sl"]
+            if force.get("tp"):          decision["tp"]          = force["tp"]
             result = strategy._execute(decision, market_data)
             logger.info("Force trade result: %s", result)
         except Exception as e:

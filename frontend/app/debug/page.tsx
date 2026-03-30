@@ -50,7 +50,7 @@ export default function DebugPage() {
         <div className="flex items-center justify-between mb-6">
           <div>
             <h1 className="text-xl font-bold text-gray-900">Signal Radar</h1>
-            <p className="text-xs text-gray-400 mt-0.5">Live signal scores for all 3 strategies — no trades placed</p>
+            <p className="text-xs text-gray-400 mt-0.5">Live signal scores — no trades placed</p>
           </div>
           <div className="flex items-center gap-3">
             {lastFetch && <span className="text-xs text-gray-400">Last updated: {lastFetch}</span>}
@@ -72,38 +72,77 @@ export default function DebugPage() {
 
         {/* Market status + heartbeat */}
         {data && (
-          <div className="grid grid-cols-3 gap-3 mb-6">
-            <div className="bg-white rounded-xl border border-gray-200 p-4">
-              <div className="text-[10px] text-gray-400 uppercase font-semibold mb-1">Market</div>
-              <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full inline-block"
-                      style={{ background: data.market_open ? "#22c55e" : "#9ca3af" }} />
-                <span className="text-sm font-bold" style={{ color: data.market_open ? "#15803d" : "#6b7280" }}>
-                  {data.market_open ? "OPEN" : "CLOSED"}
-                </span>
+          <>
+            <div className="grid grid-cols-3 gap-3 mb-3">
+              <div className="bg-white rounded-xl border border-gray-200 p-4">
+                <div className="text-[10px] text-gray-400 uppercase font-semibold mb-1">Market</div>
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full inline-block"
+                        style={{ background: data.market_open ? "#22c55e" : "#9ca3af" }} />
+                  <span className="text-sm font-bold" style={{ color: data.market_open ? "#15803d" : "#6b7280" }}>
+                    {data.market_open ? "OPEN" : "CLOSED"}
+                  </span>
+                </div>
+              </div>
+              <div className="bg-white rounded-xl border border-gray-200 p-4">
+                <div className="text-[10px] text-gray-400 uppercase font-semibold mb-1">Server Time (IST)</div>
+                <div className="text-sm font-bold text-gray-800">
+                  {data.time_ist ? new Date(data.time_ist).toLocaleTimeString("en-IN") : "—"}
+                </div>
+              </div>
+              <div className="bg-white rounded-xl border border-gray-200 p-4">
+                <div className="text-[10px] text-gray-400 uppercase font-semibold mb-1">Last Heartbeat</div>
+                <div className="text-sm font-bold text-gray-800">
+                  {data.last_heartbeat ? new Date(data.last_heartbeat).toLocaleTimeString("en-IN") : "Never"}
+                </div>
               </div>
             </div>
-            <div className="bg-white rounded-xl border border-gray-200 p-4">
-              <div className="text-[10px] text-gray-400 uppercase font-semibold mb-1">Server Time (IST)</div>
-              <div className="text-sm font-bold text-gray-800">
-                {data.time_ist ? new Date(data.time_ist).toLocaleTimeString("en-IN") : "—"}
+
+            {/* Token + VIX status row */}
+            <div className="grid grid-cols-2 gap-3 mb-6">
+              {/* Zerodha token */}
+              <div className={`rounded-xl border p-4 ${data.token_set_at ? "bg-white border-gray-200" : "bg-red-50 border-red-200"}`}>
+                <div className="text-[10px] text-gray-400 uppercase font-semibold mb-1">Zerodha Token</div>
+                {data.token_set_at ? (
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-green-500 inline-block" />
+                    <span className="text-sm font-bold text-gray-800">
+                      Set at {new Date(data.token_set_at).toLocaleTimeString("en-IN")}
+                    </span>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-red-500 inline-block" />
+                    <span className="text-sm font-bold text-red-600">Not refreshed today</span>
+                  </div>
+                )}
+              </div>
+
+              {/* India VIX */}
+              <div className={`rounded-xl border p-4 ${data.vix_blocked ? "bg-orange-50 border-orange-200" : "bg-white border-gray-200"}`}>
+                <div className="text-[10px] text-gray-400 uppercase font-semibold mb-1">India VIX</div>
+                {data.india_vix != null ? (
+                  <div className="flex items-center gap-2">
+                    <span className="text-sm font-bold" style={{ color: data.vix_blocked ? "#ea580c" : "#15803d" }}>
+                      {data.india_vix.toFixed(1)}
+                    </span>
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
+                          style={{ background: data.vix_blocked ? "#ffedd5" : "#dcfce7", color: data.vix_blocked ? "#ea580c" : "#15803d" }}>
+                      {data.vix_blocked ? `BLOCKED (threshold ${data.vix_threshold})` : "TRADEABLE"}
+                    </span>
+                  </div>
+                ) : (
+                  <span className="text-sm text-gray-400">—</span>
+                )}
               </div>
             </div>
-            <div className="bg-white rounded-xl border border-gray-200 p-4">
-              <div className="text-[10px] text-gray-400 uppercase font-semibold mb-1">Last Heartbeat</div>
-              <div className="text-sm font-bold text-gray-800">
-                {data.last_heartbeat ? new Date(data.last_heartbeat).toLocaleTimeString("en-IN") : "Never"}
-              </div>
-            </div>
-          </div>
+          </>
         )}
 
         {/* Strategy cards */}
         <div className="space-y-4">
           {[
-            { name: "Musashi", tag: "侍", color: "#6366f1", bg: "#eef2ff", interval: "15m", type: "Trend" },
-            { name: "Raijin",  tag: "雷", color: "#f59e0b", bg: "#fffbeb", interval: "5m",  type: "Scalp" },
-            { name: "ATR Intraday", tag: "旧", color: "#6b7280", bg: "#f9fafb", interval: "15m", type: "Legacy" },
+            { name: "ATR Intraday", tag: "旧", color: "#6366f1", bg: "#eef2ff", interval: "15m", type: "Active" },
           ].map(({ name, tag, color, bg, interval, type }) => {
             const s = strategies[name];
             return (
