@@ -1,0 +1,1 @@
+{"config": {"threshold_pct": 20.0, "tp_pct": 12.0, "sl_pct": 7.0, "max_hold_days": 15, "period_days": 365}, "overall": {"n": 0, "win_rate": 0, "avg_pnl": 0, "pf": 0, "avg_hold": 0, "best": 0, "worst": 0}, "exit_breakdown": {}, "top_stocks": [], "all_trades": []}
