@@ -28,11 +28,11 @@ TARGET_PHASE_A   = 150_000
 TARGET_PHASE_B   = 1_500_000
 
 # ── Budget & Risk ──────────────────────────────────────────────────────────────
-STARTING_BUDGET    = 50_000    # ₹50K — 2 lots NIFTY ATM × ₹180 premium comfortably
+STARTING_BUDGET    = 125_000   # ₹1.25L — 3 lots × 2 strategies running independently
 RISK_PER_TRADE_PCT = 2.0       # % of portfolio risked per trade (backtest optimal)
 MAX_OPEN_POSITIONS = 2         # max concurrent positions (Phase A)
 MAX_TRADE_AMOUNT   = 40_000    # max capital per trade — covers 3 NIFTY lots at ₹180 ATM
-MAX_DAILY_LOSS     = 2_500     # ₹2,500 hard stop (5% of ₹50K) — auto-pause if hit
+MAX_DAILY_LOSS     = 6_250     # ₹6,250 hard stop (5% of ₹1.25L) — auto-pause if hit
 
 # ── Lot Sizes (NSE) ────────────────────────────────────────────────────────────
 # Verify at: https://support.zerodha.com/category/trading-and-markets/trading-faqs/f-otrading/articles/lot-size-for-index-derivatives
