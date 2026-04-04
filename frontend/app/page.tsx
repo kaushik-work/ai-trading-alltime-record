@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useWebSocket } from "./hooks/useWebSocket";
 import Header from "./components/Header";
@@ -9,15 +9,27 @@ const WS_URL  = process.env.NEXT_PUBLIC_WS_URL  || "ws://localhost:8000/ws";
 const STRATEGIES = [
   {
     name: "ATR Intraday",
-    tag: "旧",
+    tag: "1",
     symbols: ["NIFTY"],
-    timeframe: "15m",
+    timeframe: "5m",
     status: "active",
-    description: "VWAP + ORB + PDH/PDL + 12 candlestick patterns. Score -10 to +10.",
-    target: "—",
-    rr: "1:2.0",
+    description: "VWAP + ORB + PDH/PDL + SMA/EMA/RSI/MACD. Score -10 to +10, threshold ≥6. Claude AI confirms entry.",
+    target: "+298%",
+    rr: "1:3.0",
     risk: "2%",
     color: "indigo",
+  },
+  {
+    name: "ICT — OB + Sweep",
+    tag: "C",
+    symbols: ["NIFTY"],
+    timeframe: "5m",
+    status: "active",
+    description: "Delta direction + Trendline channel (HPS-T) + ICT Order Blocks & Liquidity Sweeps. Best WR 52.8%, lowest DD 6.7% across 90-day backtest.",
+    target: "+365%",
+    rr: "1:2.5",
+    risk: "2%",
+    color: "violet",
   },
 ];
 
@@ -56,7 +68,6 @@ export default function Home() {
   const [biasNote, setBiasNote]       = useState("");
   const [savedBias, setSavedBias]     = useState<string | null>(null);
   const [parseFlash, setParseFlash]   = useState<{type: string; msg: string} | null>(null);
-  const prevBiasRef = useRef<string>("");
 
   // Sync note from websocket when not in edit mode
   useEffect(() => {
@@ -118,13 +129,13 @@ export default function Home() {
             {STRATEGIES.map((s, i) => {
               const active  = s.status === "active";
               const accent  = s.color === "indigo" ? "border-indigo-200 bg-indigo-50/40"
-                            : s.color === "amber"  ? "border-amber-200 bg-amber-50/40"
+                            : s.color === "violet" ? "border-violet-200 bg-violet-50/40"
                             : "border-gray-100 bg-gray-50";
               const tagBg   = s.color === "indigo" ? "bg-indigo-100 text-indigo-700"
-                            : s.color === "amber"  ? "bg-amber-100 text-amber-700"
+                            : s.color === "violet" ? "bg-violet-100 text-violet-700"
                             : "bg-gray-200 text-gray-500";
               const symBg   = s.color === "indigo" ? "bg-indigo-100 text-indigo-600"
-                            : s.color === "amber"  ? "bg-amber-100 text-amber-700"
+                            : s.color === "violet" ? "bg-violet-100 text-violet-600"
                             : "bg-gray-100 text-gray-500";
               return (
                 <div key={i} className={`rounded-xl border p-3 ${accent}`}>

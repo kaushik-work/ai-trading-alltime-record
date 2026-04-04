@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 def score_symbol(indicators: dict, oi_data: dict, patterns: dict,
-                 intraday: dict = None) -> dict:
+                 intraday: dict = None, df_5m=None) -> dict:
     """
     Score a symbol using all available signals.
 
@@ -305,6 +305,37 @@ def score_symbol(indicators: dict, oi_data: dict, patterns: dict,
                 breakdown["pdh_pdl"] = 0
             score += breakdown.get("pdh_pdl", 0)
 
+    # ── 12. Strategy C — ICT Order Blocks + Liquidity Sweeps ────────────────────
+    order_flow = {}
+    if df_5m is not None and len(df_5m) >= 6:
+        try:
+            from strategies.order_flow import analyse as of_analyse
+            symbol = indicators.get("symbol", "NIFTY")
+            current_price = intraday.get("price", price) if intraday else price
+            order_flow = of_analyse(df_5m, current_price, symbol)
+
+            # Strategy C — ICT Order Blocks + Liquidity Sweeps
+            liq_score = order_flow.get("ict_liq_score", 0)
+            ob_score  = order_flow.get("ict_ob_score", 0)
+            liq_sig   = order_flow.get("ict_liq_signal")
+            ob_level  = order_flow.get("ict_ob_level")
+
+            if liq_score != 0:
+                tag = liq_sig or ("SSL" if liq_score > 0 else "BSL")
+                signals.append(f"ICT C: {tag} sweep {'bullish' if liq_score > 0 else 'bearish'} {liq_score:+d}")
+                breakdown["ict_liq"] = liq_score
+                score += liq_score
+
+            if ob_score != 0:
+                lvl  = f"₹{ob_level[0]:.0f}-{ob_level[1]:.0f}" if ob_level else "zone"
+                kind = "bullish OB retest" if ob_score > 0 else "bearish OB retest"
+                signals.append(f"ICT C: {kind} {lvl} {ob_score:+d}")
+                breakdown["ict_ob"] = ob_score
+                score += ob_score
+
+        except Exception as e:
+            logger.debug("Order flow analysis failed: %s", e)
+
     # ── Clamp and resolve ─────────────────────────────────────────────────────
     score = max(-10, min(10, score))
     threshold = getattr(config, "MIN_SIGNAL_SCORE", 5)
@@ -324,10 +355,11 @@ def score_symbol(indicators: dict, oi_data: dict, patterns: dict,
     )
 
     return {
-        "score": score,
-        "action": action,
+        "score":      score,
+        "action":     action,
         "confidence": confidence,
-        "signals": signals,
-        "breakdown": breakdown,
-        "threshold": threshold,
+        "signals":    signals,
+        "breakdown":  breakdown,
+        "threshold":  threshold,
+        "order_flow": order_flow,
     }

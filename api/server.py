@@ -162,7 +162,7 @@ def _build_snapshot() -> dict:
         "vix_blocked": vix_blocked,
         "vix_threshold": config.VIX_THRESHOLD,
         "token_set_at": _get_token_status(),
-        "day_bias": ipc.read_day_bias(),
+        "day_bias": runner.last_day_bias,
         "mode": "paper" if config.IS_PAPER else "live",
         "pnl": {
             "total": round(total_pnl, 2),
@@ -244,21 +244,30 @@ def health():
     from zoneinfo import ZoneInfo
     return {"status": "ok", "time": datetime.now(ZoneInfo("Asia/Kolkata")).isoformat()}
 
+_token_cache: dict = {"result": None, "checked_at": 0.0}
+_TOKEN_CACHE_TTL = 300  # re-check token liveness every 5 minutes
+
 def _get_token_status() -> dict:
-    """Check Zerodha token liveness by making a real API call."""
+    """Check Zerodha token liveness (cached for 5 minutes to avoid hammering the API)."""
+    import time
+    now = time.monotonic()
+    if now - _token_cache["checked_at"] < _TOKEN_CACHE_TTL and _token_cache["result"] is not None:
+        return _token_cache["result"]
     try:
         from data.zerodha_fetcher import ZerodhaFetcher
         live = ZerodhaFetcher.get().is_token_live()
         if live:
-            # Also read timestamp if available (best-effort)
             from dotenv import dotenv_values
-            import os
             env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
             set_at = dotenv_values(env_path).get("ZERODHA_TOKEN_SET_AT") or None
-            return {"live": True, "set_at": set_at}
-        return {"live": False, "set_at": None}
+            result = {"live": True, "set_at": set_at}
+        else:
+            result = {"live": False, "set_at": None}
     except Exception:
-        return {"live": False, "set_at": None}
+        result = {"live": False, "set_at": None}
+    _token_cache["result"] = result
+    _token_cache["checked_at"] = now
+    return result
 
 
 @app.get("/api/bot/debug")
@@ -355,6 +364,8 @@ def set_bias(body: dict, user: str = Depends(get_current_user)):
     ipc.write_day_bias(bias, note, parsed)
     result = ipc.read_day_bias()
     result["parsed"] = parsed
+    # Update runner cache so WebSocket broadcast reflects new bias immediately
+    get_runner().last_day_bias = {k: v for k, v in result.items() if k != "parsed"}
     return result
 
 @app.post("/api/bot/pause")

@@ -1,5 +1,5 @@
 """
-Trend Strategy — AishDoc intraday approach for NIFTY & BANKNIFTY.
+Trend Strategy — AishDoc intraday approach for NIFTY.
 
 Roadmap:
   Phase A : ₹20,000 budget | intraday only | goal ₹1.5L
@@ -76,6 +76,13 @@ class TrendStrategy:
         end   = _parse_time(config.INTRADAY_EXIT_BY)
         return start <= now <= end
 
+    def _in_lunch_skip(self) -> bool:
+        """True during the NSE lunch chop window (12:30–13:30 IST). No new entries."""
+        now   = datetime.now().time().replace(second=0, microsecond=0)
+        start = _parse_time(config.LUNCH_SKIP_START)
+        end   = _parse_time(config.LUNCH_SKIP_END)
+        return start <= now <= end
+
     def _must_square_off(self) -> bool:
         """True if we're past the square-off deadline."""
         now = datetime.now().time().replace(second=0, microsecond=0)
@@ -111,10 +118,11 @@ class TrendStrategy:
         # Cap by MAX_TRADE_AMOUNT
         max_qty_by_budget = int(config.MAX_TRADE_AMOUNT / price) if price > 0 else 1
 
-        # Round to lot size
-        lot = config.LOT_SIZES.get(symbol, 1)
-        qty = max(lot, (qty // lot) * lot)
-        qty = min(qty, max(lot, (max_qty_by_budget // lot) * lot))
+        # Round to lot size, enforce MIN_LOTS
+        lot      = config.LOT_SIZES.get(symbol, 1)
+        min_qty  = lot * config.MIN_LOTS
+        qty      = max(min_qty, (qty // lot) * lot)
+        qty      = min(qty, max(min_qty, (max_qty_by_budget // lot) * lot))
 
         logger.info(
             "Position sizing %s: risk=₹%.0f / ATR=₹%.2f → %d units (%d lots)",
@@ -152,8 +160,9 @@ class TrendStrategy:
 
         patterns = self._get_patterns(symbol)
 
-        # Score with intraday signals included
-        scored = score_symbol(indicators, {}, patterns, intraday)
+        # Score with intraday signals + order flow included
+        df_5m = self.market._get_df(symbol) if isinstance(self.market, RealMarketData) else None
+        scored = score_symbol(indicators, {}, patterns, intraday, df_5m=df_5m)
 
         logger.info(
             "[%s] Score: %+d/10 → %s | %s",
@@ -179,14 +188,16 @@ class TrendStrategy:
                         symbol, config.INTRADAY_START, config.INTRADAY_EXIT_BY)
             return None
 
+        if self._in_lunch_skip():
+            logger.info("[%s] Lunch chop window (%s–%s). Skipping new entry.",
+                        symbol, config.LUNCH_SKIP_START, config.LUNCH_SKIP_END)
+            return None
+
         if portfolio.get("open_positions", 0) >= config.MAX_OPEN_POSITIONS:
             return None
 
-        # Only send to Claude if score clears threshold
-        if scored["action"] == "BUY":
-            return self._confirm_and_execute(symbol, current_price, indicators, intraday, scored, portfolio)
-
-        return None
+        # Always send to Claude — it reads raw candles and decides autonomously
+        return self._confirm_and_execute(symbol, current_price, indicators, intraday, scored, portfolio)
 
     # ── Position management ────────────────────────────────────────────────────
 
@@ -256,6 +267,13 @@ class TrendStrategy:
                               scored: dict, portfolio: dict) -> Optional[dict]:
         trade_history = self.memory.get_trades_for_symbol(symbol)
 
+        # Raw candles — brain reads these directly for price action analysis
+        candles_5m: list = []
+        candles_15m: list = []
+        if isinstance(self.market, RealMarketData):
+            candles_5m  = self.market.get_raw_candles(symbol, "5m",  limit=30)
+            candles_15m = self.market.get_raw_candles(symbol, "15m", limit=20)
+
         enriched = {
             **indicators,
             "signal_score": scored["score"],
@@ -263,6 +281,9 @@ class TrendStrategy:
             "signals": scored["signals"],
             "signal_breakdown": scored["breakdown"],
             "intraday": intraday,
+            "candles_5m":  candles_5m,
+            "candles_15m": candles_15m,
+            "order_flow":  scored.get("order_flow", {}),
             "trading_type": config.TRADING_TYPE,
             "trading_phase": config.TRADING_PHASE,
             "budget": portfolio.get("balance", config.STARTING_BUDGET),

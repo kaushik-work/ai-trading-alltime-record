@@ -3,7 +3,7 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "Dashboard",
-  description: "NIFTY & BANKNIFTY",
+  description: "NIFTY — ATR Intraday + ICT",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

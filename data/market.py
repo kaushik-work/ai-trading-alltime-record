@@ -297,6 +297,31 @@ class RealMarketData:
 
         return result
 
+    def get_raw_candles(self, symbol: str, interval: str, limit: int = 30) -> list:
+        """
+        Return last `limit` OHLCV bars as a list of dicts for the brain to read directly.
+        Time is formatted as HH:MM (IST) for readability.
+        """
+        df = _get_intraday_df(symbol, interval)
+        if df is None or len(df) == 0:
+            return []
+        df = df.tail(limit)
+        rows = []
+        for idx, row in df.iterrows():
+            try:
+                t = idx.strftime("%H:%M") if hasattr(idx, "strftime") else str(idx)[-8:][:5]
+            except Exception:
+                t = str(idx)
+            rows.append({
+                "t": t,
+                "o": round(float(row["Open"]),   2),
+                "h": round(float(row["High"]),   2),
+                "l": round(float(row["Low"]),    2),
+                "c": round(float(row["Close"]),  2),
+                "v": int(row["Volume"]) if "Volume" in row else 0,
+            })
+        return rows
+
     def _mock_indicators(self, symbol: str) -> dict:
         """Last-resort fallback — clearly labelled mock data."""
         import random

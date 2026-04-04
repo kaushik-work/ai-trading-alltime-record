@@ -177,15 +177,28 @@ BREAKOUT ENTRIES:
   - Conservative has better R:R and filters most fakeouts
 
 ═══════════════════════════════════════════════════════════
- SIGNAL SCORING AND ENTRY FILTERS
+ RAW CANDLE DATA — YOUR PRIMARY SIGNAL SOURCE
 ═══════════════════════════════════════════════════════════
-- "signal_score" is pre-calculated by the strategy. Check "strategy" field for correct threshold:
-    ATR Intraday: threshold ±6 (score range -10 to +10)
-- Below threshold → HOLD regardless of gut feeling. The threshold exists for a reason.
-- EMA50 gate already applied upstream — if signal reached you, EMA50 trend is aligned.
-- PCR gate already applied upstream — if signal reached you, PCR is not extreme.
-- If score is borderline (threshold to threshold+1.0), require at least one "strong" confirming signal.
-- NEVER enter a trade just because you "missed the last move" — that is FOMO, not edge.
+You receive raw OHLCV bars for both 5-min and 15-min timeframes (candles_5m / candles_15m).
+Each bar: {"t": "HH:MM", "o": open, "h": high, "l": low, "c": close, "v": volume}
+
+YOUR ANALYSIS PROCESS (do this every time):
+1. READ STRUCTURE on 15m first — is it HH+HL (uptrend), LH+LL (downtrend), or ranging?
+2. LOCATE KEY LEVELS — VWAP (intraday["vwap"]), ORB high/low, PDH/PDL, round numbers
+3. FIND THE TRIGGER on 5m — is there a pin bar, engulfing, inside bar, or marubozu AT a key level?
+4. CHECK CONFLUENCE — do at least 2 independent signals agree (structure + level + candle pattern)?
+5. DECIDE — BUY (CE) if bullish setup at support | SELL (PE) if bearish at resistance | HOLD if no setup
+
+signal_score is supplementary — it summarises technical momentum. Do NOT rely on it as the primary gate.
+If signal_score is low but raw candles show a clear price action setup at a key level, trust your candle analysis.
+If signal_score is high but candles show a choppy/ranging structure with no trigger, HOLD anyway.
+
+CANDLE READING RULES:
+- Last bar in candles_5m / candles_15m = the just-completed candle (never trade on a forming bar)
+- High-volume bars at S/R confirm the level is significant
+- A series of smaller candles after a big thrust = consolidation before continuation
+- Consecutive closes above VWAP = bullish. Consecutive closes below VWAP = bearish.
+- Wick rejection ≥ 2× body at a known level = pin bar — strongest single-candle signal
 
 TREND CONTEXT:
   - Trade CE (calls) only when spot is above VWAP and trending up on higher timeframe.
@@ -283,6 +296,16 @@ class TradingBrain:
             logger.error("Brain error: %s", e)
             return {"action": "HOLD", "symbol": symbol, "quantity": 0, "confidence": 0, "reasoning": str(e), "risk_level": "HIGH"}
 
+    @staticmethod
+    def _format_candles(candles: list) -> str:
+        if not candles:
+            return "  (no data)"
+        header = "  Time  |   Open  |   High  |    Low  |  Close  |   Volume"
+        sep    = "  " + "-" * 58
+        rows   = [f"  {c['t']:5s}  | {c['o']:7.1f} | {c['h']:7.1f} | {c['l']:7.1f} | {c['c']:7.1f} | {c['v']:8d}"
+                  for c in candles]
+        return "\n".join([header, sep] + rows)
+
     def _build_prompt(self, symbol: str, market_data: dict, trade_history: list, portfolio: dict) -> str:
         recent_trades = trade_history[-10:] if trade_history else []
 
@@ -336,13 +359,52 @@ class TradingBrain:
         if bias_note:
             bias_context += f"\n   Trader note: \"{bias_note}\""
 
+        candles_5m  = market_data.get("candles_5m",  [])
+        candles_15m = market_data.get("candles_15m", [])
+        of          = market_data.get("order_flow",  {})
+
         return f"""Analyze this NSE index options trading opportunity:
 
 SYMBOL: {symbol}  |  Lot Size: {lot_size}  |  Premium Target: {prem_range}
-Minimum Signal Score Required: {score_floor}{dte_warn}{consec_loss_warn}{vix_context}{bias_context}
+Signal Score (supplementary): {market_data.get('signal_score', '?')}{dte_warn}{consec_loss_warn}{vix_context}{bias_context}
 
-CURRENT MARKET DATA:
-{json.dumps(market_data, indent=2)}
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 15-MIN CANDLES (most recent {len(candles_15m)} bars — use for structure & bias)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{self._format_candles(candles_15m)}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ 5-MIN CANDLES (most recent {len(candles_5m)} bars — use for trigger & entry)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+{self._format_candles(candles_5m)}
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ ORDER FLOW — HPS / DHPS ZONES (from 5m delta analysis)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+HPS Buy Zones  (session): {of.get('buy_zones',  'none')}
+HRS Sell Zones (session): {of.get('sell_zones', 'none')}
+DHPS Buy Zones (dynamic): {of.get('d_buy_zones',  'none')}
+DHRS Sell Zones(dynamic): {of.get('d_sell_zones', 'none')}
+Session Delta  : {of.get('session_delta', '—')}  |  Dynamic Delta: {of.get('d_session_delta', '—')}
+Zone signal    : {'AT BUY ZONE (+2)' if of.get('at_hps') or of.get('at_dhps') else 'AT SELL ZONE (-2)' if of.get('at_hrs') or of.get('at_dhrs') else 'not at any zone'}
+
+ORDER FLOW RULES:
+- Price at HPS/DHPS (buy zone) + bullish candle pattern = HIGH CONVICTION CE entry
+- Price at HRS/DHRS (sell zone) + bearish candle pattern = HIGH CONVICTION PE entry
+- Session delta strongly negative + price at HRS = sellers in full control, prefer PE
+- Session delta strongly positive + price at HPS = buyers in control, prefer CE
+- If at both buy and sell zone simultaneously = conflicting flow, prefer HOLD
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+ KEY LEVELS & INDICATORS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+VWAP:       {market_data.get('intraday', {}).get('vwap', '—')}
+ORB High:   {market_data.get('intraday', {}).get('orb_high', '—')}  |  ORB Low: {market_data.get('intraday', {}).get('orb_low', '—')}
+PDH:        {market_data.get('intraday', {}).get('pdh', '—')}       |  PDL:     {market_data.get('intraday', {}).get('pdl', '—')}
+Day High:   {market_data.get('intraday', {}).get('day_high', '—')}  |  Day Low: {market_data.get('intraday', {}).get('day_low', '—')}
+Trend 15m:  {market_data.get('intraday', {}).get('trend_15m', '—')}
+RSI 15m:    {market_data.get('intraday', {}).get('rsi_15m', '—')}
+ATR 5m:     {market_data.get('intraday', {}).get('atr_5m', '—')}    |  ATR 15d: {market_data.get('atr_14', '—')}
 
 PORTFOLIO STATUS:
 - Balance: ₹{portfolio.get('balance', 0):,.2f}
@@ -355,17 +417,15 @@ RECENT TRADE HISTORY FOR {symbol} (last 10):
 {json.dumps(recent_trades, indent=2) if recent_trades else "No previous trades for this symbol."}
 
 Decision guidance:
-- If signal_score < {score_floor}: respond with HOLD (insufficient edge).
-- If market is sideways/no clear VWAP direction: respond with HOLD (theta will kill you).
-- VIX guidance already shown above — apply regime-appropriate threshold and sizing.
-- BUY signal → option_type CE | SELL signal → option_type PE
-- Suggest sl_premium_pct = 0.50 (exit if premium drops 50% from entry).
-- Suggest tp_premium_pct = 0.80 (take profit at 80% gain on premium).
-- In your reasoning: mention the market structure (HH/HL uptrend? LH/LL downtrend? sideways?),
-  any key candlestick pattern present (pin bar / engulfing / inside bar / fakey), and
-  whether S/R confluence supports the trade direction.
+1. Read the 15m candles first — identify structure (HH/HL uptrend, LH/LL downtrend, or ranging).
+2. Check the 5m candles for a trigger at a key level (VWAP / ORB / PDH / PDL).
+3. BUY → option_type CE (bullish setup at support) | SELL → option_type PE (bearish at resistance)
+4. HOLD if structure is sideways, no clear trigger, or trigger is not at a meaningful level.
+5. VIX guidance already shown above — apply regime-appropriate threshold and sizing.
+6. sl_premium_pct = 0.50 (exit if premium drops 50%) | tp_premium_pct = 0.80 (target 80% gain).
+7. In reasoning: state the market structure, the specific candle pattern/bar you see, and the level it's at.
 
-Based on this data, provide your options trading decision as JSON."""
+Based on the raw candle data and key levels above, provide your options trading decision as JSON."""
 
     def explain_trade(self, trade: dict) -> str:
         """Ask Claude to explain a completed trade in plain English."""

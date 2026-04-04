@@ -137,6 +137,7 @@ class BotRunner:
         self.last_heartbeat: Optional[str] = None   # ISO string, IST
         self.last_scores: dict = {}                 # strategy → last signal scores
         self.last_vix: Optional[float] = None       # last fetched India VIX
+        self.last_day_bias: dict = ipc.read_day_bias()  # cached; updated by set_bias API
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -207,7 +208,7 @@ class BotRunner:
             return
         if self._is_vix_blocked():
             # Allow cycle if trader has explicitly set a directional bias (they know the risk)
-            bias = ipc.read_day_bias()
+            bias = self.last_day_bias
             if bias.get("bias", "NEUTRAL") == "NEUTRAL" or not bias.get("set_at"):
                 logger.warning("ATR cycle skipped — India VIX %.2f > threshold %.1f", self.last_vix, config.VIX_THRESHOLD)
                 return
@@ -247,6 +248,7 @@ class BotRunner:
         """Reset day bias to NEUTRAL at 20:00 IST each evening."""
         try:
             ipc.write_day_bias("NEUTRAL", "")
+            self.last_day_bias = ipc.read_day_bias()
             logger.info("Day bias reset to NEUTRAL for tomorrow.")
         except Exception as e:
             logger.error("Bias reset failed: %s", e)

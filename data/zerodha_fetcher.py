@@ -367,6 +367,70 @@ class ZerodhaFetcher:
             self._broker = None
             return None
 
+    # ── NSE equity support ────────────────────────────────────────────────────
+
+    _nse_token_cache: dict = {}       # symbol → token (class-level, persists all day)
+    _nse_cache_date: Optional[date] = None
+
+    def _nse_token(self, symbol: str) -> Optional[int]:
+        """Look up NSE equity instrument token. Cached for the trading day."""
+        today = date.today()
+        if self._nse_cache_date != today:
+            ZerodhaFetcher._nse_token_cache = {}
+            ZerodhaFetcher._nse_cache_date  = today
+
+        if symbol in self._nse_token_cache:
+            return self._nse_token_cache[symbol]
+
+        try:
+            instruments = self._broker.instruments("NSE")
+            for i in instruments:
+                if i["tradingsymbol"] == symbol and i["instrument_type"] == "EQ":
+                    ZerodhaFetcher._nse_token_cache[symbol] = i["instrument_token"]
+                    return i["instrument_token"]
+        except Exception as e:
+            logger.warning("_nse_token lookup failed for %s: %s", symbol, e)
+        return None
+
+    def fetch_equity_daily(self, symbol: str, days: int = 365):
+        """
+        Fetch `days` of daily OHLCV for any NSE equity stock.
+        Returns pandas DataFrame (Open/High/Low/Close/Volume, date index) or None.
+        """
+        if not self._ensure_logged_in():
+            return None
+        token = self._nse_token(symbol)
+        if token is None:
+            logger.warning("fetch_equity_daily: no NSE EQ token for %s", symbol)
+            return None
+        try:
+            import pandas as pd
+            from zoneinfo import ZoneInfo
+            IST = ZoneInfo("Asia/Kolkata")
+            now    = datetime.now(IST)
+            from_d = (now - timedelta(days=days + 10)).strftime("%Y-%m-%d")
+            to_d   = now.strftime("%Y-%m-%d")
+            records = self._broker.historical_data(
+                instrument_token=token,
+                from_date=f"{from_d} 09:15:00",
+                to_date=f"{to_d} 15:30:00",
+                interval="day",
+            )
+            if not records or len(records) < 10:
+                return None
+            df = pd.DataFrame(records)
+            df.rename(columns={"date": "Date", "open": "Open", "high": "High",
+                                "low": "Low", "close": "Close", "volume": "Volume"}, inplace=True)
+            df["Date"] = pd.to_datetime(df["Date"])
+            if df["Date"].dt.tz is not None:
+                df["Date"] = df["Date"].dt.tz_convert("Asia/Kolkata").dt.tz_localize(None)
+            df.set_index("Date", inplace=True)
+            return df
+        except Exception as e:
+            logger.error("fetch_equity_daily %s: %s", symbol, e)
+            self._broker = None
+            return None
+
     def fetch_intraday_df(self, symbol: str, interval: str):
         """
         Fetch today's intraday bars as a pandas DataFrame.
