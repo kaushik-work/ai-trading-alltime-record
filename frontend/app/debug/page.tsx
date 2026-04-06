@@ -11,6 +11,23 @@ export default function DebugPage() {
   const [loading, setLoading] = useState(false);
   const [lastFetch, setLastFetch] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [vixSaving, setVixSaving] = useState<Record<string, boolean>>({});
+
+  async function toggleVix(endpoint: string, currentState: boolean) {
+    const key = endpoint;
+    setVixSaving(s => ({ ...s, [key]: true }));
+    try {
+      const token = localStorage.getItem("aq_token");
+      await fetch(`${API_URL}${endpoint}`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ enable: !currentState }),
+      });
+      await fetchDebug();
+    } finally {
+      setVixSaving(s => ({ ...s, [key]: false }));
+    }
+  }
 
   const fetchDebug = useCallback(async () => {
     const token = localStorage.getItem("aq_token");
@@ -142,9 +159,12 @@ export default function DebugPage() {
         {/* Strategy cards */}
         <div className="space-y-4">
           {[
-            { name: "ATR Intraday", tag: "旧", color: "#6366f1", bg: "#eef2ff", interval: "15m", type: "Active" },
-          ].map(({ name, tag, color, bg, interval, type }) => {
+            { name: "ATR Intraday", tag: "ATR", color: "#6366f1", bg: "#eef2ff", interval: "15m", type: "Technical (sections 1–11)", vixEndpoint: "/api/bot/vix-override/atr", vixKey: "vix_override_atr" },
+            { name: "C-ICT",        tag: "ICT", color: "#0891b2", bg: "#e0f2fe", interval: "15m", type: "Order Blocks + Liquidity (section 12)", vixEndpoint: "/api/bot/vix-override/ict", vixKey: "vix_override_ict" },
+          ].map(({ name, tag, color, bg, interval, type, vixEndpoint, vixKey }) => {
             const s = strategies[name];
+            const vixOn: boolean = data?.[vixKey] ?? false;
+            const vixBusy = vixSaving[vixEndpoint] ?? false;
             return (
               <div key={name} className="bg-white rounded-xl border border-gray-200 p-5">
                 {/* Header */}
@@ -158,21 +178,36 @@ export default function DebugPage() {
                       <span className="ml-2 text-[10px] text-gray-400">{interval} · {type}</span>
                     </div>
                   </div>
-                  {s ? (
-                    <ActionBadge action={s.action ?? (s.will_trade ? "TRADE" : "HOLD")} />
-                  ) : (
-                    <span className="text-xs text-gray-300">no data</span>
-                  )}
+                  <div className="flex items-center gap-2">
+                    {/* Per-strategy VIX toggle */}
+                    <button
+                      onClick={() => toggleVix(vixEndpoint, vixOn)}
+                      disabled={vixBusy}
+                      className="text-[10px] font-semibold px-2 py-1 rounded-full border transition-colors disabled:opacity-50"
+                      style={vixOn
+                        ? { background: "#fef3c7", color: "#b45309", borderColor: "#f59e0b" }
+                        : { background: "#f3f4f6", color: "#6b7280", borderColor: "#d1d5db" }
+                      }
+                      title={vixOn ? "VIX gate bypassed for this strategy" : "VIX gate active for this strategy"}
+                    >
+                      VIX {vixOn ? "OFF" : "ON"}
+                    </button>
+                    {s ? (
+                      <ActionBadge action={s.action ?? (s.will_trade ? "TRADE" : "HOLD")} />
+                    ) : (
+                      <span className="text-xs text-gray-300">no data</span>
+                    )}
+                  </div>
                 </div>
 
                 {!s ? (
                   <div className="text-sm text-gray-400 italic">No signal data yet. Hit refresh during market hours.</div>
                 ) : s.error ? (
                   <div className="text-sm text-red-500">Error: {s.error}</div>
-                ) : name === "ATR Intraday" ? (
-                  <AtrScoreDisplay s={s} color={color} />
+                ) : name === "C-ICT" ? (
+                  <IctScoreDisplay s={s} color={color} />
                 ) : (
-                  <ScoreDisplay s={s} color={color} />
+                  <AtrScoreDisplay s={s} color={color} />
                 )}
               </div>
             );
@@ -264,6 +299,55 @@ function ScoreDisplay({ s, color }: { s: any; color: string }) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function IctScoreDisplay({ s, color }: { s: any; color: string }) {
+  const score = s.score ?? 0;
+  const of = s.order_flow ?? {};
+  return (
+    <div>
+      <div className="mb-3">
+        <div className="flex justify-between text-xs mb-1">
+          <span className="text-gray-500">ICT Signal Score</span>
+          <span className="font-bold text-gray-700">{score > 0 ? "+" : ""}{score} / ±4</span>
+        </div>
+        <div className="h-3 bg-gray-100 rounded-full overflow-hidden relative">
+          <div className="absolute top-0 bottom-0 w-0.5 bg-gray-300" style={{ left: "50%" }} />
+          <div className="h-full rounded-full transition-all"
+               style={{
+                 width: `${Math.abs(score) / 4 * 50}%`,
+                 marginLeft: score >= 0 ? "50%" : `${50 - Math.abs(score) / 4 * 50}%`,
+                 background: score >= 0 ? "#22c55e" : "#ef4444",
+               }} />
+        </div>
+        <div className="flex justify-between text-[9px] text-gray-400 mt-0.5">
+          <span>-4 (SELL)</span><span>0</span><span>+4 (BUY)</span>
+        </div>
+      </div>
+      <div className="text-xs text-gray-500 mb-2">
+        Direction: <b>{s.direction ?? "—"}</b> · Threshold: <b>±{s.threshold ?? 2}</b> · Will trade: <b>{s.will_trade ? "YES" : "NO"}</b>
+      </div>
+      {(of.ict_liq_score != null || of.ict_ob_score != null) && (
+        <div className="flex flex-wrap gap-2 text-[10px]">
+          {of.ict_liq_score != null && (
+            <span className="px-2 py-0.5 rounded font-medium"
+                  style={{ background: of.ict_liq_score > 0 ? "#dcfce7" : of.ict_liq_score < 0 ? "#fee2e2" : "#f3f4f6",
+                           color:      of.ict_liq_score > 0 ? "#15803d" : of.ict_liq_score < 0 ? "#dc2626" : "#6b7280" }}>
+              Liq sweep: {of.ict_liq_score > 0 ? "+" : ""}{of.ict_liq_score}
+            </span>
+          )}
+          {of.ict_ob_score != null && (
+            <span className="px-2 py-0.5 rounded font-medium"
+                  style={{ background: of.ict_ob_score > 0 ? "#dcfce7" : of.ict_ob_score < 0 ? "#fee2e2" : "#f3f4f6",
+                           color:      of.ict_ob_score > 0 ? "#15803d" : of.ict_ob_score < 0 ? "#dc2626" : "#6b7280" }}>
+              OB retest: {of.ict_ob_score > 0 ? "+" : ""}{of.ict_ob_score}
+            </span>
+          )}
+        </div>
+      )}
+      {s.note && <div className="text-[10px] text-gray-400 mt-1">{s.note}</div>}
     </div>
   );
 }

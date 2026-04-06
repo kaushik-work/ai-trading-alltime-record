@@ -47,11 +47,12 @@ from datetime import datetime
 from typing import Optional
 
 import config
+from core import ipc
 from core.memory import TradeMemory
 
 logger = logging.getLogger(__name__)
 
-STRATEGIES = ["ATR Intraday"]
+STRATEGIES = ["ATR Intraday", "C-ICT"]
 
 
 def _ensure_dir():
@@ -60,6 +61,100 @@ def _ensure_dir():
 
 def _journal_path(date_str: str) -> str:
     return os.path.join(config.JOURNALS_DIR, f"{date_str}.json")
+
+
+def _collect_vix_context() -> dict:
+    """Collect today's VIX level and per-strategy override decisions."""
+    try:
+        from data.zerodha_fetcher import ZerodhaFetcher
+        vix = ZerodhaFetcher.get().fetch_vix()
+    except Exception:
+        vix = None
+
+    vix_override_global = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE)
+    vix_override_atr    = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE_ATR)
+    vix_override_ict    = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE_ICT)
+    threshold           = config.VIX_THRESHOLD
+
+    blocked = (vix is not None) and (vix > threshold) and not vix_override_global
+
+    return {
+        "india_vix":         vix,
+        "threshold":         threshold,
+        "blocked_by_vix":    blocked,
+        "override_global":   vix_override_global,
+        "override_atr":      vix_override_atr,
+        "override_ict":      vix_override_ict,
+        "learning": _analyse_vix_decision(vix, threshold, vix_override_global, vix_override_atr, vix_override_ict),
+    }
+
+
+def _analyse_vix_decision(vix, threshold, override_global, override_atr, override_ict) -> str:
+    """Generate a human-readable analysis of today's VIX-related decisions."""
+    if vix is None:
+        return "VIX data unavailable today — no VIX gate decision recorded."
+    lines = [f"India VIX today: {vix:.1f} (threshold: {threshold})"]
+    if vix <= threshold:
+        lines.append("VIX was within normal range — gate was open, no override needed.")
+    else:
+        lines.append(f"VIX exceeded threshold ({vix:.1f} > {threshold}).")
+        if override_global:
+            lines.append("GLOBAL VIX override was ON — both strategies traded through high VIX.")
+        else:
+            atr_status = "bypassed (override ON)" if override_atr else "blocked"
+            ict_status = "bypassed (override ON)" if override_ict else "blocked"
+            lines.append(f"ATR Intraday: {atr_status}. C-ICT: {ict_status}.")
+    return " ".join(lines)
+
+
+def _analyse_day_bias(day_bias: dict, trades_list: list) -> dict:
+    """Evaluate if the day bias was correct and helpful based on trade outcomes."""
+    bias = day_bias.get("bias", "NEUTRAL")
+    note = day_bias.get("note", "")
+    set_at = day_bias.get("set_at")
+
+    if bias == "NEUTRAL" or not set_at:
+        return {
+            "bias_set": bias,
+            "note": note,
+            "was_helpful": None,
+            "analysis": "No directional bias was set for today.",
+        }
+
+    # Check if trades aligned with bias
+    bias_direction = "BUY" if bias == "BULLISH" else ("SELL" if bias == "BEARISH" else None)
+    aligned_trades = [t for t in trades_list if bias_direction and t.get("side") == bias_direction]
+    aligned_pnl    = sum(t["pnl"] for t in aligned_trades)
+    total_pnl      = sum(t["pnl"] for t in trades_list) if trades_list else 0
+
+    was_helpful = None
+    analysis_parts = [f"Day bias was set to {bias} ('{note}' at {set_at})."]
+
+    if not trades_list:
+        analysis_parts.append("No trades were taken today — bias could not be validated.")
+    else:
+        if aligned_trades:
+            analysis_parts.append(
+                f"{len(aligned_trades)} trade(s) aligned with {bias} bias — PnL: ₹{aligned_pnl:.2f}."
+            )
+            was_helpful = aligned_pnl > 0
+            if was_helpful:
+                analysis_parts.append("Bias was HELPFUL — aligned trades were profitable.")
+            else:
+                analysis_parts.append("Bias was UNHELPFUL — aligned trades were losing. Consider reviewing conviction before next bias call.")
+        else:
+            analysis_parts.append(f"No trades matched the {bias} bias direction. Bias was not tested today.")
+
+        if total_pnl != 0:
+            analysis_parts.append(f"Total day PnL: ₹{total_pnl:.2f}.")
+
+    return {
+        "bias_set":    bias,
+        "note":        note,
+        "set_at":      set_at,
+        "was_helpful": was_helpful,
+        "analysis":    " ".join(analysis_parts),
+    }
 
 
 def save_daily_journal(date_str: Optional[str] = None) -> str:
@@ -76,13 +171,8 @@ def save_daily_journal(date_str: Optional[str] = None) -> str:
     # Pull today's trades from DB
     today_trades = memory.get_today_trades()
 
-    # Pair BUY entries with their SELL closes to build trade records
-    entries = {}   # order_id -> row (BUY / OPEN rows)
-    closes  = {}   # original order_id stored in close_reason lookup via related rows
-
     # Separate OPEN/entries from COMPLETE/closes
     complete_trades = [t for t in today_trades if t.get("status") == "COMPLETE" and t.get("strategy")]
-    open_trades     = [t for t in today_trades if t.get("status") == "OPEN"]
 
     # Build clean trade list from COMPLETE rows (each closed trade has one SELL row)
     trades_list = []
@@ -123,6 +213,13 @@ def save_daily_journal(date_str: Optional[str] = None) -> str:
             "losses": len(strat_trades) - strat_wins,
         }
 
+    # VIX context + per-strategy override analysis
+    vix_context = _collect_vix_context()
+
+    # Day bias analysis — was trader's directional call correct?
+    day_bias    = ipc.read_day_bias()
+    bias_review = _analyse_day_bias(day_bias, trades_list)
+
     journal = {
         "date":      date_str,
         "saved_at":  datetime.now().isoformat(),
@@ -135,8 +232,15 @@ def save_daily_journal(date_str: Optional[str] = None) -> str:
             "win_rate":         win_rate,
         },
         "strategy_breakdown": strategy_breakdown,
-        "trades":             trades_list,
-        "learning_notes":     "",
+        "vix_context":  vix_context,
+        "bias_review":  bias_review,
+        "trades":       trades_list,
+        "learning_notes": (
+            "Auto-generated insights:\n"
+            f"• VIX: {vix_context['learning']}\n"
+            f"• Day bias: {bias_review['analysis']}\n"
+            "(Add your manual notes here after reviewing the day.)"
+        ),
     }
 
     path = _journal_path(date_str)

@@ -149,7 +149,9 @@ def _build_snapshot() -> dict:
         bot_status = "running"
 
     vix = runner.last_vix
-    vix_override = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE)
+    vix_override     = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE)
+    vix_override_atr = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE_ATR)
+    vix_override_ict = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE_ICT)
     vix_blocked  = (not vix_override) and (vix is not None) and (vix > config.VIX_THRESHOLD)
 
     return {
@@ -162,6 +164,8 @@ def _build_snapshot() -> dict:
         "india_vix": vix,
         "vix_blocked": vix_blocked,
         "vix_override": vix_override,
+        "vix_override_atr": vix_override_atr,
+        "vix_override_ict": vix_override_ict,
         "vix_threshold": config.VIX_THRESHOLD,
         "token_set_at": _get_token_status(),
         "day_bias": runner.last_day_bias,
@@ -275,8 +279,7 @@ def _get_token_status() -> dict:
 
 @app.get("/api/bot/debug")
 def bot_debug(user: str = Depends(get_current_user)):
-    """Live signal scores for ATR Intraday strategy — no trades placed."""
-    from zoneinfo import ZoneInfo
+    """Live signal scores for ATR Intraday + C-ICT strategies — no trades placed."""
     from core.bot_runner import _is_market_hours, IST
     runner = get_runner()
     now_ist = datetime.now(IST)
@@ -291,29 +294,50 @@ def bot_debug(user: str = Depends(get_current_user)):
         except Exception:
             pass
 
+    vix_override     = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE)
+    vix_override_atr = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE_ATR)
+    vix_override_ict = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE_ICT)
+    vix_blocked  = (not vix_override) and (vix is not None) and (vix > config.VIX_THRESHOLD)
+
     result = {"time_ist": now_ist.isoformat(), "market_open": _is_market_hours(),
               "last_heartbeat": runner.last_heartbeat, "last_scores": runner.last_scores,
               "india_vix": vix,
-              "vix_blocked": vix is not None and vix > config.VIX_THRESHOLD,
+              "vix_blocked": vix_blocked,
+              "vix_override": vix_override,
+              "vix_override_atr": vix_override_atr,
+              "vix_override_ict": vix_override_ict,
               "vix_threshold": config.VIX_THRESHOLD,
               "token_set_at": _get_token_status(),
               "strategies": {}}
 
-    # ATR Intraday uses TrendStrategy (signal_scorer) — get its last known state
-    try:
-        from strategies.signal_scorer import SignalScorer
-        from data.market import RealMarketData
-        mkt = RealMarketData()
-        indicators = mkt.get_indicators("NIFTY")
-        scorer_atr = SignalScorer()
-        score_val, direction = scorer_atr.score(indicators)
-        result["strategies"]["ATR Intraday"] = {
-            "score": score_val, "direction": direction,
-            "threshold": 7, "will_trade": abs(score_val) >= 7,
-            "note": "score range -10 to +10, threshold ±7",
-        }
-    except Exception as e:
-        result["strategies"]["ATR Intraday"] = {"error": str(e)}
+    # Use last_scores from bot cycles (populated after each ATR/ICT cycle).
+    # Fall back to a live score fetch if the bot hasn't run yet (e.g. first load).
+    for strat_name, score_mode in [("ATR Intraday", "atr_only"), ("C-ICT", "ict_only")]:
+        if strat_name in runner.last_scores:
+            result["strategies"][strat_name] = runner.last_scores[strat_name]
+        else:
+            try:
+                from strategies.signal_scorer import score_symbol
+                from strategies.patterns import detect_patterns, get_candles_from_df
+                from data.zerodha_fetcher import ZerodhaFetcher
+                fetcher = ZerodhaFetcher.get()
+                intraday_raw = fetcher.fetch_intraday("NIFTY", "15minute")
+                if intraday_raw is None:
+                    raise ValueError("No intraday data")
+                opens, highs, lows, closes, volumes, all_closes, bar_time = intraday_raw
+                import pandas as pd
+                import numpy as np
+                df = pd.DataFrame({"open": opens, "high": highs, "low": lows, "close": closes, "volume": volumes})
+                price = float(closes[-1]) if len(closes) else 0
+                indicators = {"price": price, "symbol": "NIFTY"}
+                sc = score_symbol(indicators, {}, {}, mode=score_mode, df_5m=None)
+                result["strategies"][strat_name] = {
+                    "score": sc["score"], "direction": sc["action"], "action": sc["action"],
+                    "threshold": sc["threshold"], "will_trade": abs(sc["score"]) >= sc["threshold"],
+                    "note": f"live fetch (bot cycle not yet run) | mode={score_mode}",
+                }
+            except Exception as e:
+                result["strategies"][strat_name] = {"error": str(e)}
 
     return result
 
@@ -385,13 +409,33 @@ def resume_bot(user: str = Depends(get_current_user)):
 
 @app.post("/api/bot/vix-override")
 def set_vix_override(body: dict, user: str = Depends(get_current_user)):
-    """Toggle VIX gate on/off. When override=true, bot trades regardless of VIX level."""
+    """Toggle global VIX gate on/off (affects both strategies)."""
     enable = body.get("enable", True)
     if enable:
         ipc.write_flag(ipc.FLAG_VIX_OVERRIDE)
     else:
         ipc.clear_flag(ipc.FLAG_VIX_OVERRIDE)
     return {"vix_override": enable}
+
+@app.post("/api/bot/vix-override/atr")
+def set_vix_override_atr(body: dict, user: str = Depends(get_current_user)):
+    """Toggle VIX gate for ATR Intraday strategy only."""
+    enable = body.get("enable", True)
+    if enable:
+        ipc.write_flag(ipc.FLAG_VIX_OVERRIDE_ATR)
+    else:
+        ipc.clear_flag(ipc.FLAG_VIX_OVERRIDE_ATR)
+    return {"strategy": "ATR Intraday", "vix_override": enable}
+
+@app.post("/api/bot/vix-override/ict")
+def set_vix_override_ict(body: dict, user: str = Depends(get_current_user)):
+    """Toggle VIX gate for C-ICT strategy only."""
+    enable = body.get("enable", True)
+    if enable:
+        ipc.write_flag(ipc.FLAG_VIX_OVERRIDE_ICT)
+    else:
+        ipc.clear_flag(ipc.FLAG_VIX_OVERRIDE_ICT)
+    return {"strategy": "C-ICT", "vix_override": enable}
 
 @app.post("/api/trade/force")
 async def force_trade(body: dict, user: str = Depends(get_current_user)):

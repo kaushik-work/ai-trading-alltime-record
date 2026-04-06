@@ -43,7 +43,10 @@ class TrendStrategy:
     Replaces BaseStrategy as the main trading engine.
     """
 
-    def __init__(self):
+    def __init__(self, strategy_name: str = "ATR Intraday", score_mode: str = "full"):
+        self.strategy_name = strategy_name
+        self.score_mode = score_mode      # "full" | "atr_only" | "ict_only"
+        self.last_score: dict = {}        # most recent score result — read by BotRunner for debug
         self.broker = get_broker()
         self.brain = TradingBrain()
         self.memory = TradeMemory()
@@ -51,7 +54,8 @@ class TrendStrategy:
         self.market = get_market_data(self.broker if not config.IS_PAPER else None)
         self.paused = False
         logger.info(
-            "TrendStrategy initialized | Mode: %s | Phase: %s | Budget: ₹%s",
+            "TrendStrategy[%s] initialized | score_mode=%s | Trading: %s | Phase: %s | Budget: ₹%s",
+            strategy_name, score_mode,
             "PAPER" if config.IS_PAPER else "LIVE",
             config.TRADING_PHASE,
             f"{config.STARTING_BUDGET:,}",
@@ -162,11 +166,12 @@ class TrendStrategy:
 
         # Score with intraday signals + order flow included
         df_5m = self.market._get_df(symbol) if isinstance(self.market, RealMarketData) else None
-        scored = score_symbol(indicators, {}, patterns, intraday, df_5m=df_5m)
+        scored = score_symbol(indicators, {}, patterns, intraday, df_5m=df_5m, mode=self.score_mode)
+        self.last_score = scored  # expose for debug/monitoring
 
         logger.info(
-            "[%s] Score: %+d/10 → %s | %s",
-            symbol, scored["score"], scored["action"],
+            "[%s][%s] Score: %+d/10 → %s | %s",
+            self.strategy_name, symbol, scored["score"], scored["action"],
             " | ".join(scored["signals"][:4])
         )
 

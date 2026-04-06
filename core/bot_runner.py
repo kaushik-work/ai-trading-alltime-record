@@ -133,7 +133,8 @@ class BotRunner:
         self.scheduler = AsyncIOScheduler(timezone="Asia/Kolkata")
         self.memory = TradeMemory()
         self.state = _DailyState()
-        self._atr_strategy = None   # lazy-init TrendStrategy
+        self._atr_strategy = None   # lazy-init TrendStrategy (ATR Intraday, atr_only mode)
+        self._ict_strategy = None   # lazy-init TrendStrategy (C-ICT, ict_only mode)
         self.last_heartbeat: Optional[str] = None   # ISO string, IST
         self.last_scores: dict = {}                 # strategy → last signal scores
         self.last_vix: Optional[float] = None       # last fetched India VIX
@@ -161,6 +162,12 @@ class BotRunner:
             self._atr_cycle, "interval", minutes=5,
             id="atr_intraday", next_run_time=now_ist,
         )
+        # C-ICT — every 5 min, offset +2m30s so it doesn't collide with ATR API calls
+        from datetime import timedelta
+        self.scheduler.add_job(
+            self._ict_cycle, "interval", minutes=5,
+            id="ict_intraday", next_run_time=now_ist + timedelta(minutes=2, seconds=30),
+        )
         # EOD square-off at 15:15, journal save at 15:20
         self.scheduler.add_job(self._eod_squareoff, "cron", hour=15, minute=15, id="eod")
         self.scheduler.add_job(self._save_journal,  "cron", hour=15, minute=20, id="journal")
@@ -168,7 +175,7 @@ class BotRunner:
         self.scheduler.add_job(self._reset_day_bias, "cron", hour=20, minute=0, id="bias_reset")
 
         self.scheduler.start()
-        logger.info("BotRunner started — ATR Intraday(5m)")
+        logger.info("BotRunner started — ATR Intraday(5m) + C-ICT(5m, +2m30s offset)")
 
     def stop(self):
         self.scheduler.shutdown(wait=False)
@@ -194,11 +201,22 @@ class BotRunner:
         except Exception as e:
             logger.warning("VIX fetch job failed: %s", e)
 
-    def _is_vix_blocked(self) -> bool:
-        """Return True if VIX was fetched and exceeds the configured threshold.
-        Returns False immediately if trader has set the VIX override from the dashboard."""
+    def _is_vix_blocked(self, strategy: str = "all") -> bool:
+        """Return True if VIX exceeds threshold AND no override is set for this strategy.
+
+        strategy: "ATR Intraday" | "C-ICT" | "all" (checks global override only)
+        Per-strategy flags take precedence over VIX threshold.
+        """
+        # Check per-strategy override first
+        per_flag = {
+            "ATR Intraday": ipc.FLAG_VIX_OVERRIDE_ATR,
+            "C-ICT":        ipc.FLAG_VIX_OVERRIDE_ICT,
+        }.get(strategy)
+        if per_flag and ipc.flag_exists(per_flag):
+            return False  # per-strategy override active
+        # Fall back to global override
         if ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE):
-            return False  # trader override active — bypass VIX gate
+            return False  # global override active
         if self.last_vix is None:
             return False  # no data = don't block (fail open)
         return self.last_vix > config.VIX_THRESHOLD
@@ -209,33 +227,85 @@ class BotRunner:
         self.last_heartbeat = datetime.now(IST).isoformat()
         if self.paused or not _is_market_hours() or _is_event_blocked():
             return
-        if self._is_vix_blocked():
+        if self._is_vix_blocked("ATR Intraday"):
             # Allow cycle if trader has explicitly set a directional bias (they know the risk)
             bias = self.last_day_bias
             if bias.get("bias", "NEUTRAL") == "NEUTRAL" or not bias.get("set_at"):
                 logger.warning("ATR cycle skipped — India VIX %.2f > threshold %.1f", self.last_vix, config.VIX_THRESHOLD)
                 return
             logger.warning(
-                "India VIX %.2f > threshold %.1f but trader bias is %s — proceeding (trader override).",
+                "India VIX %.2f > threshold %.1f but trader bias is %s — ATR proceeding.",
                 self.last_vix, config.VIX_THRESHOLD, bias["bias"],
             )
         try:
             if self._atr_strategy is None:
                 from strategies.trend_strategy import TrendStrategy
-                self._atr_strategy = TrendStrategy()
+                self._atr_strategy = TrendStrategy(strategy_name="ATR Intraday", score_mode="atr_only")
 
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, self._atr_strategy.run_watchlist)
+
+            # Update last_scores for the debug/signal-radar endpoint
+            sc = self._atr_strategy.last_score
+            if sc:
+                self.last_scores["ATR Intraday"] = {
+                    "score": sc.get("score", 0),
+                    "direction": sc.get("action", "HOLD"),
+                    "action": sc.get("action", "HOLD"),
+                    "threshold": sc.get("threshold", 6),
+                    "will_trade": abs(sc.get("score", 0)) >= sc.get("threshold", 6),
+                    "note": "ATR technical analysis only (sections 1–11)",
+                }
         except Exception as e:
             logger.error("ATR Intraday cycle: %s", e, exc_info=True)
+
+    # ── C-ICT (Strategy C — ICT Order Blocks + Liquidity) ────────────────────
+
+    async def _ict_cycle(self):
+        self.last_heartbeat = datetime.now(IST).isoformat()
+        if self.paused or not _is_market_hours() or _is_event_blocked():
+            return
+        if self._is_vix_blocked("C-ICT"):
+            bias = self.last_day_bias
+            if bias.get("bias", "NEUTRAL") == "NEUTRAL" or not bias.get("set_at"):
+                logger.warning("ICT cycle skipped — India VIX %.2f > threshold %.1f", self.last_vix, config.VIX_THRESHOLD)
+                return
+            logger.warning(
+                "India VIX %.2f > threshold %.1f but trader bias is %s — C-ICT proceeding.",
+                self.last_vix, config.VIX_THRESHOLD, bias["bias"],
+            )
+        try:
+            if self._ict_strategy is None:
+                from strategies.trend_strategy import TrendStrategy
+                self._ict_strategy = TrendStrategy(strategy_name="C-ICT", score_mode="ict_only")
+
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, self._ict_strategy.run_watchlist)
+
+            # Update last_scores for the debug/signal-radar endpoint
+            sc = self._ict_strategy.last_score
+            if sc:
+                self.last_scores["C-ICT"] = {
+                    "score": sc.get("score", 0),
+                    "direction": sc.get("action", "HOLD"),
+                    "action": sc.get("action", "HOLD"),
+                    "threshold": sc.get("threshold", 2),
+                    "will_trade": abs(sc.get("score", 0)) >= sc.get("threshold", 2),
+                    "note": "ICT order blocks + liquidity sweeps only (section 12)",
+                    "order_flow": sc.get("order_flow", {}),
+                }
+        except Exception as e:
+            logger.error("C-ICT cycle: %s", e, exc_info=True)
 
     # ── EOD square-off ────────────────────────────────────────────────────────
 
     async def _eod_squareoff(self):
         logger.info("EOD square-off triggered")
+        loop = asyncio.get_event_loop()
         if self._atr_strategy:
-            loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, self._atr_strategy.square_off_all)
+        if self._ict_strategy:
+            await loop.run_in_executor(None, self._ict_strategy.square_off_all)
 
     async def _save_journal(self):
         """Save daily journal JSON at 15:20 (after EOD square-off)."""

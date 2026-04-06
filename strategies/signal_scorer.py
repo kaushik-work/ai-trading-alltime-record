@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 def score_symbol(indicators: dict, oi_data: dict, patterns: dict,
-                 intraday: dict = None, df_5m=None) -> dict:
+                 intraday: dict = None, df_5m=None, mode: str = "full") -> dict:
     """
     Score a symbol using all available signals.
 
@@ -306,8 +306,14 @@ def score_symbol(indicators: dict, oi_data: dict, patterns: dict,
             score += breakdown.get("pdh_pdl", 0)
 
     # ── 12. Strategy C — ICT Order Blocks + Liquidity Sweeps ────────────────────
+    # In ict_only mode: discard all technical scores — only ICT signals matter.
+    if mode == "ict_only":
+        score = 0
+        signals.clear()
+        breakdown.clear()
+
     order_flow = {}
-    if df_5m is not None and len(df_5m) >= 6:
+    if mode != "atr_only" and df_5m is not None and len(df_5m) >= 6:
         try:
             from strategies.order_flow import analyse as of_analyse
             symbol = indicators.get("symbol", "NIFTY")
@@ -338,7 +344,8 @@ def score_symbol(indicators: dict, oi_data: dict, patterns: dict,
 
     # ── Clamp and resolve ─────────────────────────────────────────────────────
     score = max(-10, min(10, score))
-    threshold = getattr(config, "MIN_SIGNAL_SCORE", 5)
+    # ICT-only mode has fewer signals — lower threshold needed (max score ≈ ±4)
+    threshold = 2 if mode == "ict_only" else getattr(config, "MIN_SIGNAL_SCORE", 6)
 
     if score >= threshold:
         action = "BUY"
