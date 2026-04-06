@@ -132,90 +132,14 @@ export default function Home() {
     <div className="min-h-screen bg-[#f0f2f5] flex flex-col">
       <Header mode={mode} connected={connected} botStatus={botStatus} onBotToggle={handleBotToggle} />
 
-      {/* Main 1:4 split */}
-      <div className="flex flex-1 overflow-hidden" style={{ height: "calc(100vh - 100px)" }}>
-
-        {/* ── Left panel — Strategies (1) ── */}
-        <div className="w-64 bg-white border-r border-gray-200 flex flex-col overflow-y-auto flex-shrink-0">
-          <div className="px-4 py-3 border-b border-gray-100">
-            <span className="text-xs font-bold text-gray-500 uppercase tracking-widest">Strategies</span>
-          </div>
-
-          <div className="p-3 space-y-2">
-            {STRATEGIES.map((s, i) => {
-              const active  = s.status === "active";
-              const accent  = s.color === "indigo" ? "border-indigo-200 bg-indigo-50/40"
-                            : s.color === "violet" ? "border-violet-200 bg-violet-50/40"
-                            : "border-gray-100 bg-gray-50";
-              const tagBg   = s.color === "indigo" ? "bg-indigo-100 text-indigo-700"
-                            : s.color === "violet" ? "bg-violet-100 text-violet-700"
-                            : "bg-gray-200 text-gray-500";
-              const symBg   = s.color === "indigo" ? "bg-indigo-100 text-indigo-600"
-                            : s.color === "violet" ? "bg-violet-100 text-violet-600"
-                            : "bg-gray-100 text-gray-500";
-              return (
-                <div key={i} className={`rounded-xl border p-3 ${accent}`}>
-                  {/* Header row */}
-                  <div className="flex items-center justify-between mb-2">
-                    <div className="flex items-center gap-2">
-                      <span className={`text-xs font-bold px-1.5 py-0.5 rounded ${tagBg}`}>{s.tag}</span>
-                      <span className="text-sm font-bold text-gray-800">{s.name}</span>
-                    </div>
-                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                      active ? "bg-green-100 text-green-700" : "bg-gray-200 text-gray-400"
-                    }`}>
-                      {active ? "● LIVE" : "LEGACY"}
-                    </span>
-                  </div>
-
-                  {/* Symbols + timeframe */}
-                  <div className="flex flex-wrap items-center gap-1 mb-2">
-                    {s.symbols.map(sym => (
-                      <span key={sym} className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${symBg}`}>
-                        {sym}
-                      </span>
-                    ))}
-                    <span className="text-[10px] text-gray-400 font-medium ml-1">{s.timeframe}</span>
-                  </div>
-
-                  {/* Stats row */}
-                  {active && (
-                    <div className="flex gap-3 mb-2">
-                      <div className="flex-1 bg-white/70 rounded-lg px-2 py-1 text-center">
-                        <div className="text-[9px] text-gray-400 uppercase font-semibold">Target</div>
-                        <div className="text-[11px] font-bold text-green-600">{s.target}</div>
-                      </div>
-                      <div className="flex-1 bg-white/70 rounded-lg px-2 py-1 text-center">
-                        <div className="text-[9px] text-gray-400 uppercase font-semibold">R:R</div>
-                        <div className="text-[11px] font-bold text-gray-700">{s.rr}</div>
-                      </div>
-                      <div className="flex-1 bg-white/70 rounded-lg px-2 py-1 text-center">
-                        <div className="text-[9px] text-gray-400 uppercase font-semibold">Risk</div>
-                        <div className="text-[11px] font-bold text-gray-700">{s.risk}</div>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="text-[10px] text-gray-500 leading-relaxed">{s.description}</div>
-                </div>
-              );
-            })}
-
-            {/* Locked: Swing strategies */}
-            <div className="rounded-xl border border-dashed border-gray-200 p-3 text-center">
-              <div className="text-xs text-gray-400 font-medium">⚔️ Swing strategies</div>
-              <div className="text-[10px] text-gray-300 mt-0.5">unlock at ₹5L profit</div>
-            </div>
-          </div>
-        </div>
-
-        {/* ── Right panel — Live Trades (4) ── */}
-        <div className="flex-1 overflow-y-auto p-5">
+      {/* Main — full width */}
+      <div className="flex-1 overflow-y-auto">
+        <div className="max-w-5xl mx-auto p-3 md:p-5">
 
           {/* Section header with live prices */}
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-4 gap-2">
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <h2 className="text-base font-bold text-gray-900">Live Trade Feed</h2>
                 {/* Bot active/inactive indicator */}
                 {botStatus === "running" ? (
@@ -291,7 +215,7 @@ export default function Home() {
               </div>
               <p className="text-xs text-gray-400">Updates every 5 seconds via WebSocket</p>
             </div>
-            <div className="flex items-center gap-4">
+            <div className="flex flex-wrap items-center gap-3">
               {/* Live prices */}
               {Object.entries(prices).map(([sym, q]: any) => {
                 const up = q.change_pct >= 0;
@@ -328,7 +252,7 @@ export default function Home() {
           )}
 
           {/* Strategy P&L + Day Bias row */}
-          <div className="flex gap-4 mb-4 items-start">
+          <div className="flex flex-col md:flex-row gap-4 mb-4 items-start">
             {/* Today's Strategy P&L */}
             {Object.keys(strategySummary).length > 0 && (
               <div className="flex-1">
@@ -427,8 +351,8 @@ export default function Home() {
           {todayJournal.length > 0 && (
             <div className="mb-4">
               <div className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">Today's Trade Journal</div>
-              <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-                <table className="w-full text-xs">
+              <div className="bg-white rounded-xl border border-gray-200 overflow-hidden overflow-x-auto">
+                <table className="w-full text-xs min-w-[700px]">
                   <thead>
                     <tr className="bg-gray-50 border-b border-gray-100">
                       <th className="px-3 py-2 text-left text-gray-500 font-semibold uppercase">Strategy</th>
@@ -512,8 +436,8 @@ export default function Home() {
                 No trades yet today. Bot is watching the market.
               </div>
             ) : (
-              <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
-                <table className="w-full text-sm">
+              <div className="bg-white rounded-xl border border-gray-200 overflow-hidden overflow-x-auto">
+                <table className="w-full text-sm min-w-[500px]">
                   <thead>
                     <tr className="bg-gray-50 border-b border-gray-100">
                       <th className="px-4 py-3 text-left text-xs text-gray-500 font-semibold uppercase">Symbol</th>

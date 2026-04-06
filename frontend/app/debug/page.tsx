@@ -45,15 +45,15 @@ export default function DebugPage() {
     <div className="min-h-screen bg-[#f0f2f5] flex flex-col">
       <Header mode="paper" connected={true} botStatus={data ? "running" : "unknown"} onBotToggle={() => {}} />
 
-      <div className="max-w-5xl mx-auto w-full p-6">
+      <div className="max-w-5xl mx-auto w-full p-3 md:p-6">
         {/* Title row */}
-        <div className="flex items-center justify-between mb-6">
+        <div className="flex items-center justify-between mb-4 md:mb-6">
           <div>
-            <h1 className="text-xl font-bold text-gray-900">Signal Radar</h1>
+            <h1 className="text-lg md:text-xl font-bold text-gray-900">Signal Radar</h1>
             <p className="text-xs text-gray-400 mt-0.5">Live signal scores — no trades placed</p>
           </div>
-          <div className="flex items-center gap-3">
-            {lastFetch && <span className="text-xs text-gray-400">Last updated: {lastFetch}</span>}
+          <div className="flex items-center gap-2 md:gap-3">
+            {lastFetch && <span className="hidden sm:inline text-xs text-gray-400">Updated: {lastFetch}</span>}
             <button
               onClick={fetchDebug}
               disabled={loading}
@@ -75,7 +75,7 @@ export default function DebugPage() {
         {/* Market status + heartbeat */}
         {data && (
           <>
-            <div className="grid grid-cols-3 gap-3 mb-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mb-3">
               <div className="bg-white rounded-xl border border-gray-200 p-4">
                 <div className="text-[10px] text-gray-400 uppercase font-semibold mb-1">Market</div>
                 <div className="flex items-center gap-2">
@@ -101,7 +101,7 @@ export default function DebugPage() {
             </div>
 
             {/* Token + VIX status row */}
-            <div className="grid grid-cols-2 gap-3 mb-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4 md:mb-6">
               {/* Zerodha token */}
               <div className="bg-white rounded-xl border border-gray-200 p-4">
                 <div className="text-[10px] text-gray-400 uppercase font-semibold mb-1">Zerodha Token</div>
@@ -183,7 +183,7 @@ export default function DebugPage() {
         {data?.last_scores && Object.keys(data.last_scores).length > 0 && (
           <div className="mt-6 bg-white rounded-xl border border-gray-200 p-4">
             <div className="text-[10px] text-gray-400 uppercase font-semibold mb-3">Last Cycle Scores (from bot runner)</div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {Object.entries(data.last_scores).map(([name, sc]: any) => (
                 <div key={name} className="bg-gray-50 rounded-lg p-3 text-xs">
                   <div className="font-bold text-gray-700 mb-1">{name}</div>
@@ -236,7 +236,7 @@ function ScoreDisplay({ s, color }: { s: any; color: string }) {
   const threshPct = (threshold / 10) * 100;
   return (
     <div>
-      <div className="grid grid-cols-2 gap-4 mb-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
         <div>
           <ScoreBar label="Buy Score (CE)" score={s.buy_score ?? 0} max={10} color="#22c55e" />
           <ScoreBar label="Sell Score (PE)" score={s.sell_score ?? 0} max={10} color="#ef4444" />
