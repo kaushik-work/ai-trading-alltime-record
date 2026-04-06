@@ -323,6 +323,38 @@ class ZerodhaFetcher:
             self._broker = None
             return None
 
+    def fetch_vix_historical_df(self, days: int = 100):
+        """
+        Fetch historical daily India VIX data from Kite Connect.
+        Returns a DataFrame indexed by date with a 'vix' column (daily close).
+        India VIX instrument token = 264969.
+        """
+        if not self._ensure_logged_in():
+            return None
+        try:
+            import pandas as pd
+            from zoneinfo import ZoneInfo
+            IST = ZoneInfo("Asia/Kolkata")
+            now    = datetime.now(IST)
+            from_d = (now - timedelta(days=days + 5)).strftime("%Y-%m-%d")
+            to_d   = now.strftime("%Y-%m-%d")
+            records = self._broker.historical_data(
+                instrument_token=264969,
+                from_date=from_d,
+                to_date=to_d,
+                interval="day",
+            )
+            if not records:
+                return None
+            df = pd.DataFrame(records)
+            df["date"] = pd.to_datetime(df["date"]).dt.date
+            df = df.rename(columns={"close": "vix"})[["date", "vix"]].set_index("date")
+            logger.info("VIX historical: %d days fetched", len(df))
+            return df
+        except Exception as e:
+            logger.warning("fetch_vix_historical_df failed: %s", e)
+            return None
+
     def fetch_vix(self) -> float:
         """
         Fetch the live India VIX value from Kite Connect.

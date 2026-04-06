@@ -42,15 +42,18 @@ import numpy as np
 from datetime import time
 
 parser = argparse.ArgumentParser()
-parser.add_argument("--capital",   type=float, default=50_000.0)
-parser.add_argument("--rr",        type=float, default=2.5,
+parser.add_argument("--capital",    type=float, default=50_000.0)
+parser.add_argument("--rr",         type=float, default=2.5,
                     help="Risk:Reward ratio (default 2.5 — backtest optimal)")
-parser.add_argument("--risk",      type=float, default=2.0)
-parser.add_argument("--no-cache",  action="store_true")
-parser.add_argument("--no-lunch",  action="store_true",
+parser.add_argument("--risk",       type=float, default=2.0)
+parser.add_argument("--no-cache",   action="store_true")
+parser.add_argument("--no-lunch",   action="store_true",
                     help="Skip entries 12:30-13:30 (NSE lunch chop)")
-parser.add_argument("--min-lots",  type=int, default=1,
+parser.add_argument("--min-lots",   type=int, default=1,
                     help="Minimum lots per trade (default 1)")
+parser.add_argument("--vix-filter", type=float, default=0.0,
+                    help="Skip trading days where VIX > threshold (0 = off). "
+                         "Use --vix-filter 20 to replicate live bot behaviour.")
 args = parser.parse_args()
 
 INITIAL_CAPITAL = args.capital
@@ -59,6 +62,7 @@ RISK_PCT        = args.risk
 FORCE_REFETCH   = args.no_cache
 NO_LUNCH        = args.no_lunch
 MIN_LOTS        = args.min_lots
+VIX_FILTER      = args.vix_filter   # 0 = disabled
 
 LOT_SIZE    = 65   # NIFTY lot size revised Feb 2026
 TRADE_START = time(9, 45)
@@ -106,6 +110,89 @@ def _load_nifty_5m():
     df.to_csv(cache_90)
     print(f"  (fetch) NIFTY 5m 90d: {len(df)} bars — cached")
     return df
+
+
+# ── VIX daily data ────────────────────────────────────────────────────────────
+
+def _load_vix_daily() -> dict:
+    """
+    Return {date: vix_close} for the last 120 days.
+    Cached to backtest_cache/INDIA_VIX_daily.csv.
+
+    Sources (tried in order):
+      1. Zerodha KiteConnect  (needs valid access token)
+      2. NSE India public API (no auth required — fallback)
+    """
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    cache_path = os.path.join(CACHE_DIR, "INDIA_VIX_daily.csv")
+
+    if os.path.exists(cache_path) and not FORCE_REFETCH:
+        df = pd.read_csv(cache_path, index_col=0, parse_dates=True)
+        result = {pd.Timestamp(k).date(): float(v) for k, v in df["vix"].items()}
+        print(f"  (cache) India VIX daily: {len(result)} days")
+        return result
+
+    # ── 1. Zerodha ──────────────────────────────────────────────────────────
+    print("  Fetching India VIX daily from Zerodha...")
+    try:
+        from data.zerodha_fetcher import ZerodhaFetcher
+        df_z = ZerodhaFetcher.get().fetch_vix_historical_df(days=120)
+        if df_z is not None and len(df_z) >= 10:
+            df_z.to_csv(cache_path)
+            result = {pd.Timestamp(k).date(): float(v) for k, v in df_z["vix"].items()}
+            print(f"  (zerodha) India VIX daily: {len(result)} days — cached")
+            return result
+    except Exception:
+        pass
+
+    # ── 2. NSE India (session-based, no auth required) ──────────────────────
+    print("  Zerodha unavailable — trying NSE India...")
+    try:
+        import requests, json
+        from datetime import datetime as dt
+        today = dt.today()
+        start = (today - pd.Timedelta(days=130)).strftime("%d-%b-%Y")
+        end   = today.strftime("%d-%b-%Y")
+        hdrs  = {
+            "User-Agent": ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                           "AppleWebKit/537.36 (KHTML, like Gecko) "
+                           "Chrome/120.0.0.0 Safari/537.36"),
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://www.nseindia.com/",
+        }
+        sess = requests.Session()
+        sess.get("https://www.nseindia.com", headers=hdrs, timeout=10)
+        sess.get("https://www.nseindia.com/market-data/india-vix-index-historical",
+                 headers=hdrs, timeout=10)
+        url  = (f"https://www.nseindia.com/api/historical/vixhistory?"
+                f"startDate={start}&endDate={end}")
+        resp = sess.get(url, headers=hdrs, timeout=15)
+        resp.raise_for_status()
+        records = resp.json().get("data", [])
+        if not records:
+            raise ValueError("Empty response from NSE")
+        rows = []
+        for r in records:
+            date_str = r.get("EOD_TIMESTAMP", "")
+            vix_val  = r.get("VIX_CLOSE") or r.get("CLOSE") or 0
+            if date_str and vix_val:
+                try:
+                    d = pd.to_datetime(date_str, format="%d-%b-%Y").date()
+                    rows.append({"date": d, "vix": float(str(vix_val).replace(",", ""))})
+                except Exception:
+                    pass
+        if not rows:
+            raise ValueError("No parseable rows from NSE")
+        df_n = pd.DataFrame(rows).set_index("date")
+        df_n.to_csv(cache_path)
+        result = {r["date"]: r["vix"] for r in rows}
+        print(f"  (NSE) India VIX daily: {len(result)} days — cached")
+        return result
+    except Exception as e:
+        print(f"  [WARN] NSE VIX fetch failed ({e})")
+        print(f"  Run scripts/get_token.py first to fetch VIX via Zerodha.")
+        return {}
 
 
 # ── ATR ───────────────────────────────────────────────────────────────────────
@@ -277,9 +364,10 @@ def _of_scores(df_full, pos, symbol="NIFTY"):
 # ── Backtest loop ─────────────────────────────────────────────────────────────
 
 def _run(df, strategy, equity_start, rr=RR_RATIO, risk_pct=RISK_PCT,
-         daily_loss_pct=3.0, symbol="NIFTY"):
+         daily_loss_pct=3.0, symbol="NIFTY", vix_map: dict = None, vix_threshold: float = 0.0):
     """
     strategy: "atr" | "delta" | "combined" | "ict"
+    vix_map: {date: vix_close} — if provided and vix_threshold > 0, skip days where VIX > threshold
     """
     equity       = equity_start
     trades       = []
@@ -298,6 +386,13 @@ def _run(df, strategy, equity_start, rr=RR_RATIO, risk_pct=RISK_PCT,
         day_idxs = [df.index.get_loc(ts) for ts in day_df.index]
         if len(day_idxs) < 5:
             continue
+
+        # VIX filter — skip entire day if VIX exceeds threshold
+        if vix_map and vix_threshold > 0:
+            day_vix = vix_map.get(day)
+            if day_vix is not None and day_vix > vix_threshold:
+                equity_curve.append({"date": str(day), "equity": round(equity, 2)})
+                continue  # sit out this day
 
         day_start_pos    = day_idxs[0]
         prev_day_df      = df[df["_date"] == all_dates[day_i - 1]] if day_i > 0 else None
@@ -443,84 +538,135 @@ def _print_table(rows, title, start_cap, final_eq):
     return total
 
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _run_scenario(df, months, strategy_key, vix_map, vix_threshold):
+    """Run one strategy for all months. Returns (rows, final_equity, summary_dict)."""
+    equity = INITIAL_CAPITAL
+    rows   = []
+    for ym in months:
+        month_df = df[df["_ym"] == ym].drop(columns=["_ym"])
+        if "_date" not in month_df.columns:
+            month_df = month_df.copy()
+            month_df["_date"] = month_df.index.date
+        if len(month_df) < 20:
+            continue
+        try:
+            res = _run(month_df, strategy_key, equity,
+                       vix_map=vix_map, vix_threshold=vix_threshold)
+            fin = res["final_equity"]
+            net = round((fin - equity) / equity * 100, 1)
+            rows.append({
+                "month": str(ym), "trades": len(res["trades"]),
+                "wr": _wr(res["trades"]), "pf": _pf(res["trades"]),
+                "dd": _maxdd(res["equity_curve"]),
+                "net_pct": net,
+                "start_eq": round(equity, 0), "end_eq": round(fin, 0),
+            })
+            equity = fin
+            print(".", end="", flush=True)
+        except Exception as e:
+            print(f"\n  [SKIP] {ym}: {e}")
+    n_months = max(len(rows), 1)
+    s = {
+        "total":           round((equity - INITIAL_CAPITAL) / INITIAL_CAPITAL * 100, 1),
+        "final":           equity,
+        "avg_wr":          round(sum(r["wr"] for r in rows) / n_months, 1) if rows else 0,
+        "avg_dd":          round(sum(r["dd"] for r in rows) / n_months, 1) if rows else 0,
+        "months_positive": sum(1 for r in rows if r["net_pct"] > 0),
+        "total_trades":    sum(r["trades"] for r in rows),
+        "rows":            rows,
+    }
+    return rows, equity, s
+
+
+def _print_vix_comparison(label, title, rows_off, rows_on, vix_thr, n_months):
+    w = 90
+    print(f"\n{'='*w}")
+    print(f"  {title}")
+    print(f"{'='*w}")
+    hdr = f"{'Month':>8}  {'#Tr(off)':>8} {'WR%':>6} {'DD%':>5} {'Net%':>6}  │  {'#Tr(on)':>7} {'WR%':>6} {'DD%':>5} {'Net%':>6}  {'VIX>':>5}{vix_thr}"
+    print(hdr)
+    print('-' * w)
+
+    # align by month
+    months_off = {r["month"]: r for r in rows_off}
+    months_on  = {r["month"]: r for r in rows_on}
+    all_months = sorted(set(list(months_off.keys()) + list(months_on.keys())))
+
+    for m in all_months:
+        ro = months_off.get(m)
+        rv = months_on.get(m)
+        def fmt(r):
+            if r is None: return f"{'—':>8} {'—':>6} {'—':>5} {'—':>6}"
+            ok = " *" if r["net_pct"] > 0 else "  "
+            return f"{r['trades']:>8} {r['wr']:>6.1f} {r['dd']:>5.1f} {r['net_pct']:>+6.1f}{ok}"
+        print(f"{m:>8}  {fmt(ro)}  │  {fmt(rv)}")
+
+    print()
+
+
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    lunch_tag = " + no-lunch" if NO_LUNCH else ""
-    print(f"\nFull 4-Strategy Backtest — NIFTY 5m 90d | Month-on-Month")
-    print(f"  Capital: Rs{INITIAL_CAPITAL:,.0f}  |  R:R {RR_RATIO}  |  Risk {RISK_PCT}%/trade{lunch_tag}")
-    print(f"  ATR threshold: >={ATR_THRESHOLD}  |  Order-flow threshold: +/-{OF_THRESHOLD}\n")
+    lunch_tag  = " + no-lunch" if NO_LUNCH else ""
+    vix_tag    = f" | VIX filter >{VIX_FILTER:.0f}" if VIX_FILTER > 0 else ""
+    vix_thr    = VIX_FILTER if VIX_FILTER > 0 else 20.0  # default comparison threshold
+
+    print(f"\nATR + C-ICT Backtest — VIX OFF vs VIX ON (>{vix_thr:.0f}) | Month-on-Month")
+    print(f"  Capital: Rs{INITIAL_CAPITAL:,.0f}  |  R:R {RR_RATIO}  |  Risk {RISK_PCT}%/trade  |  Min lots {MIN_LOTS}{lunch_tag}\n")
 
     df = _load_nifty_5m()
     df.index    = pd.to_datetime(df.index)
     df["_ym"]   = df.index.to_period("M")
     df["_date"] = df.index.date
 
+    vix_map = _load_vix_daily()
+    if not vix_map:
+        print("  [WARN] No VIX data — running VIX OFF only\n")
+
     months = sorted(df["_ym"].unique())
-    print(f"  Months: {len(months)}  |  Bars: {len(df)}\n")
+    n_months = max(len(months), 1)
+    print(f"  Months: {len(months)}  |  Bars: {len(df)}  |  VIX days loaded: {len(vix_map)}\n")
 
-    summary = {}
+    strategies = [
+        ("atr", "ATR Intraday", "Strategy 1 — ATR Intraday  (VWAP + ORB + SMA + RSI + MACD + PDH/PDL)"),
+        ("ict", "C-ICT",        "Strategy C — Delta + TL + ICT OB + Sweep"),
+    ]
 
-    for key, label, title in [
-        ("atr",      "1-ATR",  "Strategy 1 — ATR Intraday  (VWAP + ORB + SMA + RSI + MACD + PDH/PDL, score>=6)"),
-        ("delta",    "A-Dlt",  "Strategy A — Delta Direction  (session+dynamic delta agree, threshold +/-2)"),
-        ("combined", "B-TL",   "Strategy B — Delta + Trendline Channel  (DP Sir HPS-T, threshold +/-2)"),
-        ("ict",      "C-ICT",  "Strategy C — Delta + TL + ICT OB + Sweep  (threshold +/-2)"),
-    ]:
-        print(f"Running {title[:60]}...")
-        equity = INITIAL_CAPITAL
-        rows   = []
+    final_summary = {}
 
-        for ym in months:
-            month_df = df[df["_ym"] == ym].drop(columns=["_ym"])
-            if "_date" not in month_df.columns:
-                month_df = month_df.copy()
-                month_df["_date"] = month_df.index.date
-            if len(month_df) < 20:
-                continue
-            try:
-                res      = _run(month_df, key, equity)
-                fin      = res["final_equity"]
-                net      = round((fin - equity) / equity * 100, 1)
-                rows.append({
-                    "month": str(ym), "trades": len(res["trades"]),
-                    "wr": _wr(res["trades"]), "pf": _pf(res["trades"]),
-                    "dd": _maxdd(res["equity_curve"]),
-                    "net_pct": net,
-                    "start_eq": round(equity, 0), "end_eq": round(fin, 0),
-                })
-                equity = fin
-                print(".", end="", flush=True)
-            except Exception as e:
-                print(f"\n  [SKIP] {ym}: {e}")
+    for key, label, title in strategies:
+        print(f"Running {label} — VIX OFF...", end="", flush=True)
+        rows_off, eq_off, s_off = _run_scenario(df, months, key, vix_map={}, vix_threshold=0)
+        print()
 
-        total = _print_table(rows, title, INITIAL_CAPITAL, equity)
-        summary[label] = {
-            "total": total, "final": equity,
-            "avg_wr":  round(sum(r["wr"] for r in rows) / len(rows), 1) if rows else 0,
-            "avg_dd":  round(sum(r["dd"] for r in rows) / len(rows), 1) if rows else 0,
-            "months_positive": sum(1 for r in rows if r["net_pct"] > 0),
-            "total_trades": sum(r["trades"] for r in rows),
-        }
+        print(f"Running {label} — VIX ON  (>{vix_thr:.0f})...", end="", flush=True)
+        rows_on, eq_on, s_on = _run_scenario(df, months, key, vix_map=vix_map, vix_threshold=vix_thr)
+        print()
 
-    # ── Side-by-side summary ──────────────────────────────────────────────────
-    print(f"\n\n{'='*84}")
-    print(f"  SIDE-BY-SIDE COMPARISON  (R:R={RR_RATIO}{lunch_tag}  |  Capital Rs{INITIAL_CAPITAL:,.0f})")
-    print(f"{'='*84}")
-    print(f"{'Strategy':<22}  {'3m Total':>9}  {'Final Eq':>11}  {'AvgWR%':>7}  "
-          f"{'AvgDD%':>7}  {'Pos Months':>10}  {'Total Tr':>9}")
-    print('-' * 84)
-    for lbl, s in summary.items():
-        print(f"{lbl:<22}  {s['total']:>+8.1f}%  Rs{s['final']:>9,.0f}  "
-              f"{s['avg_wr']:>7.1f}%  {s['avg_dd']:>7.1f}%  "
-              f"{s['months_positive']:>10}/3  {s['total_trades']:>9}")
+        _print_vix_comparison(label, title, rows_off, rows_on, vix_thr, n_months)
+        final_summary[label] = {"off": s_off, "on": s_on}
 
-    print(f"\n  Monthly profit potential ({MIN_LOTS}-lot live trading):")
-    for lbl, s in summary.items():
-        monthly_avg  = round((s["final"] - INITIAL_CAPITAL) / 3, 0)
-        n_lot        = round(monthly_avg * MIN_LOTS, 0)
-        charges      = round((s["total_trades"] / 3) * MIN_LOTS * 150, 0)
-        net_n_lot    = n_lot - charges
-        print(f"  {lbl:<22}  avg gross/month (1 lot): Rs{monthly_avg:>8,.0f}  "
-              f"{MIN_LOTS}-lot net after charges: Rs{net_n_lot:>9,.0f}/month")
+    # ── Final comparison table ────────────────────────────────────────────────
+    w = 90
+    print(f"\n{'='*w}")
+    print(f"  FINAL COMPARISON — VIX OFF vs VIX ON (>{vix_thr:.0f})  |  {MIN_LOTS} lots  |  R:R {RR_RATIO}")
+    print(f"{'='*w}")
+    print(f"{'Strategy':<14}  {'Scenario':>10}  {'Total%':>8}  {'Final Eq':>11}  "
+          f"{'AvgWR%':>7}  {'AvgDD%':>7}  {'Trades':>7}  {'Net/mo':>10}")
+    print('-' * w)
+
+    for label, sc in final_summary.items():
+        for tag, s in [("VIX OFF", sc["off"]), (f"VIX>{vix_thr:.0f}", sc["on"])]:
+            monthly_avg = round((s["final"] - INITIAL_CAPITAL) / n_months, 0)
+            charges     = round((s["total_trades"] / n_months) * MIN_LOTS * 150, 0)
+            net_mo      = monthly_avg - charges
+            print(f"{label:<14}  {tag:>10}  {s['total']:>+8.1f}%  "
+                  f"Rs{s['final']:>9,.0f}  {s['avg_wr']:>7.1f}%  {s['avg_dd']:>7.1f}%  "
+                  f"{s['total_trades']:>7}  Rs{net_mo:>8,.0f}/mo")
+        print()
+
+    print(f"  VIX data coverage: {len(vix_map)} days loaded from cache/Zerodha")
+    print(f"  Days skipped by VIX filter: visible as missing months in ON column above")
     print()
