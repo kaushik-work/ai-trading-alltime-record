@@ -12,6 +12,7 @@ Requires a valid ZERODHA_ACCESS_TOKEN in .env (run scripts/get_token.py daily).
 """
 
 import logging
+import os
 import threading
 from datetime import datetime, date, timedelta
 from typing import Optional
@@ -47,6 +48,7 @@ class ZerodhaFetcher:
         self._broker = None   # KiteConnect session
         self._login_date: Optional[date] = None
         self._failed_date: Optional[date] = None   # don't retry after failure same day
+        self._token_used: str = ""                 # track which token we logged in with
         self._instruments: Optional[list] = None       # cached NFO instrument list
         self._instruments_date: Optional[date] = None  # date when cache was built
 
@@ -60,27 +62,44 @@ class ZerodhaFetcher:
 
     # ── login ─────────────────────────────────────────────────────────────────
 
-    def _ensure_logged_in(self) -> bool:
-        """Initialise Kite Connect session using the access token from config.
+    @staticmethod
+    def _read_env_token() -> tuple[str, str]:
+        """Read api_key and access_token directly from .env (always fresh)."""
+        from dotenv import dotenv_values
+        env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+        vals = dotenv_values(env_path)
+        return vals.get("ZERODHA_API_KEY", ""), vals.get("ZERODHA_ACCESS_TOKEN", "")
 
-        The access token is generated once per trading day via scripts/get_token.py
-        and stored in .env as ZERODHA_ACCESS_TOKEN.
+    def _ensure_logged_in(self) -> bool:
+        """Initialise Kite Connect session using the access token from .env.
+
+        Re-reads .env on every call so a fresh token written by get_token.py
+        is picked up without a server restart.
         """
         today = date.today()
-        if self._broker is not None and self._login_date == today:
+        api_key, access_token = self._read_env_token()
+
+        # If the token in .env changed, force a re-login regardless of cached state
+        token_changed = access_token and access_token != self._token_used
+
+        if self._broker is not None and self._login_date == today and not token_changed:
             return True
 
-        if self._failed_date == today:
+        if self._failed_date == today and not token_changed:
             return False
 
         with self._lock:
-            if self._broker is not None and self._login_date == today:
+            # Re-read inside lock in case another thread already updated
+            api_key, access_token = self._read_env_token()
+            token_changed = access_token and access_token != self._token_used
+
+            if self._broker is not None and self._login_date == today and not token_changed:
                 return True
-            if self._failed_date == today:
+            if self._failed_date == today and not token_changed:
                 return False
             try:
                 from kiteconnect import KiteConnect
-                if not config.ZERODHA_API_KEY or not config.ZERODHA_ACCESS_TOKEN:
+                if not api_key or not access_token:
                     logger.error(
                         "ZerodhaFetcher: ZERODHA_API_KEY or ZERODHA_ACCESS_TOKEN not set. "
                         "Run scripts/get_token.py to generate today's token."
@@ -88,11 +107,12 @@ class ZerodhaFetcher:
                     self._failed_date = today
                     return False
 
-                kite = KiteConnect(api_key=config.ZERODHA_API_KEY)
-                kite.set_access_token(config.ZERODHA_ACCESS_TOKEN)
+                kite = KiteConnect(api_key=api_key)
+                kite.set_access_token(access_token)
                 self._broker = kite
                 self._login_date = today
                 self._failed_date = None
+                self._token_used = access_token
                 logger.info("ZerodhaFetcher: Kite Connect session ready for %s", config.ZERODHA_USER_ID or "user")
                 return True
             except Exception as e:
@@ -109,6 +129,10 @@ class ZerodhaFetcher:
             self._broker.profile()
             return True
         except Exception:
+            # Reset broker so next call re-reads .env and attempts fresh login
+            with self._lock:
+                self._broker = None
+                self._login_date = None
             return False
 
     # ── data fetch ────────────────────────────────────────────────────────────

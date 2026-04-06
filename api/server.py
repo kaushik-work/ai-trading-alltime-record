@@ -266,7 +266,8 @@ def _get_token_status() -> dict:
     except Exception:
         result = {"live": False, "set_at": None}
     _token_cache["result"] = result
-    _token_cache["checked_at"] = now
+    # Only cache live=True for the full TTL; expired token retries after 30s
+    _token_cache["checked_at"] = now if result["live"] else now - _TOKEN_CACHE_TTL + 30
     return result
 
 
