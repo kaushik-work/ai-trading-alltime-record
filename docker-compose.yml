@@ -1,17 +1,5 @@
 services:
 
-  bot:
-    build: .
-    command: python main.py
-    env_file: .env
-    volumes:
-      - /root/ai-trading-alltime-record/.env:/app/.env
-      - /root/ai-trading-alltime-record/backtest_cache:/app/backtest_cache
-      - app_data:/app/db
-      - app_logs:/app/logs
-      - app_journals:/app/journals
-    restart: unless-stopped
-
   api:
     build: .
     command: uvicorn api.server:app --host 0.0.0.0 --port 8000 --workers 1
@@ -24,11 +12,9 @@ services:
       - app_data:/app/db
       - app_logs:/app/logs
       - app_journals:/app/journals
-    depends_on:
-      - bot
     restart: unless-stopped
 
-# bot and api share app_data so SQLite + IPC flags (db/flags/) work across both containers
+# api handles everything — ATR Intraday + C-ICT both run inside api via BotRunner
 volumes:
   app_data:
   app_logs:
