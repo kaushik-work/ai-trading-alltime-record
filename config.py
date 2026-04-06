@@ -70,7 +70,7 @@ CLAUDE_MODEL = "claude-sonnet-4-6"
 
 # ── India VIX Gate ─────────────────────────────────────────────────────────────
 # Normal: 12–16. Budget/RBI: 18–22. War/panic: 22–30+.
-VIX_THRESHOLD = 22.0
+VIX_THRESHOLD = 25.0   # raised from 22 — backtest showed 20-25 range still profitable
 
 # ── Event Calendar — skip on these dates (IV crush guaranteed) ────────────────
 EVENT_BLOCK_DATES: dict[str, str] = {
