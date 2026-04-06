@@ -149,7 +149,8 @@ def _build_snapshot() -> dict:
         bot_status = "running"
 
     vix = runner.last_vix
-    vix_blocked = vix is not None and vix > config.VIX_THRESHOLD
+    vix_override = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE)
+    vix_blocked  = (not vix_override) and (vix is not None) and (vix > config.VIX_THRESHOLD)
 
     return {
         "timestamp": now_ist.isoformat(),
@@ -160,6 +161,7 @@ def _build_snapshot() -> dict:
         "last_scores": runner.last_scores,
         "india_vix": vix,
         "vix_blocked": vix_blocked,
+        "vix_override": vix_override,
         "vix_threshold": config.VIX_THRESHOLD,
         "token_set_at": _get_token_status(),
         "day_bias": runner.last_day_bias,
@@ -380,6 +382,16 @@ def resume_bot(user: str = Depends(get_current_user)):
     ipc.clear_flag(ipc.FLAG_PAUSE)
     ipc.write_flag(ipc.FLAG_RESUME)
     return {"status": "running"}
+
+@app.post("/api/bot/vix-override")
+def set_vix_override(body: dict, user: str = Depends(get_current_user)):
+    """Toggle VIX gate on/off. When override=true, bot trades regardless of VIX level."""
+    enable = body.get("enable", True)
+    if enable:
+        ipc.write_flag(ipc.FLAG_VIX_OVERRIDE)
+    else:
+        ipc.clear_flag(ipc.FLAG_VIX_OVERRIDE)
+    return {"vix_override": enable}
 
 @app.post("/api/trade/force")
 async def force_trade(body: dict, user: str = Depends(get_current_user)):

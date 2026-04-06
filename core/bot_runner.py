@@ -195,7 +195,10 @@ class BotRunner:
             logger.warning("VIX fetch job failed: %s", e)
 
     def _is_vix_blocked(self) -> bool:
-        """Return True if VIX was fetched and exceeds the configured threshold."""
+        """Return True if VIX was fetched and exceeds the configured threshold.
+        Returns False immediately if trader has set the VIX override from the dashboard."""
+        if ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE):
+            return False  # trader override active — bypass VIX gate
         if self.last_vix is None:
             return False  # no data = don't block (fail open)
         return self.last_vix > config.VIX_THRESHOLD

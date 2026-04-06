@@ -56,6 +56,7 @@ export default function Home() {
   const todayJournal      = data?.today_journal     ?? [];
   const indiaVix          = data?.india_vix         ?? null;
   const vixBlocked        = data?.vix_blocked       ?? false;
+  const vixOverride       = data?.vix_override      ?? false;
   const vixThreshold      = data?.vix_threshold     ?? 20;
   const tokenStatus       = data?.token_set_at       ?? null;
   const tokenLive         = tokenStatus?.live        ?? false;
@@ -63,6 +64,7 @@ export default function Home() {
   const dayBiasData       = data?.day_bias          ?? { bias: "NEUTRAL", note: "", set_at: null };
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  const [vixOverrideSaving, setVixOverrideSaving] = useState(false);
   const [biasSaving, setBiasSaving]   = useState(false);
   const [biasEdit, setBiasEdit]       = useState(false);
   const [biasNote, setBiasNote]       = useState("");
@@ -75,6 +77,20 @@ export default function Home() {
       setBiasNote(dayBiasData.note);
     }
   }, [dayBiasData.note, biasEdit]);
+
+  async function toggleVixOverride() {
+    setVixOverrideSaving(true);
+    try {
+      const token = localStorage.getItem("aq_token");
+      await fetch(`${API_URL}/api/bot/vix-override`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ enable: !vixOverride }),
+      });
+    } finally {
+      setVixOverrideSaving(false);
+    }
+  }
 
   async function saveBias(bias: string, note: string) {
     setBiasSaving(true);
@@ -231,15 +247,30 @@ export default function Home() {
                     BOT STOPPED
                   </span>
                 ) : null}
-                {/* India VIX badge */}
+                {/* India VIX badge + override toggle */}
                 {indiaVix !== null && (
-                  <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
-                        style={vixBlocked
-                          ? { background: "#fee2e2", color: "#dc2626" }
-                          : { background: "#f0fdf4", color: "#15803d" }}>
-                    VIX {indiaVix.toFixed(1)}
-                    {vixBlocked && <span className="ml-0.5">⛔</span>}
-                  </span>
+                  <div className="flex items-center gap-1">
+                    <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
+                          style={vixBlocked
+                            ? { background: "#fee2e2", color: "#dc2626" }
+                            : vixOverride
+                            ? { background: "#fef3c7", color: "#b45309" }
+                            : { background: "#f0fdf4", color: "#15803d" }}>
+                      VIX {indiaVix.toFixed(1)}
+                      {vixBlocked  && <span className="ml-0.5">⛔</span>}
+                      {vixOverride && <span className="ml-0.5">⚡</span>}
+                    </span>
+                    <button
+                      onClick={toggleVixOverride}
+                      disabled={vixOverrideSaving}
+                      title={vixOverride ? "VIX gate bypassed — click to restore" : "VIX gate active — click to bypass"}
+                      className="text-[10px] font-bold px-2 py-0.5 rounded-full border transition-all disabled:opacity-50"
+                      style={vixOverride
+                        ? { background: "#fef3c7", color: "#b45309", borderColor: "#f59e0b" }
+                        : { background: "#f3f4f6", color: "#6b7280", borderColor: "#d1d5db" }}>
+                      {vixOverride ? "VIX Override ON" : "VIX Override OFF"}
+                    </button>
+                  </div>
                 )}
                 {/* Zerodha token badge */}
                 {data && (

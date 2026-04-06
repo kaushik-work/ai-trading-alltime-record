@@ -10,8 +10,9 @@ FLAGS_DIR = _BASE_DIR / "db" / "flags"
 FLAGS_DIR.mkdir(parents=True, exist_ok=True)
 
 # Flag name constants
-FLAG_PAUSE = "pause"
-FLAG_RESUME = "resume"
+FLAG_PAUSE        = "pause"
+FLAG_RESUME       = "resume"
+FLAG_VIX_OVERRIDE = "vix_override"  # when set, VIX gate is bypassed for the day
 
 
 def write_flag(name: str) -> None:
@@ -30,9 +31,11 @@ def flag_exists(name: str) -> bool:
 
 
 def clear_all_flags() -> None:
-    """Clear all flags — call on bot startup to avoid stale signals."""
+    """Clear transient flags on bot startup. Preserves persistent overrides like vix_override."""
+    _persist = {FLAG_VIX_OVERRIDE}
     for f in FLAGS_DIR.iterdir():
-        f.unlink(missing_ok=True)
+        if f.name not in _persist:
+            f.unlink(missing_ok=True)
 
 
 # ── Force trade IPC ───────────────────────────────────────────────────────────
