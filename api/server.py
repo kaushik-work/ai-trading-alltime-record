@@ -53,6 +53,33 @@ records = RecordTracker()
 market = RealMarketData()
 
 WATCHLIST = ["NIFTY"]
+STRATEGIES = ["ATR Intraday", "C-ICT"]
+
+# ── Price cache — shared across all WebSocket connections ─────────────────────
+# Without this, 5 open browser tabs × every-5s broadcast = 60 Zerodha calls/min
+import time as _time
+_price_cache: dict = {}
+_price_cache_ts: float = 0.0
+_PRICE_TTL = 30  # seconds — refresh live price at most once every 30s
+
+def _get_prices() -> dict:
+    global _price_cache, _price_cache_ts
+    if _time.time() - _price_cache_ts < _PRICE_TTL:
+        return _price_cache
+    prices = {}
+    for sym in WATCHLIST:
+        try:
+            q = market.get_quote(sym)
+            prices[sym] = {
+                "price": q.get("last_price", 0),
+                "change_pct": round(q.get("change_pct", 0), 2),
+                "source": q.get("source", ""),
+            }
+        except Exception:
+            prices[sym] = {"price": 0, "change_pct": 0, "source": "error"}
+    _price_cache    = prices
+    _price_cache_ts = _time.time()
+    return prices
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -79,21 +106,10 @@ def _build_snapshot() -> dict:
         cumulative += t.get("pnl", 0)
         equity_curve.append({"timestamp": t.get("timestamp"), "pnl": round(cumulative, 2)})
 
-    # Live prices
-    prices = {}
-    for sym in WATCHLIST:
-        try:
-            q = market.get_quote(sym)
-            prices[sym] = {
-                "price": q.get("last_price", 0),
-                "change_pct": round(q.get("change_pct", 0), 2),
-                "source": q.get("source", ""),
-            }
-        except Exception:
-            prices[sym] = {"price": 0, "change_pct": 0, "source": "error"}
+    # Live prices — cached for 30s, shared across all WebSocket connections
+    prices = _get_prices()
 
     # Per-strategy daily summary
-    STRATEGIES = ["ATR Intraday"]
     strategy_summary = {}
     for strat in STRATEGIES:
         strat_trades = [t for t in today_trades if t.get("strategy") == strat and t.get("status") == "COMPLETE"]
