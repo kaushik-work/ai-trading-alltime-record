@@ -142,10 +142,16 @@ class TrendStrategy:
 
         portfolio = self.broker.get_portfolio_summary()
 
-        # Daily loss limit
+        # Combined daily loss limit — both bots share the ₹6,250 hard stop.
+        # When hit: write the global IPC pause flag so BOTH bots stop on their
+        # next cycle (no 5-minute gap — they check ipc.FLAG_PAUSE each cycle).
         if portfolio.get("pnl", 0) <= -config.MAX_DAILY_LOSS:
-            logger.warning("Daily loss limit ₹%s hit. Pausing.", config.MAX_DAILY_LOSS)
-            self.pause()
+            logger.warning(
+                "[%s] Combined daily loss limit ₹%s hit. Pausing ALL strategies.",
+                self.strategy_name, config.MAX_DAILY_LOSS,
+            )
+            ipc.write_flag(ipc.FLAG_PAUSE)   # stops both bots immediately next cycle
+            self.pause()                      # also stop this instance right now
             return None
 
         # Fetch daily + intraday indicators

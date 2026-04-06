@@ -54,6 +54,9 @@ parser.add_argument("--min-lots",   type=int, default=1,
 parser.add_argument("--vix-filter", type=float, default=0.0,
                     help="Skip trading days where VIX > threshold (0 = off). "
                          "Use --vix-filter 20 to replicate live bot behaviour.")
+parser.add_argument("--daily-loss", type=float, default=5.0,
+                    help="Daily loss limit as %% of day equity (default 5%%). "
+                         "Use 0 to disable. Live bot: 5%% = Rs6,250 on Rs1.25L.")
 args = parser.parse_args()
 
 INITIAL_CAPITAL = args.capital
@@ -63,6 +66,7 @@ FORCE_REFETCH   = args.no_cache
 NO_LUNCH        = args.no_lunch
 MIN_LOTS        = args.min_lots
 VIX_FILTER      = args.vix_filter   # 0 = disabled
+DAILY_LOSS_PCT  = args.daily_loss   # 0 = no limit
 
 LOT_SIZE    = 65   # NIFTY lot size revised Feb 2026
 TRADE_START = time(9, 45)
@@ -397,7 +401,7 @@ def _run(df, strategy, equity_start, rr=RR_RATIO, risk_pct=RISK_PCT,
         day_start_pos    = day_idxs[0]
         prev_day_df      = df[df["_date"] == all_dates[day_i - 1]] if day_i > 0 else None
         day_equity_start = equity
-        daily_loss_limit = day_equity_start * (daily_loss_pct / 100)
+        daily_loss_limit = (day_equity_start * daily_loss_pct / 100) if daily_loss_pct > 0 else float("inf")
         position         = None
 
         for local_pos, (ts, row) in enumerate(day_df.iterrows()):
@@ -540,7 +544,7 @@ def _print_table(rows, title, start_cap, final_eq):
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def _run_scenario(df, months, strategy_key, vix_map, vix_threshold):
+def _run_scenario(df, months, strategy_key, vix_map, vix_threshold, daily_loss_pct=0.0):
     """Run one strategy for all months. Returns (rows, final_equity, summary_dict)."""
     equity = INITIAL_CAPITAL
     rows   = []
@@ -553,7 +557,8 @@ def _run_scenario(df, months, strategy_key, vix_map, vix_threshold):
             continue
         try:
             res = _run(month_df, strategy_key, equity,
-                       vix_map=vix_map, vix_threshold=vix_threshold)
+                       vix_map=vix_map, vix_threshold=vix_threshold,
+                       daily_loss_pct=daily_loss_pct)
             fin = res["final_equity"]
             net = round((fin - equity) / equity * 100, 1)
             rows.append({
@@ -609,11 +614,11 @@ def _print_vix_comparison(label, title, rows_off, rows_on, vix_thr, n_months):
 # ── Main ──────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    lunch_tag  = " + no-lunch" if NO_LUNCH else ""
-    vix_tag    = f" | VIX filter >{VIX_FILTER:.0f}" if VIX_FILTER > 0 else ""
-    vix_thr    = VIX_FILTER if VIX_FILTER > 0 else 20.0  # default comparison threshold
+    lunch_tag = " + no-lunch" if NO_LUNCH else ""
+    vix_thr   = VIX_FILTER if VIX_FILTER > 0 else 25.0   # default comparison threshold
+    dl_tag    = f" | daily-loss {DAILY_LOSS_PCT:.0f}%" if DAILY_LOSS_PCT > 0 else " | no daily-loss limit"
 
-    print(f"\nATR + C-ICT Backtest — VIX OFF vs VIX ON (>{vix_thr:.0f}) | Month-on-Month")
+    print(f"\nATR + C-ICT Backtest — Daily Loss Rule: OFF vs {DAILY_LOSS_PCT:.0f}% | Month-on-Month")
     print(f"  Capital: Rs{INITIAL_CAPITAL:,.0f}  |  R:R {RR_RATIO}  |  Risk {RISK_PCT}%/trade  |  Min lots {MIN_LOTS}{lunch_tag}\n")
 
     df = _load_nifty_5m()
@@ -623,9 +628,9 @@ if __name__ == "__main__":
 
     vix_map = _load_vix_daily()
     if not vix_map:
-        print("  [WARN] No VIX data — running VIX OFF only\n")
+        print("  [WARN] No VIX data — VIX filter disabled\n")
 
-    months = sorted(df["_ym"].unique())
+    months   = sorted(df["_ym"].unique())
     n_months = max(len(months), 1)
     print(f"  Months: {len(months)}  |  Bars: {len(df)}  |  VIX days loaded: {len(vix_map)}\n")
 
@@ -637,32 +642,62 @@ if __name__ == "__main__":
     final_summary = {}
 
     for key, label, title in strategies:
-        print(f"Running {label} — VIX OFF...", end="", flush=True)
-        rows_off, eq_off, s_off = _run_scenario(df, months, key, vix_map={}, vix_threshold=0)
+        # Scenario A: no daily loss limit
+        print(f"Running {label} — no daily-loss limit ...", end="", flush=True)
+        rows_nodl, _, s_nodl = _run_scenario(
+            df, months, key,
+            vix_map=vix_map, vix_threshold=vix_thr,
+            daily_loss_pct=0.0,
+        )
         print()
 
-        print(f"Running {label} — VIX ON  (>{vix_thr:.0f})...", end="", flush=True)
-        rows_on, eq_on, s_on = _run_scenario(df, months, key, vix_map=vix_map, vix_threshold=vix_thr)
+        # Scenario B: with daily loss limit
+        dl_label = f"{DAILY_LOSS_PCT:.0f}% limit"
+        print(f"Running {label} — {dl_label} ...", end="", flush=True)
+        rows_dl, _, s_dl = _run_scenario(
+            df, months, key,
+            vix_map=vix_map, vix_threshold=vix_thr,
+            daily_loss_pct=DAILY_LOSS_PCT,
+        )
         print()
 
-        _print_vix_comparison(label, title, rows_off, rows_on, vix_thr, n_months)
-        final_summary[label] = {"off": s_off, "on": s_on}
+        # Print month-on-month side-by-side
+        w = 90
+        print(f"\n{'='*w}")
+        print(f"  {title}")
+        print(f"  No daily-loss limit  vs  {dl_label}  (VIX filter >{vix_thr:.0f})")
+        print(f"{'='*w}")
+        hdr = (f"{'Month':>8}  {'#Tr(no-lim)':>11} {'WR%':>6} {'DD%':>5} {'Net%':>6}"
+               f"  │  {'#Tr(limit)':>10} {'WR%':>6} {'DD%':>5} {'Net%':>6}")
+        print(hdr)
+        print('-' * w)
+        m_nodl = {r["month"]: r for r in rows_nodl}
+        m_dl   = {r["month"]: r for r in rows_dl}
+        for m in sorted(set(list(m_nodl) + list(m_dl))):
+            def fmt(r):
+                if r is None: return f"{'—':>11} {'—':>6} {'—':>5} {'—':>6}"
+                ok = " *" if r["net_pct"] > 0 else "  "
+                return f"{r['trades']:>11} {r['wr']:>6.1f} {r['dd']:>5.1f} {r['net_pct']:>+6.1f}{ok}"
+            print(f"{m:>8}  {fmt(m_nodl.get(m))}  │  {fmt(m_dl.get(m))}")
+        print()
+
+        final_summary[label] = {"nodl": s_nodl, "dl": s_dl}
 
     # ── Final comparison table ────────────────────────────────────────────────
-    w = 90
+    w = 95
     print(f"\n{'='*w}")
-    print(f"  FINAL COMPARISON — VIX OFF vs VIX ON (>{vix_thr:.0f})  |  {MIN_LOTS} lots  |  R:R {RR_RATIO}")
+    print(f"  FINAL SUMMARY  |  {MIN_LOTS} lots  |  R:R {RR_RATIO}  |  VIX>{vix_thr:.0f}  |  Daily-loss limit: {DAILY_LOSS_PCT:.0f}%")
     print(f"{'='*w}")
-    print(f"{'Strategy':<14}  {'Scenario':>10}  {'Total%':>8}  {'Final Eq':>11}  "
+    print(f"{'Strategy':<14}  {'Scenario':>16}  {'Total%':>8}  {'Final Eq':>11}  "
           f"{'AvgWR%':>7}  {'AvgDD%':>7}  {'Trades':>7}  {'Net/mo':>10}")
     print('-' * w)
 
     for label, sc in final_summary.items():
-        for tag, s in [("VIX OFF", sc["off"]), (f"VIX>{vix_thr:.0f}", sc["on"])]:
+        for tag, s in [("No limit", sc["nodl"]), (f"DL {DAILY_LOSS_PCT:.0f}%", sc["dl"])]:
             monthly_avg = round((s["final"] - INITIAL_CAPITAL) / n_months, 0)
             charges     = round((s["total_trades"] / n_months) * MIN_LOTS * 150, 0)
             net_mo      = monthly_avg - charges
-            print(f"{label:<14}  {tag:>10}  {s['total']:>+8.1f}%  "
+            print(f"{label:<14}  {tag:>16}  {s['total']:>+8.1f}%  "
                   f"Rs{s['final']:>9,.0f}  {s['avg_wr']:>7.1f}%  {s['avg_dd']:>7.1f}%  "
                   f"{s['total_trades']:>7}  Rs{net_mo:>8,.0f}/mo")
         print()
