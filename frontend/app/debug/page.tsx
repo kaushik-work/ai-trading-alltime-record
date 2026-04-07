@@ -188,9 +188,9 @@ export default function DebugPage() {
                         ? { background: "#fef3c7", color: "#b45309", borderColor: "#f59e0b" }
                         : { background: "#f3f4f6", color: "#6b7280", borderColor: "#d1d5db" }
                       }
-                      title={vixOn ? "VIX gate bypassed for this strategy" : "VIX gate active for this strategy"}
+                      title={vixOn ? "VIX gate bypassed for this strategy — click to restore" : "VIX gate active — click to bypass"}
                     >
-                      VIX {vixOn ? "OFF" : "ON"}
+                      {vixOn ? "Override ON" : "Override OFF"}
                     </button>
                     {s ? (
                       <ActionBadge action={s.action ?? (s.will_trade ? "TRADE" : "HOLD")} />
