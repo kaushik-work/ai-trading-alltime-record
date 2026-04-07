@@ -55,9 +55,12 @@ export default function Home() {
   const strategySummary   = data?.strategy_summary  ?? {};
   const todayJournal      = data?.today_journal     ?? [];
   const indiaVix          = data?.india_vix         ?? null;
-  const vixBlocked        = data?.vix_blocked       ?? false;
-  const vixOverride       = data?.vix_override      ?? false;
-  const vixThreshold      = data?.vix_threshold     ?? 20;
+  const vixBlocked        = data?.vix_blocked              ?? false;
+  const vixOverride       = data?.vix_override             ?? false;
+  const vixOverrideAtr    = data?.vix_override_atr         ?? false;
+  const vixOverrideIct    = data?.vix_override_ict         ?? false;
+  const anyOverride       = vixOverride || vixOverrideAtr || vixOverrideIct;
+  const vixThreshold      = data?.vix_threshold            ?? 20;
   const tokenStatus       = data?.token_set_at       ?? null;
   const tokenLive         = tokenStatus?.live        ?? false;
   const tokenSetAt        = tokenStatus?.set_at      ?? null;
@@ -177,22 +180,22 @@ export default function Home() {
                     <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
                           style={vixBlocked
                             ? { background: "#fee2e2", color: "#dc2626" }
-                            : vixOverride
+                            : anyOverride
                             ? { background: "#fef3c7", color: "#b45309" }
                             : { background: "#f0fdf4", color: "#15803d" }}>
                       VIX {indiaVix.toFixed(1)}
                       {vixBlocked  && <span className="ml-0.5">⛔</span>}
-                      {vixOverride && <span className="ml-0.5">⚡</span>}
+                      {anyOverride && <span className="ml-0.5">⚡</span>}
                     </span>
                     <button
                       onClick={toggleVixOverride}
                       disabled={vixOverrideSaving}
-                      title={vixOverride ? "VIX gate bypassed — click to restore" : "VIX gate active — click to bypass"}
+                      title={anyOverride ? "VIX gate bypassed — click to restore" : "VIX gate active — click to bypass"}
                       className="text-[10px] font-bold px-2 py-0.5 rounded-full border transition-all disabled:opacity-50"
-                      style={vixOverride
+                      style={anyOverride
                         ? { background: "#fef3c7", color: "#b45309", borderColor: "#f59e0b" }
                         : { background: "#f3f4f6", color: "#6b7280", borderColor: "#d1d5db" }}>
-                      {vixOverride ? "VIX Override ON" : "VIX Override OFF"}
+                      {anyOverride ? "VIX Override ON" : "VIX Override OFF"}
                     </button>
                   </div>
                 )}

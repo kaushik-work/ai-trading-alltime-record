@@ -169,7 +169,8 @@ def _build_snapshot() -> dict:
     vix_override     = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE)
     vix_override_atr = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE_ATR)
     vix_override_ict = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE_ICT)
-    vix_blocked  = (not vix_override) and (vix is not None) and (vix > config.VIX_THRESHOLD)
+    any_override = vix_override or vix_override_atr or vix_override_ict
+    vix_blocked  = (not any_override) and (vix is not None) and (vix > config.VIX_THRESHOLD)
 
     return {
         "timestamp": now_ist.isoformat(),
@@ -345,7 +346,8 @@ def bot_debug(user: str = Depends(get_current_user)):
     vix_override     = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE)
     vix_override_atr = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE_ATR)
     vix_override_ict = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE_ICT)
-    vix_blocked  = (not vix_override) and (vix is not None) and (vix > config.VIX_THRESHOLD)
+    any_override = vix_override or vix_override_atr or vix_override_ict
+    vix_blocked  = (not any_override) and (vix is not None) and (vix > config.VIX_THRESHOLD)
 
     result = {"time_ist": now_ist.isoformat(), "market_open": _is_market_hours(),
               "last_heartbeat": runner.last_heartbeat, "last_scores": runner.last_scores,
