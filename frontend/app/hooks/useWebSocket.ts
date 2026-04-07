@@ -1,8 +1,12 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
 
+const CACHE_KEY = "aq_snapshot";
+
 export function useWebSocket(url: string) {
-  const [data, setData] = useState<any>(null);
+  const [data, setData] = useState<any>(() => {
+    try { return JSON.parse(localStorage.getItem(CACHE_KEY) || "null"); } catch { return null; }
+  });
   const [connected, setConnected] = useState(false);
   const ws = useRef<WebSocket | null>(null);
   const retry = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -14,7 +18,11 @@ export function useWebSocket(url: string) {
     ws.current.onopen = () => setConnected(true);
 
     ws.current.onmessage = (e) => {
-      try { setData(JSON.parse(e.data)); } catch {}
+      try {
+        const parsed = JSON.parse(e.data);
+        setData(parsed);
+        localStorage.setItem(CACHE_KEY, e.data);
+      } catch {}
     };
 
     ws.current.onclose = () => {
