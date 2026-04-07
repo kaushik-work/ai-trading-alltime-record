@@ -141,9 +141,9 @@ export default function Home() {
 
           {/* Section header with live prices */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between mb-4 gap-2">
-            <div>
-              <div className="flex flex-wrap items-center gap-2">
-                <h2 className="text-base font-bold text-gray-900">Live Trade Feed</h2>
+            <div className="w-full sm:w-auto">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <h2 className="text-base font-bold text-gray-900 w-full sm:w-auto mb-1 sm:mb-0">Live Trade Feed</h2>
                 {/* Bot active/inactive indicator */}
                 {botStatus === "running" ? (
                   <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
@@ -256,12 +256,13 @@ export default function Home() {
 
           {/* Strategy P&L + Day Bias row */}
           <div className="flex flex-col md:flex-row gap-4 mb-4 items-start">
-            {/* Today's Strategy P&L */}
-            {Object.keys(strategySummary).length > 0 && (
-              <div className="flex-1">
-                <div className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">Today's Strategy P&L</div>
-                <div className="grid grid-cols-2 gap-3">
-                  {Object.entries(strategySummary).map(([name, s]: any) => (
+            {/* Today's Strategy P&L — always show both cards */}
+            <div className="w-full md:flex-1">
+              <div className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">Today's Strategy P&L</div>
+              <div className="grid grid-cols-2 gap-3">
+                {(["ATR Intraday", "C-ICT"] as const).map(name => {
+                  const s: any = strategySummary[name] ?? { pnl: 0, trades: 0, wins: 0, losses: 0 };
+                  return (
                     <div key={name} className="bg-white rounded-xl border border-gray-200 p-3">
                       <div className="text-xs font-bold text-gray-700 mb-2">{name}</div>
                       <div className={`text-lg font-bold ${s.pnl >= 0 ? "text-green-600" : "text-red-500"}`}>
@@ -273,13 +274,13 @@ export default function Home() {
                         <span className="text-red-500">{s.losses}L</span>
                       </div>
                     </div>
-                  ))}
-                </div>
+                  );
+                })}
               </div>
-            )}
+            </div>
 
             {/* Day Bias panel */}
-            <div className="flex-1 min-w-0">
+            <div className="w-full md:flex-1 min-w-0">
               <div className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">Day Bias</div>
               <div className="bg-white rounded-xl border border-gray-200 p-3 space-y-3">
                 {/* Bias buttons */}
@@ -293,7 +294,7 @@ export default function Home() {
                     }[b];
                     return (
                       <button key={b} onClick={() => saveBias(b, biasNote)} disabled={biasSaving}
-                              className={`flex-1 text-xs font-bold py-2 px-3 rounded-lg border transition-all whitespace-nowrap ${active ? cfg.active : cfg.idle}`}>
+                              className={`flex-1 text-xs font-bold py-2 px-1 sm:px-3 rounded-lg border transition-all ${active ? cfg.active : cfg.idle}`}>
                         {b === "BULLISH" ? "▲ Bullish" : b === "BEARISH" ? "▼ Bearish" : "— Neutral"}
                       </button>
                     );
