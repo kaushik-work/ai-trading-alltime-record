@@ -309,6 +309,17 @@ class TrendStrategy:
 
         decision = self.brain.analyze(symbol, enriched, trade_history, portfolio)
 
+        # When Claude API is overloaded (529), trust strong signals (score ≥ 8)
+        if decision.get("overloaded") and abs(scored["score"]) >= 8:
+            direction = scored["action"]
+            logger.warning("[%s] Claude overloaded — strong signal score %+d ≥ ±8, proceeding with %s",
+                           self.strategy_name, scored["score"], direction)
+            decision = {
+                "action": direction, "confidence": 0.60, "symbol": symbol,
+                "reasoning": f"Claude API overloaded; strong technical signal score {scored['score']:+d} ≥ ±8",
+                "risk_level": "MEDIUM",
+            }
+
         if decision["action"] == "BUY" and decision.get("confidence", 0) >= 0.55:
             # ATR-based position sizing — uses intraday ATR if available, else daily ATR
             atr = intraday.get("atr_5m") or indicators.get("atr_14", 0)
@@ -334,14 +345,50 @@ class TrendStrategy:
 
     # ── Order execution ────────────────────────────────────────────────────────
 
-    def _execute(self, decision: dict, indicators: dict) -> dict:
-        symbol   = decision["symbol"]
-        side     = decision["action"]
-        quantity = max(1, decision.get("quantity", 1))
+    def _get_option_ltp(self, symbol: str, option_type: str, current_price: float) -> tuple[int, float]:
+        """Fetch real ATM option LTP from Zerodha. Returns (atm_strike, ltp).
+        Falls back to 0.5% of spot on failure (rough ATM premium estimate).
+        """
+        atm_strike = int(round(current_price / 50) * 50)
+        try:
+            from data.zerodha_fetcher import ZerodhaFetcher
+            expiry = ZerodhaFetcher.nearest_weekly_expiry()
+            _, ltp = ZerodhaFetcher.get().get_option_ltp(symbol, atm_strike, option_type, expiry)
+            if ltp and ltp > 0:
+                logger.info("Option LTP: %s %d%s @ ₹%.2f (expiry %s)",
+                            symbol, atm_strike, option_type, ltp, expiry)
+                return atm_strike, ltp
+        except Exception as e:
+            logger.warning("Option LTP fetch failed for %s %d%s: %s", symbol, atm_strike, option_type, e)
+        fallback = round(current_price * 0.005, 2)
+        logger.warning("Using fallback option price ₹%.2f for %s %d%s", fallback, symbol, atm_strike, option_type)
+        return atm_strike, fallback
 
-        order = self.broker.place_order(symbol, side, quantity)
+    def _execute(self, decision: dict, indicators: dict) -> dict:
+        symbol        = decision["symbol"]
+        side          = decision["action"]
+        quantity      = max(1, decision.get("quantity", 1))
+        current_price = indicators.get("price", 0)
+        atm_strike    = int(round(current_price / 50) * 50)
+
+        if side == "BUY":
+            option_type = "CE"
+            atm_strike, option_ltp = self._get_option_ltp(symbol, option_type, current_price)
+            order = self.broker.place_order(symbol, side, quantity, price=option_ltp)
+            # Persist option metadata in broker position for accurate exit pricing
+            if symbol in self.broker.positions:
+                self.broker.positions[symbol]["option_type"] = option_type
+                self.broker.positions[symbol]["atm_strike"]  = atm_strike
+        else:
+            pos         = self.broker.get_positions().get(symbol, {})
+            option_type = pos.get("option_type", "CE")
+            atm_strike  = pos.get("atm_strike", atm_strike)
+            _, exit_ltp = self._get_option_ltp(symbol, option_type, current_price)
+            order = self.broker.place_order(symbol, side, quantity, price=exit_ltp)
 
         if order.get("status") in ("COMPLETE", "PLACED"):
+            order["option_type"] = option_type
+            order["strike"]      = atm_strike
             self.memory.log_trade(order, decision)
             broken = self.records.check_trade(order)
             if broken:

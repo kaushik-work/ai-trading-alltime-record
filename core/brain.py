@@ -299,7 +299,9 @@ class TradingBrain:
             return {"action": "HOLD", "symbol": symbol, "quantity": 0, "confidence": 0, "reasoning": "Parse error", "risk_level": "HIGH"}
         except Exception as e:
             logger.error("Brain error: %s", e)
-            return {"action": "HOLD", "symbol": symbol, "quantity": 0, "confidence": 0, "reasoning": str(e), "risk_level": "HIGH"}
+            is_overloaded = "529" in str(e) or "overloaded" in str(e).lower()
+            return {"action": "HOLD", "symbol": symbol, "quantity": 0, "confidence": 0,
+                    "reasoning": str(e), "risk_level": "HIGH", "overloaded": is_overloaded}
 
     @staticmethod
     def _format_candles(candles: list) -> str:

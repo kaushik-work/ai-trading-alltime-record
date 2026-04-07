@@ -1,7 +1,7 @@
 import logging
-from datetime import datetime
 from typing import Optional
 import config
+from core.utils import now_ist
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ class MockBroker:
         }
         price = base_prices.get(symbol, 1000)
         price += random.uniform(-price * 0.01, price * 0.01)
-        return {"symbol": symbol, "last_price": round(price, 2), "timestamp": datetime.now().isoformat()}
+        return {"symbol": symbol, "last_price": round(price, 2), "timestamp": now_ist().isoformat()}
 
     def place_order(self, symbol: str, side: str, quantity: int,
                     order_type: str = "MARKET", price: float = 0,
@@ -39,7 +39,7 @@ class MockBroker:
             "order_type": order_type,
             "price": price or self.get_quote(symbol)["last_price"],
             "status": "COMPLETE",
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": now_ist().isoformat(),
         }
         self.orders.append(order)
 
@@ -128,7 +128,7 @@ class KiteBroker:
         return {
             "symbol": symbol,
             "last_price": instrument.get("last_price", 0),
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": now_ist().isoformat(),
         }
 
     def place_order(self, symbol: str, side: str, quantity: int,

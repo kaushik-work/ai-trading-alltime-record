@@ -266,8 +266,8 @@ export default function Home() {
                   return (
                     <div key={name} className="bg-white rounded-xl border border-gray-200 p-3">
                       <div className="text-xs font-bold text-gray-700 mb-2">{name}</div>
-                      <div className={`text-lg font-bold ${s.pnl >= 0 ? "text-green-600" : "text-red-500"}`}>
-                        {s.pnl >= 0 ? "+" : ""}₹{s.pnl.toLocaleString("en-IN")}
+                      <div className="text-lg font-bold" style={{ color: s.pnl > 0 ? "#16a34a" : s.pnl < 0 ? "#ef4444" : "#374151" }}>
+                        {s.pnl > 0 ? "+" : ""}₹{s.pnl.toLocaleString("en-IN")}
                       </div>
                       <div className="flex gap-3 mt-1 text-xs text-gray-400">
                         <span>{s.trades} trades</span>
@@ -460,18 +460,20 @@ export default function Home() {
                       return (
                         <tr key={i} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
                           <td className="px-4 py-3 font-semibold text-indigo-600">{t.symbol}</td>
-                          <td className={`px-4 py-3 font-semibold ${t.side === "BUY" ? "text-green-600" : "text-red-500"}`}>
+                          <td className="px-4 py-3 font-semibold" style={{ color: t.side === "BUY" ? "#16a34a" : "#ef4444" }}>
                             {t.side}
                           </td>
                           <td className="px-4 py-3 text-right text-gray-700">₹{Number(t.price).toLocaleString("en-IN")}</td>
                           <td className="px-4 py-3 text-right text-gray-700">{t.quantity}</td>
-                          <td className={`px-4 py-3 text-right font-semibold ${pnl >= 0 ? "text-green-600" : "text-red-500"}`}>
-                            {pnl !== 0 ? `₹${pnl.toFixed(2)}` : "—"}
+                          <td className="px-4 py-3 text-right font-semibold" style={{ color: pnl > 0 ? "#16a34a" : pnl < 0 ? "#ef4444" : "#6b7280" }}>
+                            {pnl !== 0 ? `${pnl > 0 ? "+" : ""}₹${pnl.toFixed(2)}` : "—"}
                           </td>
                           <td className="px-4 py-3">
-                            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
-                              t.status === "COMPLETE" ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"
-                            }`}>{t.status}</span>
+                            <span className="text-xs px-2 py-0.5 rounded-full font-medium"
+                              style={{ background: t.status === "COMPLETE" ? "#dcfce7" : "#f3f4f6",
+                                       color:      t.status === "COMPLETE" ? "#15803d" : "#6b7280" }}>
+                              {t.status || "—"}
+                            </span>
                           </td>
                           <td className="px-4 py-3 text-gray-400 text-xs">
                             {t.timestamp ? new Date(t.timestamp).toLocaleTimeString("en-IN") : "—"}
