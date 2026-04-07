@@ -122,12 +122,6 @@ export default function Home() {
 
   if (!authed) return null;
 
-  // Merge open positions and recent closed trades for live feed
-  const liveTrades = [
-    ...openPos.map((t: any) => ({ ...t, _live: true })),
-    ...trades.filter((t: any) => t.side === "SELL").slice(0, 30),
-  ];
-
   function handleBotToggle() {
     // WebSocket will auto-update on next push
   }
