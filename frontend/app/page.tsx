@@ -48,6 +48,7 @@ export default function Home() {
 
   const { data, connected } = useWebSocket(authed ? WS_URL : "");
   const trades            = data?.round_trips        ?? [];
+  const errorCount        = data?.zerodha_error_count ?? 0;
   const openPos           = data?.open_positions    ?? [];
   const mode              = data?.mode              ?? "paper";
   const botStatus         = data?.bot_status        ?? "unknown";
@@ -128,7 +129,7 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-[#f0f2f5] flex flex-col">
-      <Header mode={mode} connected={connected} botStatus={botStatus} onBotToggle={handleBotToggle} />
+      <Header mode={mode} connected={connected} botStatus={botStatus} onBotToggle={handleBotToggle} errorCount={errorCount} />
 
       {/* Main — full width */}
       <div className="flex-1 overflow-y-auto">
@@ -451,7 +452,12 @@ export default function Home() {
                   <tbody>
                     {trades.map((t: any, i: number) => {
                       const pnl = t.pnl ?? 0;
-                      const strike = t.strike ? `${Number(t.strike).toLocaleString("en-IN")} ${t.option_type ?? ""}`.trim() : null;
+                      const expiryFmt = t.expiry
+                        ? (() => { const d = new Date(t.expiry); return `${String(d.getUTCDate()).padStart(2,"0")} ${d.toLocaleString("en-IN",{month:"short",timeZone:"UTC"}).toUpperCase()} ${d.getUTCFullYear()}`; })()
+                        : null;
+                      const strike = t.strike
+                        ? `${t.symbol ?? "NIFTY"}${expiryFmt ? " " + expiryFmt : ""} ${Number(t.strike).toLocaleString("en-IN")} ${t.option_type ?? ""}`.trim()
+                        : null;
                       return (
                         <tr key={i} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
                           <td className="px-4 py-3">
@@ -459,10 +465,10 @@ export default function Home() {
                             {strike && <div className="text-xs text-gray-400 mt-0.5">{strike}</div>}
                           </td>
                           <td className="px-4 py-3 text-xs text-gray-500">{t.strategy ?? "—"}</td>
-                          <td className="px-4 py-3 text-right text-green-700 font-medium">
+                          <td className="px-4 py-3 text-right font-medium" style={{ color: "#16a34a" }}>
                             {t.buy_price != null ? `₹${Number(t.buy_price).toFixed(2)}` : "—"}
                           </td>
-                          <td className="px-4 py-3 text-right text-red-500 font-medium">
+                          <td className="px-4 py-3 text-right font-medium" style={{ color: "#ef4444" }}>
                             {t.sell_price != null ? `₹${Number(t.sell_price).toFixed(2)}` : "—"}
                           </td>
                           <td className="px-4 py-3 text-right text-gray-700">{t.qty}</td>

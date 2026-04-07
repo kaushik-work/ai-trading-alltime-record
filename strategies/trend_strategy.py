@@ -345,9 +345,9 @@ class TrendStrategy:
 
     # ── Order execution ────────────────────────────────────────────────────────
 
-    def _get_option_ltp(self, symbol: str, option_type: str, current_price: float) -> tuple[int, float]:
-        """Fetch real ATM option LTP from Zerodha. Returns (atm_strike, ltp).
-        Falls back to 0.5% of spot on failure (rough ATM premium estimate).
+    def _get_option_ltp(self, symbol: str, option_type: str, current_price: float) -> tuple[int, float | None]:
+        """Fetch real ATM option LTP from Zerodha. Returns (atm_strike, ltp) or (atm_strike, None) on failure.
+        Caller must abort the trade if ltp is None — never use a made-up fallback price.
         """
         atm_strike = int(round(current_price / 50) * 50)
         try:
@@ -360,9 +360,11 @@ class TrendStrategy:
                 return atm_strike, ltp
         except Exception as e:
             logger.warning("Option LTP fetch failed for %s %d%s: %s", symbol, atm_strike, option_type, e)
-        fallback = round(current_price * 0.005, 2)
-        logger.warning("Using fallback option price ₹%.2f for %s %d%s", fallback, symbol, atm_strike, option_type)
-        return atm_strike, fallback
+        msg = f"Option LTP unavailable for {symbol} {atm_strike}{option_type}"
+        logger.error(msg + " — skipping trade")
+        from core.zerodha_error_log import log_error as _log_err
+        _log_err("get_option_ltp", msg, symbol=symbol, detail=f"{atm_strike}{option_type}")
+        return atm_strike, None
 
     def _execute(self, decision: dict, indicators: dict) -> dict:
         symbol        = decision["symbol"]
@@ -374,6 +376,8 @@ class TrendStrategy:
         if side == "BUY":
             option_type = "CE"
             atm_strike, option_ltp = self._get_option_ltp(symbol, option_type, current_price)
+            if option_ltp is None:
+                return {"status": "SKIPPED", "reason": "option LTP unavailable"}
             order = self.broker.place_order(symbol, side, quantity, price=option_ltp)
             # Persist option metadata in broker position for accurate exit pricing
             if symbol in self.broker.positions:
@@ -384,11 +388,14 @@ class TrendStrategy:
             option_type = pos.get("option_type", "CE")
             atm_strike  = pos.get("atm_strike", atm_strike)
             _, exit_ltp = self._get_option_ltp(symbol, option_type, current_price)
+            if exit_ltp is None:
+                return {"status": "SKIPPED", "reason": "option LTP unavailable at exit"}
             order = self.broker.place_order(symbol, side, quantity, price=exit_ltp)
 
         if order.get("status") in ("COMPLETE", "PLACED"):
             order["option_type"] = option_type
             order["strike"]      = atm_strike
+            order["strategy"]    = self.strategy_name
             self.memory.log_trade(order, decision)
             broken = self.records.check_trade(order)
             if broken:

@@ -1,12 +1,8 @@
 """
 MarketData — OHLCV data and technical indicators for NSE strategies.
 
-Data source priority (yfinance removed entirely):
-  1. ZerodhaFetcher  — jugaad-trader, real NSE bars, real volume
-  2. NseFetcher      — NSE India public API, official OHLCV
-
-Both daily and intraday data route through the same fetchers used by
-Musashi and Raijin in bot_runner, so all strategies see consistent data.
+Single data source: ZerodhaFetcher (real NSE bars, real volume).
+No fallbacks — if Zerodha fails, the cycle is skipped.
 """
 
 import logging
@@ -17,66 +13,38 @@ import config
 
 logger = logging.getLogger(__name__)
 
-# Fallback mock prices (last resort — only if both sources fail)
-_MOCK_BASE = {
-    "NIFTY": 22000, "BANKNIFTY": 48000,
-    "RELIANCE": 2500, "TCS": 3800, "INFY": 1700,
-    "HDFCBANK": 1600, "ICICIBANK": 1100,
-    "SBIN": 800, "WIPRO": 500, "AXISBANK": 1050,
-}
-
 
 def _get_daily_df(symbol: str):
-    """
-    Fetch daily OHLCV DataFrame via Zerodha → NSE fallback.
-    Returns a pandas DataFrame or None.
-    """
-    # 1. Zerodha
+    """Fetch daily OHLCV DataFrame via Zerodha. Returns None on failure."""
+    from core.zerodha_error_log import log_error as _log_err
     try:
         from data.zerodha_fetcher import ZerodhaFetcher
         df = ZerodhaFetcher.get().fetch_daily_df(symbol)
         if df is not None and len(df) >= 10:
             return df
+        msg = "fetch_daily_df returned insufficient data"
+        logger.error("_get_daily_df: %s for %s", msg, symbol)
+        _log_err("fetch_daily_df", msg, symbol=symbol)
     except Exception as e:
-        logger.warning("_get_daily_df Zerodha failed for %s: %s", symbol, e)
-
-    # 2. NSE India
-    try:
-        from data.nse_fetcher import NseFetcher
-        df = NseFetcher.get().fetch_daily_df(symbol)
-        if df is not None and len(df) >= 10:
-            logger.info("_get_daily_df: using NSE fallback for %s", symbol)
-            return df
-    except Exception as e:
-        logger.warning("_get_daily_df NSE failed for %s: %s", symbol, e)
-
+        logger.error("_get_daily_df: Zerodha failed for %s: %s", symbol, e)
+        _log_err("fetch_daily_df", str(e), symbol=symbol)
     return None
 
 
 def _get_intraday_df(symbol: str, interval: str):
-    """
-    Fetch today's intraday OHLCV DataFrame via Zerodha → NSE fallback.
-    Returns a pandas DataFrame or None.
-    """
-    # 1. Zerodha
+    """Fetch today's intraday OHLCV DataFrame via Zerodha. Returns None on failure."""
+    from core.zerodha_error_log import log_error as _log_err
     try:
         from data.zerodha_fetcher import ZerodhaFetcher
         df = ZerodhaFetcher.get().fetch_intraday_df(symbol, interval)
         if df is not None and len(df) >= 3:
             return df
+        msg = "fetch_intraday_df returned insufficient data"
+        logger.error("_get_intraday_df: %s for %s %s", msg, symbol, interval)
+        _log_err("fetch_intraday_df", msg, symbol=symbol, detail=interval)
     except Exception as e:
-        logger.warning("_get_intraday_df Zerodha failed for %s %s: %s", symbol, interval, e)
-
-    # 2. NSE India
-    try:
-        from data.nse_fetcher import NseFetcher
-        df = NseFetcher.get().fetch_intraday_df(symbol, interval)
-        if df is not None and len(df) >= 3:
-            logger.info("_get_intraday_df: using NSE fallback for %s %s", symbol, interval)
-            return df
-    except Exception as e:
-        logger.warning("_get_intraday_df NSE failed for %s %s: %s", symbol, interval, e)
-
+        logger.error("_get_intraday_df: Zerodha failed for %s %s: %s", symbol, interval, e)
+        _log_err("fetch_intraday_df", str(e), symbol=symbol, detail=interval)
     return None
 
 
@@ -87,12 +55,12 @@ class RealMarketData:
     """
 
     def get_quote(self, symbol: str) -> dict:
-        """Latest price from daily data (last bar close)."""
+        """Latest price from daily data (last bar close). Returns empty dict on failure."""
         df = _get_daily_df(symbol)
         if df is not None and len(df) >= 2:
-            last  = df.iloc[-1]
-            prev  = df.iloc[-2]
-            price = float(last["Close"])
+            last   = df.iloc[-1]
+            prev   = df.iloc[-2]
+            price  = float(last["Close"])
             prev_c = float(prev["Close"])
             change = price - prev_c
             return {
@@ -105,18 +73,10 @@ class RealMarketData:
                 "change":     round(change, 2),
                 "change_pct": round((change / prev_c) * 100, 2) if prev_c else 0,
                 "timestamp":  datetime.now().isoformat(),
-                "source":     "zerodha_or_nse",
+                "source":     "zerodha",
             }
-        # Last-resort mock
-        import random
-        base  = _MOCK_BASE.get(symbol, 1000)
-        price = round(base * (1 + random.uniform(-0.01, 0.01)), 2)
-        return {
-            "symbol": symbol, "last_price": price,
-            "open": price, "high": price, "low": price,
-            "volume": 0, "change": 0, "change_pct": 0,
-            "timestamp": datetime.now().isoformat(), "source": "mock_fallback",
-        }
+        logger.error("get_quote: no data for %s — Zerodha unavailable", symbol)
+        return {"symbol": symbol, "last_price": 0, "source": "unavailable"}
 
     def get_indicators(self, symbol: str) -> dict:
         """
@@ -127,8 +87,8 @@ class RealMarketData:
 
         df = _get_daily_df(symbol)
         if df is None or len(df) < 26:
-            logger.warning("get_indicators: insufficient daily data for %s", symbol)
-            return self._mock_indicators(symbol)
+            logger.error("get_indicators: insufficient daily data for %s — Zerodha unavailable", symbol)
+            return {"symbol": symbol, "price": 0, "source": "unavailable"}
 
         closes = df["Close"].astype(float)
         price  = float(closes.iloc[-1])
@@ -330,48 +290,6 @@ class RealMarketData:
             })
         return rows
 
-    def _mock_indicators(self, symbol: str) -> dict:
-        """Last-resort fallback — clearly labelled mock data."""
-        import random
-        base  = _MOCK_BASE.get(symbol, 1000)
-        price = round(base * (1 + random.uniform(-0.01, 0.01)), 2)
-        return {
-            "symbol": symbol, "price": price,
-            "rsi": round(random.uniform(40, 60), 2),
-            "macd": 0.0, "macd_signal": 0.0, "macd_histogram": 0.0,
-            "sma_20": price, "sma_50": price, "ema_9": price,
-            "bollinger_upper": round(price * 1.02, 2),
-            "bollinger_lower": round(price * 0.98, 2),
-            "price_vs_sma20": 0.0,
-            "atr_14": 0.0, "atr_pct": 0.0,
-            "sl_price": 0.0, "tp_price": 0.0,
-            "volume": 0, "avg_volume_20d": 0, "volume_ratio": 1.0,
-            "change_pct": 0.0,
-            "timestamp": datetime.now().isoformat(),
-            "source": "mock_fallback",
-        }
-
-
-class LiveMarketData:
-    """Live market data via jugaad-trader (used in LIVE mode)."""
-
-    def __init__(self, broker):
-        self.broker = broker
-
-    def get_quote(self, symbol: str) -> dict:
-        return self.broker.get_quote(symbol)
-
-    def get_indicators(self, symbol: str) -> dict:
-        # In live mode, still use the same data pipeline for indicators
-        return RealMarketData().get_indicators(symbol)
-
-    def get_intraday_indicators(self, symbol: str) -> dict:
-        return RealMarketData().get_intraday_indicators(symbol)
-
-
 def get_market_data(broker=None):
-    """Factory — returns real or live market data."""
-    if config.IS_PAPER:
-        return RealMarketData()
-    else:
-        return LiveMarketData(broker)
+    """Returns Zerodha-backed market data. broker param kept for API compatibility."""
+    return RealMarketData()

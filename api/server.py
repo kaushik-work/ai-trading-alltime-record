@@ -139,6 +139,7 @@ def _build_snapshot() -> dict:
                 "symbol":      t.get("symbol"),
                 "strike":      t.get("strike"),
                 "option_type": t.get("option_type"),
+                "expiry":      buy["expiry"] if buy else t.get("expiry"),
                 "strategy":    t.get("strategy"),
                 "buy_price":   buy["price"] if buy else None,
                 "sell_price":  t.get("price"),
@@ -230,6 +231,7 @@ def _build_snapshot() -> dict:
         "prices": prices,
         "recent_trades": all_trades[:20],
         "round_trips":   round_trips[:20],
+        "zerodha_error_count": len(__import__("core.zerodha_error_log", fromlist=["get_all"]).get_all()),
         "open_positions": open_pos,
         "equity_curve": equity_curve[-100:],  # last 100 points
         "records": [
@@ -558,6 +560,19 @@ def save_journal_now(user: str = Depends(get_current_user)):
     from core.journal import save_daily_journal
     path = save_daily_journal()
     return {"status": "saved", "path": path}
+
+
+@app.get("/api/zerodha-errors")
+def get_zerodha_errors(user: str = Depends(get_current_user)):
+    from core.zerodha_error_log import get_all
+    return get_all()
+
+
+@app.delete("/api/zerodha-errors")
+def clear_zerodha_errors(user: str = Depends(get_current_user)):
+    from core.zerodha_error_log import clear
+    clear()
+    return {"status": "cleared"}
 
 
 @app.post("/api/backtest")

@@ -31,36 +31,21 @@ logger = logging.getLogger(__name__)
 
 def _fetch_intraday(symbol: str, interval: str):
     """
-    Fetch today's intraday OHLCV + 60-day daily closes.
-
-    Priority:
-      1. Zerodha via jugaad-trader — real NSE data, correct volume
-      2. NSE India public API    — official source, no login needed
-
-    Returns (opens, highs, lows, closes, volumes, all_closes, last_bar_time)
-    or None if both sources fail.
+    Fetch today's intraday OHLCV + 60-day daily closes via Zerodha.
+    Returns None if Zerodha fails — caller must skip the cycle.
     """
-    # ── 1. Zerodha (real data, real volume) ────────────────────────────────
+    from core.zerodha_error_log import log_error as _log_err
     try:
         from data.zerodha_fetcher import ZerodhaFetcher
         result = ZerodhaFetcher.get().fetch_intraday(symbol, interval)
         if result is not None:
             return result
-        logger.warning("_fetch_intraday: Zerodha returned None for %s %s — trying NSE fallback", symbol, interval)
+        msg = "fetch_intraday returned None"
+        logger.error("_fetch_intraday: Zerodha returned None for %s %s — skipping cycle", symbol, interval)
+        _log_err("fetch_intraday", msg, symbol=symbol, detail=interval)
     except Exception as e:
-        logger.warning("_fetch_intraday: Zerodha error (%s) — trying NSE fallback", e)
-
-    # ── 2. NSE India public API (official source, no volume for index) ─────
-    try:
-        from data.nse_fetcher import NseFetcher
-        result = NseFetcher.get().fetch_intraday(symbol, interval)
-        if result is not None:
-            logger.info("_fetch_intraday: using NSE India fallback for %s %s", symbol, interval)
-            return result
-        logger.error("_fetch_intraday: NSE fallback also returned None for %s %s — skipping cycle", symbol, interval)
-    except Exception as e:
-        logger.error("_fetch_intraday: NSE fallback error for %s %s: %s — skipping cycle", symbol, interval, e)
-
+        logger.error("_fetch_intraday: Zerodha error for %s %s: %s — skipping cycle", symbol, interval, e)
+        _log_err("fetch_intraday", str(e), symbol=symbol, detail=interval)
     return None
 
 

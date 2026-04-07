@@ -9,9 +9,10 @@ interface Props {
   connected: boolean;
   botStatus: string;
   onBotToggle: () => void;
+  errorCount?: number;
 }
 
-export default function Header({ mode, connected, botStatus, onBotToggle }: Props) {
+export default function Header({ mode, connected, botStatus, onBotToggle, errorCount = 0 }: Props) {
   const router = useRouter();
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -141,6 +142,18 @@ export default function Header({ mode, connected, botStatus, onBotToggle }: Prop
               <button onClick={() => { router.push("/journal"); setMenuOpen(false); }}
                 className="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2">
                 <span>📓</span> Journal
+              </button>
+              <button onClick={() => { router.push("/errors"); setMenuOpen(false); }}
+                className="w-full text-left px-4 py-2.5 text-sm hover:bg-red-50 flex items-center gap-2"
+                style={{ color: errorCount > 0 ? "#b91c1c" : "#374151" }}>
+                <span>⚠</span>
+                <span>Zerodha Errors</span>
+                {errorCount > 0 && (
+                  <span className="ml-auto text-xs font-bold px-1.5 py-0.5 rounded-full"
+                    style={{ background: "#fee2e2", color: "#b91c1c" }}>
+                    {errorCount}
+                  </span>
+                )}
               </button>
 
               <div className="border-t border-gray-100 mx-3 my-1" />

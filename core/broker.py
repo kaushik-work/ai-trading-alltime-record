@@ -17,16 +17,20 @@ class MockBroker:
         logger.info("Paper trading mode active. Virtual balance: ₹%.2f", self.balance)
 
     def get_quote(self, symbol: str) -> dict:
-        """Returns a mock quote — replace with real data feed in live mode."""
-        import random
-        base_prices = {
-            "RELIANCE": 2500, "TCS": 3800, "INFY": 1700,
-            "HDFCBANK": 1600, "ICICIBANK": 1100,
-            "NIFTY": 22000, "BANKNIFTY": 48000,
-        }
-        price = base_prices.get(symbol, 1000)
-        price += random.uniform(-price * 0.01, price * 0.01)
-        return {"symbol": symbol, "last_price": round(price, 2), "timestamp": now_ist().isoformat()}
+        """Fetch live quote from Zerodha even in paper mode — no mock prices."""
+        from data.zerodha_fetcher import ZerodhaFetcher
+        try:
+            ltp_data = ZerodhaFetcher.get()._broker.ltp([f"NSE:{symbol}"])
+            price = float(ltp_data.get(f"NSE:{symbol}", {}).get("last_price", 0))
+            if price > 0:
+                return {"symbol": symbol, "last_price": price, "timestamp": now_ist().isoformat()}
+            from core.zerodha_error_log import log_error as _log_err
+            _log_err("get_quote", "LTP returned 0", symbol=symbol)
+        except Exception as e:
+            logger.warning("MockBroker.get_quote: Zerodha LTP failed for %s: %s", symbol, e)
+            from core.zerodha_error_log import log_error as _log_err
+            _log_err("get_quote", str(e), symbol=symbol)
+        return {"symbol": symbol, "last_price": 0, "timestamp": now_ist().isoformat()}
 
     def place_order(self, symbol: str, side: str, quantity: int,
                     order_type: str = "MARKET", price: float = 0,
