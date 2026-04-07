@@ -12,7 +12,7 @@ class MockBroker:
     def __init__(self):
         self.positions = {}
         self.orders = []
-        self.balance = 100000.0  # virtual ₹1,00,000
+        self.balance = float(config.STARTING_BUDGET)
         self.pnl = 0.0
         logger.info("Paper trading mode active. Virtual balance: ₹%.2f", self.balance)
 
@@ -44,19 +44,23 @@ class MockBroker:
         self.orders.append(order)
 
         filled_price = order["price"]
-        cost = filled_price * quantity
 
         if side == "BUY":
-            if cost > self.balance:
+            # For options paper trading: cap cost at MAX_TRADE_AMOUNT (simulates premium outlay).
+            # Using spot price × quantity (≈₹4M notional) would always reject — options cost is premium only.
+            premium_cost = min(filled_price * quantity, float(config.MAX_TRADE_AMOUNT))
+            if premium_cost > self.balance:
                 order["status"] = "REJECTED"
-                logger.warning("Order rejected: insufficient balance for %s", symbol)
+                logger.warning("Order rejected: insufficient balance for %s (need ₹%.0f, have ₹%.0f)",
+                               symbol, premium_cost, self.balance)
                 return order
-            self.balance -= cost
-            self.positions[symbol] = self.positions.get(symbol, {"quantity": 0, "avg_price": 0})
+            self.balance -= premium_cost
+            self.positions[symbol] = self.positions.get(symbol, {"quantity": 0, "avg_price": 0, "premium_cost": 0})
             pos = self.positions[symbol]
             total_qty = pos["quantity"] + quantity
-            pos["avg_price"] = ((pos["avg_price"] * pos["quantity"]) + cost) / total_qty
+            pos["avg_price"] = ((pos["avg_price"] * pos["quantity"]) + filled_price * quantity) / total_qty
             pos["quantity"] = total_qty
+            pos["premium_cost"] = pos.get("premium_cost", 0) + premium_cost
 
         elif side == "SELL":
             pos = self.positions.get(symbol)
@@ -64,12 +68,16 @@ class MockBroker:
                 order["status"] = "REJECTED"
                 logger.warning("Order rejected: insufficient position for %s", symbol)
                 return order
-            self.balance += cost
             pnl = (filled_price - pos["avg_price"]) * quantity
             self.pnl += pnl
+            # Restore the original premium paid, adjusted for partial closes
+            close_ratio = quantity / pos["quantity"]
+            returned_premium = pos.get("premium_cost", 0) * close_ratio
+            self.balance += returned_premium + pnl
             order["pnl"] = round(pnl, 2)
             order["avg_buy_price"] = pos["avg_price"]
             pos["quantity"] -= quantity
+            pos["premium_cost"] = pos.get("premium_cost", 0) - returned_premium
             if pos["quantity"] == 0:
                 del self.positions[symbol]
 
