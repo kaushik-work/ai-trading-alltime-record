@@ -216,8 +216,12 @@ class RealMarketData:
             v5 = df_5m["Volume"].astype(float)
 
             typical = (h5 + l5 + c5) / 3
-            cum_vol = v5.cumsum().replace(0, 1)
-            vwap = float((typical * v5).cumsum().iloc[-1] / cum_vol.iloc[-1])
+            if v5.sum() > 0:
+                cum_vol = v5.cumsum().replace(0, 1)
+                vwap = float((typical * v5).cumsum().iloc[-1] / cum_vol.iloc[-1])
+            else:
+                # NIFTY index has no volume — use equal-weighted average of typical price
+                vwap = float(typical.mean())
             result["vwap"]       = round(vwap, 2)
             result["price"]      = round(float(c5.iloc[-1]), 2)
             result["above_vwap"] = result["price"] > vwap

@@ -5,6 +5,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import asyncio
 import json
 import logging
+import math
 
 logging.basicConfig(
     level=logging.INFO,
@@ -558,6 +559,24 @@ def run_backtest(body: dict, user: str = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ── Safe JSON serializer (handles numpy floats, NaN, Inf) ─────────────────────
+
+def _safe_json(obj) -> str:
+    """JSON serializer that handles numpy types and non-finite floats."""
+    def default(o):
+        try:
+            import numpy as np
+            if isinstance(o, (np.integer,)):  return int(o)
+            if isinstance(o, (np.floating,)): return None if (math.isnan(float(o)) or math.isinf(float(o))) else float(o)
+            if isinstance(o, np.ndarray):     return o.tolist()
+        except ImportError:
+            pass
+        if isinstance(o, float) and (math.isnan(o) or math.isinf(o)):
+            return None
+        raise TypeError(f"Object of type {type(o)} is not JSON serializable")
+    return json.dumps(obj, default=default)
+
+
 # ── WebSocket ─────────────────────────────────────────────────────────────────
 
 @app.websocket("/ws")
@@ -565,13 +584,14 @@ async def websocket_endpoint(ws: WebSocket):
     await manager.connect(ws)
     try:
         # Send initial snapshot immediately on connect
-        await ws.send_text(json.dumps(_build_snapshot()))
+        await ws.send_text(_safe_json(_build_snapshot()))
         while True:
             await asyncio.sleep(5)
-            await ws.send_text(json.dumps(_build_snapshot()))
+            await ws.send_text(_safe_json(_build_snapshot()))
     except WebSocketDisconnect:
         manager.disconnect(ws)
-    except Exception:
+    except Exception as e:
+        logger.error("WebSocket error (disconnecting): %s", e)
         manager.disconnect(ws)
 
 

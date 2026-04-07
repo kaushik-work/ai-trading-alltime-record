@@ -61,7 +61,7 @@ Counter-trend trades (against EMA50) have already been filtered before reaching 
 ═══════════════════════════════════════════════════════════
 Available intraday intervals: 1m, 3m, 5m, 10m, 15m, 30m, 60m, day
 Data retention: ~60 days for intraday (3m/5m/15m). Daily bars: years.
-All data is real NSE data with correct volume — no synthetic/adjusted prices.
+All data is real NSE data. IMPORTANT: NIFTY is an index — Zerodha returns volume=0 for all index candles. This is EXPECTED and NOT a data error. Do not reject trades solely because volume=0. Use price action, VWAP (equal-weighted), ORB, and structure instead of volume confirmation for NIFTY.
 Access token expires midnight IST — regenerated daily via scripts/get_token.py.
 
 ═══════════════════════════════════════════════════════════
