@@ -11,6 +11,7 @@ logging.basicConfig(
     format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
     stream=sys.stdout,
 )
+logger = logging.getLogger(__name__)
 from contextlib import asynccontextmanager
 from datetime import datetime
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException
@@ -285,12 +286,43 @@ def _get_token_status() -> dict:
             result = {"live": True, "set_at": set_at}
         else:
             result = {"live": False, "set_at": None}
-    except Exception:
+    except Exception as e:
+        logger.error("Token liveness check failed: %s", e, exc_info=True)
         result = {"live": False, "set_at": None}
     _token_cache["result"] = result
     # Only cache live=True for the full TTL; expired token retries after 30s
     _token_cache["checked_at"] = now if result["live"] else now - _TOKEN_CACHE_TTL + 30
     return result
+
+
+@app.post("/api/token/refresh")
+def token_refresh(user: str = Depends(get_current_user)):
+    """Force-clear the token cache and ZerodhaFetcher state, then re-check liveness."""
+    import traceback
+    # Clear server-level cache
+    _token_cache["result"] = None
+    _token_cache["checked_at"] = 0.0
+    # Reset ZerodhaFetcher so it re-reads .env from scratch
+    try:
+        from data.zerodha_fetcher import ZerodhaFetcher
+        inst = ZerodhaFetcher.get()
+        with inst._lock:
+            inst._broker = None
+            inst._login_date = None
+            inst._failed_date = None
+            inst._token_used = ""
+        # Now attempt login + profile check and capture any error
+        error = None
+        try:
+            live = inst.is_token_live()
+        except Exception as e:
+            live = False
+            error = traceback.format_exc()
+    except Exception as e:
+        live = False
+        error = traceback.format_exc()
+    status = _get_token_status()
+    return {"live": live, "token_status": status, "error": error}
 
 
 @app.get("/api/bot/debug")
