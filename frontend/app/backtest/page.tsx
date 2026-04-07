@@ -39,15 +39,15 @@ export default function BacktestPage() {
 
   const { data: wsData, connected } = useWebSocket(WS_URL);
 
-  const [strategy,  setStrategy]  = useState("Musashi");
+  const [strategy,  setStrategy]  = useState("ATR Intraday");
   const [symbol,    setSymbol]    = useState("NIFTY");
-  const [interval,  setInterval]  = useState("15m");
+  const [interval,  setInterval]  = useState("5m");
   const [period,    setPeriod]    = useState("60d");
-  const [capital,   setCapital]   = useState(20000);
-  const [minScore,  setMinScore]  = useState(7);
-  const [riskPct,   setRiskPct]   = useState(4.0);
-  const [dailyLoss, setDailyLoss] = useState(8.0);
-  const [rrRatio,   setRrRatio]   = useState(2.0);
+  const [capital,   setCapital]   = useState(125000);
+  const [minScore,  setMinScore]  = useState(6);
+  const [riskPct,   setRiskPct]   = useState(2.0);
+  const [dailyLoss, setDailyLoss] = useState(5.0);
+  const [rrRatio,   setRrRatio]   = useState(2.5);
 
   // Trade log filters
   const [filterExit,   setFilterExit]   = useState("All");
@@ -105,12 +105,13 @@ export default function BacktestPage() {
               <select value={strategy} onChange={e => {
                 const s = e.target.value;
                 setStrategy(s);
-                if (s === "Musashi" || s === "ATR Intraday") setInterval("15m");
-                if (s === "Raijin") setInterval("5m");
+                setInterval(s === "Fib-OF" ? "15m" : "5m");
+                setMinScore(s === "C-ICT" ? 2 : 6);
+                setRrRatio(s === "Fib-OF" ? 3.0 : 2.5);
               }} className="aq-input">
-                <option>Musashi</option>
-                <option>Raijin</option>
                 <option>ATR Intraday</option>
+                <option>C-ICT</option>
+                <option>Fib-OF</option>
               </select>
             </div>
             <div>
@@ -122,7 +123,6 @@ export default function BacktestPage() {
             <div>
               <label className="text-xs text-gray-500 uppercase tracking-widest font-semibold mb-1.5 block">Timeframe</label>
               <select value={interval} onChange={e => setInterval(e.target.value)} className="aq-input">
-                <option value="2m">2 min</option>
                 <option value="5m">5 min</option>
                 <option value="15m">15 min</option>
               </select>
@@ -131,8 +131,8 @@ export default function BacktestPage() {
               <label className="text-xs text-gray-500 uppercase tracking-widest font-semibold mb-1.5 block">Period</label>
               <select value={period} onChange={e => setPeriod(e.target.value)} className="aq-input">
                 <option value="30d">30 Days</option>
-                <option value="45d">45 Days</option>
                 <option value="60d">60 Days</option>
+                <option value="90d">90 Days</option>
               </select>
             </div>
             <div>
@@ -147,9 +147,12 @@ export default function BacktestPage() {
               <label className="text-xs text-gray-500 uppercase tracking-widest font-semibold mb-1.5 block">
                 Min Signal Score: <span className="text-indigo-600">{minScore}</span>
               </label>
-              <input type="range" min={5} max={9} value={minScore} onChange={e => setMinScore(Number(e.target.value))}
+              <input type="range" min={strategy === "C-ICT" ? 1 : 4} max={strategy === "C-ICT" ? 4 : 9}
+                     value={minScore} onChange={e => setMinScore(Number(e.target.value))}
                      className="w-full accent-indigo-600" />
-              <div className="flex justify-between text-xs text-gray-400 mt-0.5"><span>5</span><span>9</span></div>
+              <div className="flex justify-between text-xs text-gray-400 mt-0.5">
+                <span>{strategy === "C-ICT" ? 1 : 4}</span><span>{strategy === "C-ICT" ? 4 : 9}</span>
+              </div>
             </div>
             <div>
               <label className="text-xs text-gray-500 uppercase tracking-widest font-semibold mb-1.5 block">
