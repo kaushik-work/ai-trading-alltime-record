@@ -18,7 +18,13 @@ AishDoc rules enforced here:
 """
 import logging
 from datetime import datetime, time as dtime
+from zoneinfo import ZoneInfo
 from typing import Optional
+
+_IST = ZoneInfo("Asia/Kolkata")
+
+def _now_ist() -> datetime:
+    return datetime.now(_IST)
 import config
 from core import ipc
 from core.broker import get_broker
@@ -75,21 +81,21 @@ class TrendStrategy:
 
     def _in_trading_window(self) -> bool:
         """AishDoc: only trade between INTRADAY_START and INTRADAY_EXIT_BY."""
-        now = datetime.now().time().replace(second=0, microsecond=0)
+        now = _now_ist().time().replace(second=0, microsecond=0)
         start = _parse_time(config.INTRADAY_START)
         end   = _parse_time(config.INTRADAY_EXIT_BY)
         return start <= now <= end
 
     def _in_lunch_skip(self) -> bool:
         """True during the NSE lunch chop window (12:30–13:30 IST). No new entries."""
-        now   = datetime.now().time().replace(second=0, microsecond=0)
+        now   = _now_ist().time().replace(second=0, microsecond=0)
         start = _parse_time(config.LUNCH_SKIP_START)
         end   = _parse_time(config.LUNCH_SKIP_END)
         return start <= now <= end
 
     def _must_square_off(self) -> bool:
         """True if we're past the square-off deadline."""
-        now = datetime.now().time().replace(second=0, microsecond=0)
+        now = _now_ist().time().replace(second=0, microsecond=0)
         return now >= _parse_time(config.INTRADAY_EXIT_BY)
 
     # ── Position sizing (budget-aware) ─────────────────────────────────────────
