@@ -17,6 +17,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from fastapi.security import OAuth2PasswordRequestForm
 
 import config
@@ -223,7 +224,7 @@ def login(form: OAuth2PasswordRequestForm = Depends()):
 
 @app.get("/api/snapshot")
 def snapshot(user: str = Depends(get_current_user)):
-    return _build_snapshot()
+    return Response(content=_safe_json(_build_snapshot()), media_type="application/json")
 
 @app.get("/api/pnl")
 def pnl_report(start: str = None, end: str = None, user: str = Depends(get_current_user)):
@@ -390,7 +391,7 @@ def bot_debug(user: str = Depends(get_current_user)):
             except Exception as e:
                 result["strategies"][strat_name] = {"error": str(e)}
 
-    return result
+    return Response(content=_safe_json(result), media_type="application/json")
 
 @app.get("/api/bot/bias")
 def get_bias(user: str = Depends(get_current_user)):
