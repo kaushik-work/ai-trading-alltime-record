@@ -317,8 +317,9 @@ class TrendStrategy:
             decision["signals"] = scored["signals"]
             return self._execute(decision, indicators)
 
-        logger.info("Claude vetoed entry for %s (action=%s conf=%.0f%%)",
-                    symbol, decision["action"], decision.get("confidence", 0) * 100)
+        logger.info("Claude vetoed entry for %s (action=%s conf=%.0f%%) — %s",
+                    symbol, decision["action"], decision.get("confidence", 0) * 100,
+                    decision.get("reasoning", "no reason given")[:200])
         return None
 
     # ── Force exit (SL / square-off) ──────────────────────────────────────────
