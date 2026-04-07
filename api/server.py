@@ -566,9 +566,10 @@ def _safe_json(obj) -> str:
     def default(o):
         try:
             import numpy as np
-            if isinstance(o, (np.integer,)):  return int(o)
-            if isinstance(o, (np.floating,)): return None if (math.isnan(float(o)) or math.isinf(float(o))) else float(o)
-            if isinstance(o, np.ndarray):     return o.tolist()
+            if isinstance(o, np.bool_):    return bool(o)
+            if isinstance(o, np.integer):  return int(o)
+            if isinstance(o, np.floating): return None if (math.isnan(float(o)) or math.isinf(float(o))) else float(o)
+            if isinstance(o, np.ndarray):  return o.tolist()
         except ImportError:
             pass
         if isinstance(o, float) and (math.isnan(o) or math.isinf(o)):
