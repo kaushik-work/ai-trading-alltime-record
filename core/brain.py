@@ -285,6 +285,11 @@ class TradingBrain:
                 messages=[{"role": "user", "content": prompt}],
             )
             raw = response.content[0].text.strip()
+            if raw.startswith("```"):
+                raw = raw.split("```")[1]
+                if raw.startswith("json"):
+                    raw = raw[4:]
+                raw = raw.strip()
             decision = json.loads(raw)
             logger.info("Brain decision for %s: %s (confidence: %.0f%%)", symbol, decision["action"], decision["confidence"] * 100)
             return decision
