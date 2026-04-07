@@ -138,6 +138,30 @@ class TradeMemory:
                 UPDATE trades SET pnl = ?, closed_at = ? WHERE order_id = ?
             """, (pnl, now_ist().isoformat(), order_id))
 
+    def close_latest_open_trade(self, symbol: str, strategy: str, pnl: float):
+        """Mark the most recent open BUY row as closed for a completed exit."""
+        with get_connection() as conn:
+            conn.execute("""
+                UPDATE trades
+                SET pnl = ?, closed_at = ?
+                WHERE id = (
+                    SELECT id FROM trades
+                    WHERE symbol = ? AND strategy = ? AND side = 'BUY' AND closed_at IS NULL
+                    ORDER BY timestamp DESC
+                    LIMIT 1
+                )
+            """, (pnl, now_ist().isoformat(), symbol, strategy))
+
+    def has_open_trade(self, symbol: str, strategy: str) -> bool:
+        """Return True when this strategy has an unclosed BUY for symbol."""
+        with get_connection() as conn:
+            row = conn.execute("""
+                SELECT 1 FROM trades
+                WHERE symbol = ? AND strategy = ? AND side = 'BUY' AND closed_at IS NULL
+                LIMIT 1
+            """, (symbol, strategy)).fetchone()
+        return row is not None
+
     def get_trades_for_symbol(self, symbol: str, limit: int = 20) -> list:
         """Get recent trades for a symbol — used as context for Claude."""
         with get_connection() as conn:

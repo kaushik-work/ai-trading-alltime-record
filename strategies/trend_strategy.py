@@ -17,6 +17,7 @@ AishDoc rules enforced here:
   8. Target 1:2 R:R minimum (SL 1.5% → TP 3%)
 """
 import logging
+import re
 from datetime import datetime, time as dtime
 from typing import Optional
 from core.utils import now_ist as _now_ist, today_ist
@@ -53,6 +54,11 @@ class TrendStrategy:
         self.memory = TradeMemory()
         self.records = RecordTracker()
         self.market = get_market_data(self.broker if not config.IS_PAPER else None)
+        self.stop_loss_pct = config.STOP_LOSS_PCT
+        self.take_profit_pct = (
+            config.STOP_LOSS_PCT * getattr(config, "FIB_OF_RR_RATIO", 3.0)
+            if score_mode == "fib_of_only" else config.TAKE_PROFIT_PCT
+        )
         self.paused = False
         logger.info(
             "TrendStrategy[%s] initialized | score_mode=%s | Trading: %s | Phase: %s | Budget: ₹%s",
@@ -161,6 +167,10 @@ class TrendStrategy:
         if current_price == 0:
             return None
 
+        forced = self._consume_force_trade(symbol, indicators)
+        if forced:
+            return forced
+
         intraday = {}
         if isinstance(self.market, RealMarketData):
             intraday = self.market.get_intraday_indicators(symbol)
@@ -183,10 +193,10 @@ class TrendStrategy:
         )
 
         # ── Check open position first ──────────────────────────────────────────
-        positions = self.broker.get_positions()
-        if symbol in positions:
+        position = self._find_open_option_position(symbol)
+        if position:
             return self._manage_position(
-                symbol, positions[symbol], current_price,
+                symbol, position, current_price,
                 indicators, intraday, scored, portfolio
             )
 
@@ -216,38 +226,47 @@ class TrendStrategy:
     def _manage_position(self, symbol: str, position: dict, current_price: float,
                           indicators: dict, intraday: dict, scored: dict,
                           portfolio: dict) -> Optional[dict]:
-        avg_price = position.get("avg_price", current_price)
+        avg_price = position.get("avg_price", position.get("average_price", current_price))
         quantity  = position.get("quantity", 0)
-        pnl_pct   = ((current_price - avg_price) / avg_price) * 100 if avg_price else 0
+        option_price = current_price
+        option_type = position.get("option_type", "CE")
+        strike = position.get("atm_strike") or position.get("strike")
+        if strike:
+            _, _, live_ltp = self._get_option_ltp(symbol, option_type, current_price, strike=int(strike))
+            if live_ltp:
+                option_price = live_ltp
+        pnl_pct = ((option_price - avg_price) / avg_price) * 100 if avg_price else 0
 
         logger.info("Position %s | qty=%d avg=₹%.2f now=₹%.2f pnl=%.2f%%",
-                    symbol, quantity, avg_price, current_price, pnl_pct)
+                    position.get("symbol", symbol), quantity, avg_price, option_price, pnl_pct)
 
         # ① Mandatory EOD square-off — no questions asked
         if self._must_square_off():
             logger.warning("SQUARE-OFF TIME: closing %s intraday position.", symbol)
             return self._force_exit(symbol, quantity, indicators,
-                                    f"Mandatory intraday square-off at {config.INTRADAY_EXIT_BY}")
+                                    f"Mandatory intraday square-off at {config.INTRADAY_EXIT_BY}",
+                                    position=position)
 
         # ② ATR-based stop-loss — dynamic, adapts to volatility
         # Use intraday ATR SL level if available, else fall back to fixed %
-        atr_sl_price = intraday.get("atr_sl") if intraday else None
+        atr_sl_price = None  # Option premium positions must not compare against underlying ATR levels.
         if atr_sl_price and current_price <= atr_sl_price:
             logger.warning("ATR STOP-LOSS: %s price ₹%.2f ≤ ATR-SL ₹%.2f — exiting",
                            symbol, current_price, atr_sl_price)
             return self._force_exit(symbol, quantity, indicators,
                                     f"ATR stop-loss hit: price ₹{current_price:.2f} ≤ ATR-SL ₹{atr_sl_price:.2f}")
-        elif pnl_pct <= -config.STOP_LOSS_PCT:
+        elif pnl_pct <= -self.stop_loss_pct:
             logger.warning("STOP-LOSS: %s %.2f%% — exiting", symbol, pnl_pct)
             return self._force_exit(symbol, quantity, indicators,
-                                    f"Stop-loss hit at {pnl_pct:.2f}% (threshold -{config.STOP_LOSS_PCT}%)")
+                                    f"Stop-loss hit at {pnl_pct:.2f}% (threshold -{self.stop_loss_pct}%)",
+                                    position=position)
 
         # ③ VWAP flip — AishDoc: if price crosses below VWAP, exit long
         if intraday.get("above_vwap") is False and scored["action"] == "SELL":
             logger.info("VWAP flip bearish for %s — asking Claude to exit", symbol)
 
         # ④ Score strongly bearish OR take-profit hit → ask Claude
-        should_review = scored["action"] == "SELL" or pnl_pct >= config.TAKE_PROFIT_PCT
+        should_review = scored["action"] == "SELL" or pnl_pct >= self.take_profit_pct
         if should_review:
             trade_history = self.memory.get_trades_for_symbol(symbol)
             enriched = {
@@ -255,9 +274,9 @@ class TrendStrategy:
                 "open_position": {
                     "quantity": quantity,
                     "avg_buy_price": avg_price,
-                    "current_price": current_price,
+                    "current_price": option_price,
                     "unrealized_pnl_pct": round(pnl_pct, 2),
-                    "unrealized_pnl_inr": round((current_price - avg_price) * quantity, 2),
+                    "unrealized_pnl_inr": round((option_price - avg_price) * quantity, 2),
                 },
                 "signal_score": scored["score"],
                 "signals": scored["signals"],
@@ -268,6 +287,7 @@ class TrendStrategy:
             decision = self.brain.analyze(symbol, enriched, trade_history, portfolio)
             if decision["action"] == "SELL" and decision.get("confidence", 0) >= 0.55:
                 decision["quantity"] = quantity
+                decision["_position"] = position
                 return self._execute(decision, indicators)
 
         return None
@@ -300,8 +320,8 @@ class TrendStrategy:
             "trading_phase": config.TRADING_PHASE,
             "budget": portfolio.get("balance", config.STARTING_BUDGET),
             "risk_per_trade_pct": config.RISK_PER_TRADE_PCT,
-            "stop_loss_pct": config.STOP_LOSS_PCT,
-            "take_profit_pct": config.TAKE_PROFIT_PCT,
+            "stop_loss_pct": self.stop_loss_pct,
+            "take_profit_pct": self.take_profit_pct,
             "must_exit_by": config.INTRADAY_EXIT_BY,
             "lot_size": config.LOT_SIZES.get(symbol, 1),
             "day_bias": ipc.read_day_bias(),
@@ -320,12 +340,16 @@ class TrendStrategy:
                 "risk_level": "MEDIUM",
             }
 
-        if decision["action"] == "BUY" and decision.get("confidence", 0) >= 0.55:
+        if decision["action"] in ("BUY", "SELL") and decision.get("confidence", 0) >= 0.55:
+            entry_direction = decision["action"]
             # ATR-based position sizing — uses intraday ATR if available, else daily ATR
             atr = intraday.get("atr_5m") or indicators.get("atr_14", 0)
             decision["quantity"] = self._calc_quantity(symbol, current_price, atr)
             decision["score"] = scored["score"]
             decision["signals"] = scored["signals"]
+            decision["entry_direction"] = entry_direction
+            decision["option_type"] = "CE" if entry_direction == "BUY" else "PE"
+            decision["action"] = "BUY"
             return self._execute(decision, indicators)
 
         logger.info("Claude vetoed entry for %s (action=%s conf=%.0f%%) — %s",
@@ -336,35 +360,38 @@ class TrendStrategy:
     # ── Force exit (SL / square-off) ──────────────────────────────────────────
 
     def _force_exit(self, symbol: str, quantity: int, indicators: dict,
-                    reason: str) -> dict:
+                    reason: str, position: dict = None) -> dict:
         decision = {
             "action": "SELL", "symbol": symbol, "quantity": quantity,
             "confidence": 1.0, "reasoning": reason, "risk_level": "HIGH",
         }
+        if position:
+            decision["_position"] = position
         return self._execute(decision, indicators)
 
     # ── Order execution ────────────────────────────────────────────────────────
 
-    def _get_option_ltp(self, symbol: str, option_type: str, current_price: float) -> tuple[int, float | None]:
+    def _get_option_ltp(self, symbol: str, option_type: str, current_price: float,
+                        strike: int = None) -> tuple[str | None, int, float | None]:
         """Fetch real ATM option LTP from Zerodha. Returns (atm_strike, ltp) or (atm_strike, None) on failure.
         Caller must abort the trade if ltp is None — never use a made-up fallback price.
         """
-        atm_strike = int(round(current_price / 50) * 50)
+        atm_strike = int(strike or round(current_price / 50) * 50)
         try:
             from data.zerodha_fetcher import ZerodhaFetcher
             expiry = ZerodhaFetcher.nearest_weekly_expiry()
-            _, ltp = ZerodhaFetcher.get().get_option_ltp(symbol, atm_strike, option_type, expiry)
+            tradingsymbol, ltp = ZerodhaFetcher.get().get_option_ltp(symbol, atm_strike, option_type, expiry)
             if ltp and ltp > 0:
                 logger.info("Option LTP: %s %d%s @ ₹%.2f (expiry %s)",
                             symbol, atm_strike, option_type, ltp, expiry)
-                return atm_strike, ltp
+                return tradingsymbol, atm_strike, ltp
         except Exception as e:
             logger.warning("Option LTP fetch failed for %s %d%s: %s", symbol, atm_strike, option_type, e)
         msg = f"Option LTP unavailable for {symbol} {atm_strike}{option_type}"
         logger.error(msg + " — skipping trade")
         from core.zerodha_error_log import log_error as _log_err
         _log_err("get_option_ltp", msg, symbol=symbol, detail=f"{atm_strike}{option_type}")
-        return atm_strike, None
+        return None, atm_strike, None
 
     def _execute(self, decision: dict, indicators: dict) -> dict:
         symbol        = decision["symbol"]
@@ -374,29 +401,46 @@ class TrendStrategy:
         atm_strike    = int(round(current_price / 50) * 50)
 
         if side == "BUY":
-            option_type = "CE"
-            atm_strike, option_ltp = self._get_option_ltp(symbol, option_type, current_price)
+            option_type = decision.get("option_type") or ("CE" if decision.get("entry_direction", "BUY") == "BUY" else "PE")
+            option_symbol, atm_strike, option_ltp = self._get_option_ltp(
+                symbol, option_type, current_price, strike=decision.get("strike")
+            )
             if option_ltp is None:
                 return {"status": "SKIPPED", "reason": "option LTP unavailable"}
-            order = self.broker.place_order(symbol, side, quantity, price=option_ltp)
+            order = self.broker.place_order(option_symbol, side, quantity, price=option_ltp)
+            order["price"] = option_ltp
+            order["timestamp"] = order.get("timestamp") or _now_ist().isoformat()
             # Persist option metadata in broker position for accurate exit pricing
-            if symbol in self.broker.positions:
-                self.broker.positions[symbol]["option_type"] = option_type
-                self.broker.positions[symbol]["atm_strike"]  = atm_strike
+            if hasattr(self.broker, "positions") and option_symbol in self.broker.positions:
+                self.broker.positions[option_symbol]["symbol"] = option_symbol
+                self.broker.positions[option_symbol]["underlying"] = symbol
+                self.broker.positions[option_symbol]["option_type"] = option_type
+                self.broker.positions[option_symbol]["atm_strike"]  = atm_strike
         else:
-            pos         = self.broker.get_positions().get(symbol, {})
+            pos         = decision.get("_position") or self._find_open_option_position(symbol) or {}
             option_type = pos.get("option_type", "CE")
-            atm_strike  = pos.get("atm_strike", atm_strike)
-            _, exit_ltp = self._get_option_ltp(symbol, option_type, current_price)
+            atm_strike  = pos.get("atm_strike") or pos.get("strike") or atm_strike
+            option_symbol = pos.get("symbol") or symbol
+            _, _, exit_ltp = self._get_option_ltp(
+                pos.get("underlying", symbol), option_type, current_price, strike=int(atm_strike)
+            )
             if exit_ltp is None:
                 return {"status": "SKIPPED", "reason": "option LTP unavailable at exit"}
-            order = self.broker.place_order(symbol, side, quantity, price=exit_ltp)
+            order = self.broker.place_order(option_symbol, side, quantity, price=exit_ltp)
+            order["price"] = exit_ltp
+            order["timestamp"] = order.get("timestamp") or _now_ist().isoformat()
 
         if order.get("status") in ("COMPLETE", "PLACED"):
             order["option_type"] = option_type
             order["strike"]      = atm_strike
             order["strategy"]    = self.strategy_name
             self.memory.log_trade(order, decision)
+            if side == "SELL":
+                self.memory.close_latest_open_trade(
+                    order.get("symbol"),
+                    self.strategy_name,
+                    float(order.get("pnl") or 0),
+                )
             broken = self.records.check_trade(order)
             if broken:
                 logger.info("ALL-TIME RECORD BROKEN: %s", broken)
@@ -404,6 +448,66 @@ class TrendStrategy:
         return order
 
     # ── Helpers ───────────────────────────────────────────────────────────────
+
+    def _parse_option_meta(self, tradingsymbol: str, underlying: str) -> dict:
+        option_type = "PE" if tradingsymbol.endswith("PE") else "CE"
+        strike = None
+        match = re.search(r"(\d{5})(CE|PE)$", tradingsymbol)
+        if match:
+            strike = int(match.group(1))
+        return {"symbol": tradingsymbol, "underlying": underlying,
+                "option_type": option_type, "atm_strike": strike}
+
+    def _find_open_option_position(self, underlying: str) -> Optional[dict]:
+        positions = self.broker.get_positions()
+        legacy = positions.get(underlying)
+        if legacy and legacy.get("quantity", 0) > 0 and self.memory.has_open_trade(underlying, self.strategy_name):
+            return {**legacy, "symbol": underlying, "underlying": underlying}
+
+        for key, raw in positions.items():
+            tradingsymbol = raw.get("tradingsymbol") or raw.get("symbol") or key
+            qty = raw.get("quantity", raw.get("net_quantity", 0)) or 0
+            if qty <= 0 or not tradingsymbol.startswith(underlying) or not tradingsymbol.endswith(("CE", "PE")):
+                continue
+            if not self.memory.has_open_trade(tradingsymbol, self.strategy_name):
+                continue
+            avg_price = raw.get("avg_price", raw.get("average_price", raw.get("buy_price", 0)))
+            return {**raw, **self._parse_option_meta(tradingsymbol, underlying),
+                    "quantity": qty, "avg_price": avg_price}
+        return None
+
+    def _consume_force_trade(self, symbol: str, indicators: dict) -> Optional[dict]:
+        forced = ipc.read_and_clear_force_trade()
+        if not forced:
+            return None
+        if forced.get("symbol", symbol) != symbol:
+            logger.warning("[%s] Ignoring force trade for unsupported symbol: %s", self.strategy_name, forced)
+            return None
+
+        side = str(forced.get("side", "BUY")).upper()
+        open_pos = self._find_open_option_position(symbol)
+        if side == "SELL" and open_pos:
+            return self._force_exit(
+                symbol,
+                int(forced.get("quantity") or open_pos.get("quantity", 1)),
+                indicators,
+                forced.get("reason", "Manual force exit"),
+                position=open_pos,
+            )
+
+        decision = {
+            "action": "BUY",
+            "symbol": symbol,
+            "quantity": int(forced.get("quantity", 1)),
+            "confidence": 1.0,
+            "reasoning": forced.get("reason", "Manual force trade"),
+            "risk_level": "HIGH",
+            "entry_direction": side,
+            "option_type": forced.get("option_type") or ("PE" if side == "SELL" else "CE"),
+        }
+        if forced.get("strike"):
+            decision["strike"] = int(forced["strike"])
+        return self._execute(decision, indicators)
 
     def _get_patterns(self, symbol: str) -> dict:
         try:
@@ -426,10 +530,15 @@ class TrendStrategy:
             if qty > 0:
                 logger.warning("Square-off: closing %d %s", qty, symbol)
                 try:
-                    indicators = self.market.get_indicators(symbol)
+                    underlying = pos.get("underlying") or ("NIFTY" if str(symbol).startswith("NIFTY") else symbol)
+                    if not self.memory.has_open_trade(str(symbol), self.strategy_name):
+                        continue
+                    normalized = {**self._parse_option_meta(str(symbol), underlying), **pos}
+                    indicators = self.market.get_indicators(underlying)
                     result = self._force_exit(
-                        symbol, qty, indicators,
-                        f"EOD intraday square-off at {config.INTRADAY_EXIT_BY}"
+                        underlying, qty, indicators,
+                        f"EOD intraday square-off at {config.INTRADAY_EXIT_BY}",
+                        position=normalized,
                     )
                     results[symbol] = result
                 except Exception as e:

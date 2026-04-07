@@ -20,6 +20,128 @@ import config
 logger = logging.getLogger(__name__)
 
 
+def _score_fib_of(indicators: dict, intraday: dict = None, df_5m=None) -> tuple[int, list, dict, dict]:
+    """15m Fibonacci pullback + 15m confirmation + 5m order-flow filter."""
+    if df_5m is None or len(df_5m) < 60:
+        return 0, ["Fib-OF: insufficient 5m history"], {"fib_of": 0}, {}
+
+    import pandas as pd
+
+    df = df_5m.copy()
+    if "Date" in df.columns:
+        df = df.set_index("Date")
+    df.index = pd.to_datetime(df.index)
+    needed = ["Open", "High", "Low", "Close", "Volume"]
+    if not all(c in df.columns for c in needed):
+        return 0, ["Fib-OF: missing OHLCV columns"], {"fib_of": 0}, {}
+
+    day = df.index[-1].date()
+    df = df[df.index.date == day]
+    if len(df) < 60:
+        return 0, ["Fib-OF: insufficient intraday bars"], {"fib_of": 0}, {}
+
+    df_15 = df[needed].resample("15min", label="right", closed="right").agg({
+        "Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum",
+    }).dropna()
+    if len(df_15) < 20:
+        return 0, ["Fib-OF: insufficient 15m bars"], {"fib_of": 0}, {}
+
+    close = df_15["Close"].astype(float)
+    ema9 = float(close.ewm(span=9, adjust=False).mean().iloc[-1])
+    sma20 = float(close.rolling(20).mean().iloc[-1])
+    trend = "up" if ema9 > sma20 else "down" if ema9 < sma20 else "none"
+    if trend == "none":
+        return 0, ["Fib-OF: flat 15m trend"], {"fib_trend": 0}, {}
+
+    recent = df_15.tail(16)
+    price = intraday.get("price", indicators.get("price", float(close.iloc[-1]))) if intraday else indicators.get("price", float(close.iloc[-1]))
+    score = 0
+    signals = []
+    breakdown = {}
+
+    setup = None
+    if trend == "up":
+        low_ts = recent["Low"].idxmin()
+        after_low = recent.loc[low_ts:]
+        high_ts = after_low["High"].idxmax()
+        swing_low = float(recent.loc[low_ts, "Low"])
+        swing_high = float(after_low.loc[high_ts, "High"])
+        diff = swing_high - swing_low
+        if diff > 0 and low_ts < high_ts:
+            zone_low = swing_high - diff * 0.618
+            zone_high = swing_high - diff * 0.382
+            if zone_low <= price <= zone_high:
+                setup = ("BUY", swing_low, swing_high, zone_low, zone_high)
+    else:
+        high_ts = recent["High"].idxmax()
+        after_high = recent.loc[high_ts:]
+        low_ts = after_high["Low"].idxmin()
+        swing_high = float(recent.loc[high_ts, "High"])
+        swing_low = float(after_high.loc[low_ts, "Low"])
+        diff = swing_high - swing_low
+        if diff > 0 and high_ts < low_ts:
+            zone_low = swing_low + diff * 0.382
+            zone_high = swing_low + diff * 0.618
+            if zone_low <= price <= zone_high:
+                setup = ("SELL", swing_low, swing_high, zone_low, zone_high)
+
+    if not setup:
+        return 0, [f"Fib-OF: no 15m fib-zone pullback ({trend})"], {"fib_zone": 0}, {}
+
+    side, swing_low, swing_high, zone_low, zone_high = setup
+    directional = 1 if side == "BUY" else -1
+    score += directional * 6
+    breakdown["fib_trend"] = directional * 2
+    breakdown["fib_impulse"] = directional * 2
+    breakdown["fib_zone"] = directional * 2
+    signals.append(f"Fib-OF {side}: 15m trend + fib zone {zone_low:.0f}-{zone_high:.0f}")
+
+    if len(df_15) >= 2:
+        prev = df_15.iloc[-2]
+        curr = df_15.iloc[-1]
+        rng = max(float(curr["High"] - curr["Low"]), 1e-9)
+        close_pos = (float(curr["Close"]) - float(curr["Low"])) / rng
+        confirmed = (
+            (side == "BUY" and (float(curr["Close"]) > float(prev["High"]) or (close_pos >= 0.7 and curr["Close"] > curr["Open"])))
+            or (side == "SELL" and (float(curr["Close"]) < float(prev["Low"]) or (close_pos <= 0.3 and curr["Close"] < curr["Open"])))
+        )
+        if confirmed:
+            score += directional * 2
+            breakdown["fib_confirm"] = directional * 2
+            signals.append("Fib-OF: 15m confirmation candle")
+
+    order_flow = {}
+    try:
+        from strategies.order_flow import analyse as of_analyse
+        symbol = indicators.get("symbol", "NIFTY")
+        order_flow = of_analyse(df.tail(60), float(price), symbol, proximity_ticks=3)
+        if side == "BUY":
+            if order_flow.get("at_hps") or order_flow.get("at_dhps"):
+                score += 1
+                breakdown["fib_of_zone"] = 1
+            if order_flow.get("session_delta", 0) > 0 or order_flow.get("d_session_delta", 0) > 0:
+                score += 1
+                breakdown["fib_delta"] = 1
+            if order_flow.get("at_hrs") or order_flow.get("at_dhrs"):
+                score -= 2
+                breakdown["fib_conflict"] = -2
+        else:
+            if order_flow.get("at_hrs") or order_flow.get("at_dhrs"):
+                score -= 1
+                breakdown["fib_of_zone"] = -1
+            if order_flow.get("session_delta", 0) < 0 or order_flow.get("d_session_delta", 0) < 0:
+                score -= 1
+                breakdown["fib_delta"] = -1
+            if order_flow.get("at_hps") or order_flow.get("at_dhps"):
+                score += 2
+                breakdown["fib_conflict"] = 2
+        signals.append("Fib-OF: 5m order-flow filter applied")
+    except Exception as e:
+        logger.debug("Fib-OF order flow failed: %s", e)
+
+    return score, signals, breakdown, order_flow
+
+
 def score_symbol(indicators: dict, oi_data: dict, patterns: dict,
                  intraday: dict = None, df_5m=None, mode: str = "full") -> dict:
     """
@@ -311,6 +433,10 @@ def score_symbol(indicators: dict, oi_data: dict, patterns: dict,
         score = 0
         signals.clear()
         breakdown.clear()
+    if mode == "fib_of_only":
+        score = 0
+        signals.clear()
+        breakdown.clear()
 
     order_flow = {}
     if mode != "atr_only" and df_5m is not None and len(df_5m) >= 6:
@@ -343,9 +469,17 @@ def score_symbol(indicators: dict, oi_data: dict, patterns: dict,
             logger.debug("Order flow analysis failed: %s", e)
 
     # ── Clamp and resolve ─────────────────────────────────────────────────────
+    if mode == "fib_of_only":
+        score, signals, breakdown, order_flow = _score_fib_of(indicators, intraday, df_5m)
+
     score = max(-10, min(10, score))
     # ICT-only mode has fewer signals — lower threshold needed (max score ≈ ±4)
-    threshold = 2 if mode == "ict_only" else getattr(config, "MIN_SIGNAL_SCORE", 6)
+    if mode == "ict_only":
+        threshold = 2
+    elif mode == "fib_of_only":
+        threshold = getattr(config, "FIB_OF_SIGNAL_SCORE", 6)
+    else:
+        threshold = getattr(config, "MIN_SIGNAL_SCORE", 6)
 
     if score >= threshold:
         action = "BUY"

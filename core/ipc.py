@@ -15,6 +15,7 @@ FLAG_RESUME           = "resume"
 FLAG_VIX_OVERRIDE     = "vix_override"      # legacy global VIX override (kept for compat)
 FLAG_VIX_OVERRIDE_ATR = "vix_override_atr"  # per-strategy: bypass VIX gate for ATR Intraday
 FLAG_VIX_OVERRIDE_ICT = "vix_override_ict"  # per-strategy: bypass VIX gate for C-ICT
+FLAG_VIX_OVERRIDE_FIB = "vix_override_fib"  # per-strategy: bypass VIX gate for Fib-OF
 
 
 def write_flag(name: str) -> None:
@@ -34,7 +35,7 @@ def flag_exists(name: str) -> bool:
 
 def clear_all_flags() -> None:
     """Clear transient flags on bot startup. Preserves persistent overrides (VIX, per-strategy)."""
-    _persist = {FLAG_VIX_OVERRIDE, FLAG_VIX_OVERRIDE_ATR, FLAG_VIX_OVERRIDE_ICT}
+    _persist = {FLAG_VIX_OVERRIDE, FLAG_VIX_OVERRIDE_ATR, FLAG_VIX_OVERRIDE_ICT, FLAG_VIX_OVERRIDE_FIB}
     for f in FLAGS_DIR.iterdir():
         if f.name not in _persist:
             f.unlink(missing_ok=True)

@@ -76,7 +76,8 @@ class ZerodhaFetcher:
         Re-reads .env on every call so a fresh token written by get_token.py
         is picked up without a server restart.
         """
-        today = date.today()
+        from core.utils import now_ist
+        today = now_ist().date()
         api_key, access_token = self._read_env_token()
 
         # If the token in .env changed, force a re-login regardless of cached state
@@ -223,18 +224,19 @@ class ZerodhaFetcher:
         returns today. Otherwise returns the next Thursday.
         """
         from zoneinfo import ZoneInfo
-        today = date.today()
-        now_ist = datetime.now(ZoneInfo("Asia/Kolkata"))
+        now = datetime.now(ZoneInfo("Asia/Kolkata"))
+        today = now.date()
         days_to_thu = (3 - today.weekday()) % 7  # 0 if today is Thu
         if days_to_thu == 0:
             # Today is Thursday — use next week's if market already closed
-            if now_ist.hour > 15 or (now_ist.hour == 15 and now_ist.minute >= 30):
+            if now.hour > 15 or (now.hour == 15 and now.minute >= 30):
                 days_to_thu = 7
         return today + timedelta(days=days_to_thu)
 
     def _nfo_instruments(self) -> list:
         """Return cached NFO instrument list, refreshed once per calendar day."""
-        today = date.today()
+        from core.utils import now_ist
+        today = now_ist().date()
         if self._instruments_date == today and self._instruments is not None:
             return self._instruments
         instruments = self._broker.instruments("NFO")
@@ -430,7 +432,8 @@ class ZerodhaFetcher:
 
     def _nse_token(self, symbol: str) -> Optional[int]:
         """Look up NSE equity instrument token. Cached for the trading day."""
-        today = date.today()
+        from core.utils import now_ist
+        today = now_ist().date()
         if self._nse_cache_date != today:
             ZerodhaFetcher._nse_token_cache = {}
             ZerodhaFetcher._nse_cache_date  = today

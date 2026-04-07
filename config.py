@@ -55,6 +55,8 @@ TAKE_PROFIT_PCT = 3.75   # 1:2.5 R:R — backtest optimal (+41% A, +151% B vs 1:
 
 # ── Signal Score ───────────────────────────────────────────────────────────────
 MIN_SIGNAL_SCORE = 6   # trade only when score ≥ 6 (backtest: 45.2% WR at 6 vs 44.7% at 5)
+FIB_OF_SIGNAL_SCORE = 6
+FIB_OF_RR_RATIO = 3.0
 
 # ── Watchlist ──────────────────────────────────────────────────────────────────
 WATCHLIST = {

@@ -59,7 +59,7 @@ def _is_market_hours() -> bool:
 
 def _is_event_blocked() -> bool:
     """Return True if today is in EVENT_BLOCK_DATES (Budget/RBI MPC etc.)."""
-    today_str = date.today().isoformat()
+    today_str = now_ist().date().isoformat()
     blocked = config.EVENT_BLOCK_DATES.get(today_str)
     if blocked:
         logger.warning("Trading BLOCKED today — %s (%s). Skipping all cycles.", today_str, blocked)
@@ -75,7 +75,7 @@ class _DailyState:
         self._positions: dict = {}     # strategy -> position dict or None
 
     def _maybe_reset(self):
-        today = date.today()
+        today = now_ist().date()
         if self._date != today:
             self._date = today
             self._trades.clear()
@@ -121,6 +121,7 @@ class BotRunner:
         self.state = _DailyState()
         self._atr_strategy = None   # lazy-init TrendStrategy (ATR Intraday, atr_only mode)
         self._ict_strategy = None   # lazy-init TrendStrategy (C-ICT, ict_only mode)
+        self._fib_strategy = None   # lazy-init TrendStrategy (Fib-OF, fib_of_only mode)
         self.last_heartbeat: Optional[str] = None   # ISO string, IST
         self.last_scores: dict = {}                 # strategy → last signal scores
         self.last_vix: Optional[float] = None       # last fetched India VIX
@@ -154,8 +155,13 @@ class BotRunner:
             self._ict_cycle, "interval", minutes=5,
             id="ict_intraday", next_run_time=now_ist + timedelta(minutes=2, seconds=30),
         )
-        # EOD square-off at 15:15, journal save at 15:20
-        self.scheduler.add_job(self._eod_squareoff, "cron", hour=15, minute=15, id="eod")
+        self.scheduler.add_job(
+            self._fib_cycle, "interval", minutes=15,
+            id="fib_of_intraday", next_run_time=now_ist + timedelta(minutes=1, seconds=15),
+        )
+        # EOD square-off at configured intraday cutoff, journal save after exits settle.
+        exit_hour, exit_minute = map(int, config.INTRADAY_EXIT_BY.split(":"))
+        self.scheduler.add_job(self._eod_squareoff, "cron", hour=exit_hour, minute=exit_minute, id="eod")
         self.scheduler.add_job(self._save_journal,  "cron", hour=15, minute=20, id="journal")
         # Reset day bias to NEUTRAL at 20:00 IST each evening
         self.scheduler.add_job(self._reset_day_bias, "cron", hour=20, minute=0, id="bias_reset")
@@ -197,6 +203,7 @@ class BotRunner:
         per_flag = {
             "ATR Intraday": ipc.FLAG_VIX_OVERRIDE_ATR,
             "C-ICT":        ipc.FLAG_VIX_OVERRIDE_ICT,
+            "Fib-OF":       ipc.FLAG_VIX_OVERRIDE_FIB,
         }.get(strategy)
         if per_flag and ipc.flag_exists(per_flag):
             return False  # per-strategy override active
@@ -283,6 +290,42 @@ class BotRunner:
         except Exception as e:
             logger.error("C-ICT cycle: %s", e, exc_info=True)
 
+    # ── Fib-OF (Strategy F — Fibonacci Order Flow, 15m) ──────────────────────
+
+    async def _fib_cycle(self):
+        self.last_heartbeat = datetime.now(IST).isoformat()
+        if self.paused or not _is_market_hours() or _is_event_blocked():
+            return
+        if self._is_vix_blocked("Fib-OF"):
+            bias = self.last_day_bias
+            if bias.get("bias", "NEUTRAL") == "NEUTRAL" or not bias.get("set_at"):
+                logger.warning("Fib-OF cycle skipped — India VIX %.2f > threshold %.1f", self.last_vix, config.VIX_THRESHOLD)
+                return
+            logger.warning(
+                "India VIX %.2f > threshold %.1f but trader bias is %s — Fib-OF proceeding.",
+                self.last_vix, config.VIX_THRESHOLD, bias["bias"],
+            )
+        try:
+            if self._fib_strategy is None:
+                from strategies.trend_strategy import TrendStrategy
+                self._fib_strategy = TrendStrategy(strategy_name="Fib-OF", score_mode="fib_of_only")
+
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, self._fib_strategy.run_watchlist)
+
+            sc = self._fib_strategy.last_score
+            if sc:
+                self.last_scores["Fib-OF"] = {
+                    "score":      sc.get("score", 0),
+                    "direction":  sc.get("action", "HOLD"),
+                    "action":     sc.get("action", "HOLD"),
+                    "threshold":  sc.get("threshold", config.FIB_OF_SIGNAL_SCORE),
+                    "will_trade": abs(sc.get("score", 0)) >= sc.get("threshold", config.FIB_OF_SIGNAL_SCORE),
+                    "note":       f"Fib-OF 15m | R:R 1:{config.FIB_OF_RR_RATIO:.0f}",
+                }
+        except Exception as e:
+            logger.error("Fib-OF cycle: %s", e, exc_info=True)
+
     # ── EOD square-off ────────────────────────────────────────────────────────
 
     async def _eod_squareoff(self):
@@ -292,6 +335,8 @@ class BotRunner:
             await loop.run_in_executor(None, self._atr_strategy.square_off_all)
         if self._ict_strategy:
             await loop.run_in_executor(None, self._ict_strategy.square_off_all)
+        if self._fib_strategy:
+            await loop.run_in_executor(None, self._fib_strategy.square_off_all)
 
     async def _save_journal(self):
         """Save daily journal JSON at 15:20 (after EOD square-off)."""

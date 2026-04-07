@@ -32,6 +32,18 @@ const STRATEGIES = [
     risk: "2%",
     color: "violet",
   },
+  {
+    name: "Fib-OF",
+    tag: "F",
+    symbols: ["NIFTY"],
+    timeframe: "15m",
+    status: "active",
+    description: "Fibonacci retracement zones + order flow confirmation on 15m bars. Intraday only. Backtest Jan–Mar 2026: +26.7% at R:R 1:3.",
+    target: "+26.7%",
+    rr: "1:3.0",
+    risk: "2%",
+    color: "emerald",
+  },
 ];
 
 export default function Home() {
@@ -255,8 +267,8 @@ export default function Home() {
             {/* Today's Strategy P&L — always show both cards */}
             <div className="w-full md:flex-1">
               <div className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">Today's Strategy P&L</div>
-              <div className="grid grid-cols-2 gap-3">
-                {(["ATR Intraday", "C-ICT"] as const).map(name => {
+              <div className="grid grid-cols-3 gap-3">
+                {(["ATR Intraday", "C-ICT", "Fib-OF"] as const).map(name => {
                   const s: any = strategySummary[name] ?? { pnl: 0, trades: 0, wins: 0, losses: 0 };
                   return (
                     <div key={name} className="bg-white rounded-xl border border-gray-200 p-3">

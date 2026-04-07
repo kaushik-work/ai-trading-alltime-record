@@ -18,8 +18,8 @@ Strategy B — Delta + Trendline Channel (DP Sir HPS-T)
     delta_score + tl_score combined
     Entry threshold : >= +2 or <= -2
 
-Strategy C — Delta + TL + ICT (Order Blocks + Liquidity Sweeps)
-    delta + tl + liq_sweep + ob_retest
+Strategy C — ICT (Order Blocks + Liquidity Sweeps)
+    liq_sweep + ob_retest only (matches live ict_only mode)
     Entry threshold : >= +2 or <= -2
 
 Usage:
@@ -360,7 +360,7 @@ def _of_scores(df_full, pos, symbol="NIFTY"):
     ob_score       = result.get("ict_ob_score", 0)
 
     score_b = delta_score + tl_score
-    score_c = score_b + liq_score + ob_score
+    score_c = liq_score + ob_score
 
     return delta_score, score_b, score_c
 
@@ -636,7 +636,7 @@ if __name__ == "__main__":
 
     strategies = [
         ("atr", "ATR Intraday", "Strategy 1 — ATR Intraday  (VWAP + ORB + SMA + RSI + MACD + PDH/PDL)"),
-        ("ict", "C-ICT",        "Strategy C — Delta + TL + ICT OB + Sweep"),
+        ("ict", "C-ICT",        "Strategy C — ICT OB + Sweep"),
     ]
 
     final_summary = {}

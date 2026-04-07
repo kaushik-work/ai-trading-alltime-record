@@ -158,7 +158,7 @@ class KiteBroker:
 
     def get_positions(self) -> dict:
         positions = self.kite.positions()
-        return {p["tradingsymbol"]: p for p in positions.get("net", [])}
+        return {p["tradingsymbol"]: p for p in positions.get("net", []) if p.get("quantity", 0) != 0}
 
     def get_portfolio_summary(self) -> dict:
         margins = self.kite.margins()

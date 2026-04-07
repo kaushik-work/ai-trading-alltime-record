@@ -15,13 +15,13 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 from contextlib import asynccontextmanager
 from datetime import datetime
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Depends, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import Response
 from fastapi.security import OAuth2PasswordRequestForm
 
 import config
-from api.auth import verify_password, create_token, get_current_user, DASHBOARD_USER
+from api.auth import verify_password, create_token, get_current_user, decode_token, DASHBOARD_USER
 from core.memory import init_db, TradeMemory
 from core.records import init_records_db, RecordTracker
 from core import ipc
@@ -44,9 +44,15 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Trading Bot API", lifespan=lifespan)
 
+_cors_origins = [
+    origin.strip()
+    for origin in os.getenv("DASHBOARD_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
+    if origin.strip()
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten in prod to your Vercel URL
+    allow_origins=_cors_origins,
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -56,7 +62,7 @@ records = RecordTracker()
 market = RealMarketData()
 
 WATCHLIST = ["NIFTY"]
-STRATEGIES = ["ATR Intraday", "C-ICT"]
+STRATEGIES = ["ATR Intraday", "C-ICT", "Fib-OF"]
 
 # ── Price cache — shared across all WebSocket connections ─────────────────────
 # Without this, 5 open browser tabs × every-5s broadcast = 60 Zerodha calls/min
@@ -197,7 +203,8 @@ def _build_snapshot() -> dict:
     vix_override     = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE)
     vix_override_atr = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE_ATR)
     vix_override_ict = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE_ICT)
-    any_override = vix_override or vix_override_atr or vix_override_ict
+    vix_override_fib = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE_FIB)
+    any_override = vix_override or vix_override_atr or vix_override_ict or vix_override_fib
     vix_blocked  = (not any_override) and (vix is not None) and (vix > config.VIX_THRESHOLD)
 
     return {
@@ -212,6 +219,7 @@ def _build_snapshot() -> dict:
         "vix_override": vix_override,
         "vix_override_atr": vix_override_atr,
         "vix_override_ict": vix_override_ict,
+        "vix_override_fib": vix_override_fib,
         "vix_threshold": config.VIX_THRESHOLD,
         "token_set_at": _get_token_status(),
         "day_bias": runner.last_day_bias,
@@ -517,6 +525,16 @@ def set_vix_override_ict(body: dict, user: str = Depends(get_current_user)):
         ipc.clear_flag(ipc.FLAG_VIX_OVERRIDE_ICT)
     return {"strategy": "C-ICT", "vix_override": enable}
 
+@app.post("/api/bot/vix-override/fib")
+def set_vix_override_fib(body: dict, user: str = Depends(get_current_user)):
+    """Toggle VIX gate for Fib-OF strategy only."""
+    enable = body.get("enable", True)
+    if enable:
+        ipc.write_flag(ipc.FLAG_VIX_OVERRIDE_FIB)
+    else:
+        ipc.clear_flag(ipc.FLAG_VIX_OVERRIDE_FIB)
+    return {"strategy": "Fib-OF", "vix_override": enable}
+
 @app.post("/api/trade/force")
 async def force_trade(body: dict, user: str = Depends(get_current_user)):
     symbol   = body.get("symbol")
@@ -623,7 +641,12 @@ def _safe_json(obj) -> str:
 # ── WebSocket ─────────────────────────────────────────────────────────────────
 
 @app.websocket("/ws")
-async def websocket_endpoint(ws: WebSocket):
+async def websocket_endpoint(ws: WebSocket, token: str = Query(default="")):
+    try:
+        decode_token(token)
+    except HTTPException:
+        await ws.close(code=1008)
+        return
     await manager.connect(ws)
     try:
         # Send initial snapshot immediately on connect

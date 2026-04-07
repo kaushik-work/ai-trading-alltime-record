@@ -159,8 +159,9 @@ export default function DebugPage() {
         {/* Strategy cards */}
         <div className="space-y-4">
           {[
-            { name: "ATR Intraday", tag: "ATR", color: "#6366f1", bg: "#eef2ff", interval: "15m", type: "Technical (sections 1–11)", vixEndpoint: "/api/bot/vix-override/atr", vixKey: "vix_override_atr" },
-            { name: "C-ICT",        tag: "ICT", color: "#0891b2", bg: "#e0f2fe", interval: "15m", type: "Order Blocks + Liquidity (section 12)", vixEndpoint: "/api/bot/vix-override/ict", vixKey: "vix_override_ict" },
+            { name: "ATR Intraday", tag: "ATR", color: "#6366f1", bg: "#eef2ff", interval: "5m",  type: "Technical (sections 1–11)", vixEndpoint: "/api/bot/vix-override/atr", vixKey: "vix_override_atr" },
+            { name: "C-ICT",        tag: "ICT", color: "#0891b2", bg: "#e0f2fe", interval: "5m",  type: "Order Blocks + Liquidity (section 12)", vixEndpoint: "/api/bot/vix-override/ict", vixKey: "vix_override_ict" },
+            { name: "Fib-OF",       tag: "FIB", color: "#059669", bg: "#d1fae5", interval: "15m", type: "Fibonacci zones + Order Flow", vixEndpoint: "/api/bot/vix-override/fib", vixKey: "vix_override_fib" },
           ].map(({ name, tag, color, bg, interval, type, vixEndpoint, vixKey }) => {
             const s = strategies[name];
             const vixOn: boolean = data?.[vixKey] ?? false;
