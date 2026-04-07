@@ -43,18 +43,6 @@ def _fetch_backtest_data(symbol: str, period: str, interval: str) -> pd.DataFram
     except Exception as e:
         logger.warning("Backtest fetch_data Zerodha failed: %s", e)
 
-    # 2. NSE India (daily only — no multi-day intraday from NSE public API)
-    if interval in ("1d", "day"):
-        try:
-            from data.nse_fetcher import NseFetcher
-            df = NseFetcher.get().fetch_daily_df(symbol, days=days)
-            if df is not None and len(df) >= 10:
-                df["_date"] = df.index.date
-                logger.info("Backtest data: NSE fallback — %d bars for %s", len(df), symbol)
-                return df
-        except Exception as e:
-            logger.warning("Backtest fetch_data NSE failed: %s", e)
-
     raise ValueError(
         f"No data available for {symbol} {interval} {period}. "
         "Ensure Zerodha credentials are set (run scripts/get_token.py for today's token)."

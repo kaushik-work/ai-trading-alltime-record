@@ -355,12 +355,12 @@ def _of_scores(df_full, pos, symbol="NIFTY"):
     delta_score = +2 if (sess_delta > 0 and d_delta > 0) else \
                   -2 if (sess_delta < 0 and d_delta < 0) else 0
 
-    tl_score       = result.get("tl_score_delta", 0)
-    liq_score      = result.get("ict_liq_score", 0)
-    ob_score       = result.get("ict_ob_score", 0)
+    tl_score   = result.get("tl_score_delta", 0)
+    liq_score  = result.get("ict_liq_score", 0)
+    ob_score   = result.get("ict_ob_score", 0)
 
     score_b = delta_score + tl_score
-    score_c = liq_score + ob_score
+    score_c = score_b + liq_score + ob_score   # C = Delta + TL + ICT (original)
 
     return delta_score, score_b, score_c
 
@@ -469,11 +469,13 @@ def _run(df, strategy, equity_start, rr=RR_RATIO, risk_pct=RISK_PCT,
                 d_s, b_s, c_s = _of_scores(df, full_pos, symbol)
                 if strategy == "delta":
                     score = d_s
+                    threshold = OF_THRESHOLD
                 elif strategy == "combined":
                     score = b_s
-                else:  # ict
+                    threshold = OF_THRESHOLD
+                else:  # ict — Delta + TL + ICT, threshold = 2 (original)
                     score = c_s
-                threshold = OF_THRESHOLD
+                    threshold = OF_THRESHOLD
 
             if score == 0:
                 continue

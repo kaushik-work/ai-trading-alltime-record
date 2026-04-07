@@ -428,11 +428,8 @@ def score_symbol(indicators: dict, oi_data: dict, patterns: dict,
             score += breakdown.get("pdh_pdl", 0)
 
     # ── 12. Strategy C — ICT Order Blocks + Liquidity Sweeps ────────────────────
-    # In ict_only mode: discard all technical scores — only ICT signals matter.
-    if mode == "ict_only":
-        score = 0
-        signals.clear()
-        breakdown.clear()
+    # ict_only keeps Delta + TL scores (directional filter) and adds ICT on top.
+    # fib_of_only discards all prior scores — Fib logic handles everything.
     if mode == "fib_of_only":
         score = 0
         signals.clear()
@@ -446,7 +443,6 @@ def score_symbol(indicators: dict, oi_data: dict, patterns: dict,
             current_price = intraday.get("price", price) if intraday else price
             order_flow = of_analyse(df_5m, current_price, symbol)
 
-            # Strategy C — ICT Order Blocks + Liquidity Sweeps
             liq_score = order_flow.get("ict_liq_score", 0)
             ob_score  = order_flow.get("ict_ob_score", 0)
             liq_sig   = order_flow.get("ict_liq_signal")
@@ -473,7 +469,7 @@ def score_symbol(indicators: dict, oi_data: dict, patterns: dict,
         score, signals, breakdown, order_flow = _score_fib_of(indicators, intraday, df_5m)
 
     score = max(-10, min(10, score))
-    # ICT-only mode has fewer signals — lower threshold needed (max score ≈ ±4)
+    # ICT-only mode: Delta+TL+ICT combined, max ≈ ±6, threshold = 2
     if mode == "ict_only":
         threshold = 2
     elif mode == "fib_of_only":
