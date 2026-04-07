@@ -12,6 +12,7 @@ Strategy:
 import asyncio
 import logging
 from datetime import datetime, date, time as dtime
+from core.utils import now_ist, today_ist
 from zoneinfo import ZoneInfo
 from typing import Optional
 
@@ -358,8 +359,8 @@ class BotRunner:
                     sl: float, tp: float, score: float,
                     option_type: str = "CE", strike: int = 0,
                     expiry=None, opt_sym: str = "", entry_prem: float = 0.0) -> dict:
-        ts       = datetime.now().isoformat()
-        order_id = f"{strategy.upper()}-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        ts       = now_ist().isoformat()
+        order_id = f"{strategy.upper()}-{now_ist().strftime('%Y%m%d%H%M%S')}"
         lot_qty  = config.LOT_SIZES.get("NIFTY", 25)
         expiry_str = expiry.isoformat() if expiry and hasattr(expiry, "isoformat") else str(expiry or "")
         order = {
@@ -411,8 +412,8 @@ class BotRunner:
         }
 
     def _close_trade(self, pos: dict, close_price: float, pnl: float, reason: str):
-        ts = datetime.now().isoformat()
-        order_id = f"{pos['strategy'].upper()}-CLOSE-{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        ts = now_ist().isoformat()
+        order_id = f"{pos['strategy'].upper()}-CLOSE-{now_ist().strftime('%Y%m%d%H%M%S')}"
         order = {
             "order_id":    order_id,
             "symbol":      pos["symbol"],

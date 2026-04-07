@@ -18,13 +18,8 @@ AishDoc rules enforced here:
 """
 import logging
 from datetime import datetime, time as dtime
-from zoneinfo import ZoneInfo
 from typing import Optional
-
-_IST = ZoneInfo("Asia/Kolkata")
-
-def _now_ist() -> datetime:
-    return datetime.now(_IST)
+from core.utils import now_ist as _now_ist, today_ist
 import config
 from core import ipc
 from core.broker import get_broker
@@ -403,7 +398,7 @@ class TrendStrategy:
     # ── End of day ─────────────────────────────────────────────────────────────
 
     def end_of_day(self) -> dict:
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = today_ist()
         trades = self.memory.get_today_trades()
         broken_records = self.records.check_daily(trades)
         review = self.brain.daily_review(trades, self.records.get_all_records())

@@ -4,6 +4,7 @@ import logging
 from datetime import datetime
 from typing import Optional
 import config
+from core.utils import now_ist, today_ist
 
 logger = logging.getLogger(__name__)
 
@@ -105,7 +106,7 @@ class TradeMemory:
                 decision.get("reasoning"),
                 decision.get("confidence", 0),
                 decision.get("risk_level"),
-                order.get("timestamp", datetime.now().isoformat()),
+                order.get("timestamp", now_ist().isoformat()),
                 "paper" if config.IS_PAPER else "live",
                 order.get("strategy"),
                 order.get("option_type"),
@@ -135,7 +136,7 @@ class TradeMemory:
         with get_connection() as conn:
             conn.execute("""
                 UPDATE trades SET pnl = ?, closed_at = ? WHERE order_id = ?
-            """, (pnl, datetime.now().isoformat(), order_id))
+            """, (pnl, now_ist().isoformat(), order_id))
 
     def get_trades_for_symbol(self, symbol: str, limit: int = 20) -> list:
         """Get recent trades for a symbol — used as context for Claude."""
@@ -147,7 +148,7 @@ class TradeMemory:
         return [dict(r) for r in rows]
 
     def get_today_trades(self) -> list:
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = today_ist()
         with get_connection() as conn:
             rows = conn.execute("""
                 SELECT * FROM trades WHERE timestamp LIKE ? ORDER BY timestamp DESC
@@ -186,4 +187,4 @@ class TradeMemory:
         with get_connection() as conn:
             conn.execute("""
                 INSERT INTO market_snapshots (symbol, data, timestamp) VALUES (?, ?, ?)
-            """, (symbol, json.dumps(data), datetime.now().isoformat()))
+            """, (symbol, json.dumps(data), now_ist().isoformat()))

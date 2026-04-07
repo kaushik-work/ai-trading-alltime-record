@@ -45,6 +45,7 @@ import logging
 import os
 from datetime import datetime
 from typing import Optional
+from core.utils import now_ist, today_ist
 
 import config
 from core import ipc
@@ -166,7 +167,7 @@ def save_daily_journal(date_str: Optional[str] = None) -> str:
     memory = TradeMemory()
 
     if date_str is None:
-        date_str = datetime.now().strftime("%Y-%m-%d")
+        date_str = today_ist()
 
     # Pull today's trades from DB
     today_trades = memory.get_today_trades()
@@ -222,7 +223,7 @@ def save_daily_journal(date_str: Optional[str] = None) -> str:
 
     journal = {
         "date":      date_str,
-        "saved_at":  datetime.now().isoformat(),
+        "saved_at":  now_ist().isoformat(),
         "summary": {
             "total_pnl":        total_pnl,
             "total_trades":     len(today_trades),
@@ -266,7 +267,7 @@ def update_learning_notes(date_str: str, notes: str) -> bool:
     if journal is None:
         return False
     journal["learning_notes"] = notes
-    journal["notes_updated_at"] = datetime.now().isoformat()
+    journal["notes_updated_at"] = now_ist().isoformat()
     path = _journal_path(date_str)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(journal, f, indent=2, ensure_ascii=False)
