@@ -217,7 +217,7 @@ ATR (CRITICAL for position sizing and SL):
  TRADING CHARGES (NSE F&O — ALWAYS ACCOUNT FOR THESE)
 ═══════════════════════════════════════════════════════════
 Per round-trip (one buy + one sell):
-  - Brokerage:       ₹20 flat per order × 2 = ₹40
+  - Brokerage:       ₹40 flat per order × 2 = ₹80
   - STT:             0.0625% of sell-leg premium turnover
   - NSE Exchange:    0.053% of total (buy+sell) premium turnover
   - SEBI:            ₹10 per crore of turnover

@@ -47,7 +47,7 @@ export default function Home() {
   }, []);
 
   const { data, connected } = useWebSocket(authed ? WS_URL : "");
-  const trades            = data?.recent_trades     ?? [];
+  const trades            = data?.round_trips        ?? [];
   const openPos           = data?.open_positions    ?? [];
   const mode              = data?.mode              ?? "paper";
   const botStatus         = data?.bot_status        ?? "unknown";
@@ -442,41 +442,42 @@ export default function Home() {
               </div>
             ) : (
               <div className="bg-white rounded-xl border border-gray-200 overflow-hidden overflow-x-auto">
-                <table className="w-full text-sm min-w-[500px]">
+                <table className="w-full text-sm min-w-[700px]">
                   <thead>
                     <tr className="bg-gray-50 border-b border-gray-100">
-                      <th className="px-4 py-3 text-left text-xs text-gray-500 font-semibold uppercase">Symbol</th>
-                      <th className="px-4 py-3 text-left text-xs text-gray-500 font-semibold uppercase">Side</th>
-                      <th className="px-4 py-3 text-right text-xs text-gray-500 font-semibold uppercase">Price</th>
+                      <th className="px-4 py-3 text-left text-xs text-gray-500 font-semibold uppercase">Symbol / Strike</th>
+                      <th className="px-4 py-3 text-left text-xs text-gray-500 font-semibold uppercase">Strategy</th>
+                      <th className="px-4 py-3 text-right text-xs text-gray-500 font-semibold uppercase">Buy Price</th>
+                      <th className="px-4 py-3 text-right text-xs text-gray-500 font-semibold uppercase">Sell Price</th>
                       <th className="px-4 py-3 text-right text-xs text-gray-500 font-semibold uppercase">Qty</th>
                       <th className="px-4 py-3 text-right text-xs text-gray-500 font-semibold uppercase">P&L</th>
-                      <th className="px-4 py-3 text-left text-xs text-gray-500 font-semibold uppercase">Status</th>
-                      <th className="px-4 py-3 text-left text-xs text-gray-500 font-semibold uppercase">Time</th>
+                      <th className="px-4 py-3 text-left text-xs text-gray-500 font-semibold uppercase">Entry → Exit</th>
                     </tr>
                   </thead>
                   <tbody>
                     {trades.map((t: any, i: number) => {
                       const pnl = t.pnl ?? 0;
+                      const strike = t.strike ? `${Number(t.strike).toLocaleString("en-IN")} ${t.option_type ?? ""}`.trim() : null;
                       return (
                         <tr key={i} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
-                          <td className="px-4 py-3 font-semibold text-indigo-600">{t.symbol}</td>
-                          <td className="px-4 py-3 font-semibold" style={{ color: t.side === "BUY" ? "#16a34a" : "#ef4444" }}>
-                            {t.side}
+                          <td className="px-4 py-3">
+                            <div className="font-semibold text-indigo-600">{t.symbol}</div>
+                            {strike && <div className="text-xs text-gray-400 mt-0.5">{strike}</div>}
                           </td>
-                          <td className="px-4 py-3 text-right text-gray-700">₹{Number(t.price).toLocaleString("en-IN")}</td>
-                          <td className="px-4 py-3 text-right text-gray-700">{t.quantity}</td>
+                          <td className="px-4 py-3 text-xs text-gray-500">{t.strategy ?? "—"}</td>
+                          <td className="px-4 py-3 text-right text-green-700 font-medium">
+                            {t.buy_price != null ? `₹${Number(t.buy_price).toFixed(2)}` : "—"}
+                          </td>
+                          <td className="px-4 py-3 text-right text-red-500 font-medium">
+                            {t.sell_price != null ? `₹${Number(t.sell_price).toFixed(2)}` : "—"}
+                          </td>
+                          <td className="px-4 py-3 text-right text-gray-700">{t.qty}</td>
                           <td className="px-4 py-3 text-right font-semibold" style={{ color: pnl > 0 ? "#16a34a" : pnl < 0 ? "#ef4444" : "#6b7280" }}>
                             {pnl !== 0 ? `${pnl > 0 ? "+" : ""}₹${pnl.toFixed(2)}` : "—"}
                           </td>
-                          <td className="px-4 py-3">
-                            <span className="text-xs px-2 py-0.5 rounded-full font-medium"
-                              style={{ background: t.status === "COMPLETE" ? "#dcfce7" : "#f3f4f6",
-                                       color:      t.status === "COMPLETE" ? "#15803d" : "#6b7280" }}>
-                              {t.status || "—"}
-                            </span>
-                          </td>
-                          <td className="px-4 py-3 text-gray-400 text-xs">
-                            {t.timestamp ? new Date(t.timestamp).toLocaleTimeString("en-IN") : "—"}
+                          <td className="px-4 py-3 text-xs text-gray-400">
+                            <div>{t.entry_time ? new Date(t.entry_time).toLocaleTimeString("en-IN") : "—"}</div>
+                            <div>{t.exit_time  ? new Date(t.exit_time).toLocaleTimeString("en-IN")  : ""}</div>
                           </td>
                         </tr>
                       );

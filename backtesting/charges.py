@@ -8,7 +8,7 @@ Charge breakdown per round-trip trade:
 ┌─────────────────────────────┬──────────────────────────────────────────┐
 │ Charge                      │ Rate / Basis                             │
 ├─────────────────────────────┼──────────────────────────────────────────┤
-│ Brokerage                   │ ₹20 flat per order (discount broker)     │
+│ Brokerage                   │ ₹40 flat per order (intraday F&O)        │
 │ STT (Sell side only)        │ 0.0625% of sell-leg premium turnover     │
 │ NSE Exchange Transaction    │ 0.053% of total premium turnover         │
 │ SEBI Turnover Fee           │ ₹10 per crore = 0.000001 of turnover     │
@@ -32,7 +32,7 @@ Notes:
 
 # ── Charge rates ─────────────────────────────────────────────────────────────
 
-BROKERAGE_PER_ORDER  = 20.0       # ₹ flat per order — typical discount broker
+BROKERAGE_PER_ORDER  = 40.0       # ₹ flat per order — intraday F&O
 STT_SELL_RATE        = 0.000625   # 0.0625 % on sell-leg premium value
 NSE_EXCHANGE_RATE    = 0.00053    # 0.053 % on total (buy+sell) premium turnover
 SEBI_RATE            = 0.000001   # ₹10 per crore = 1e-6 of turnover

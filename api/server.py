@@ -125,6 +125,31 @@ def _build_snapshot() -> dict:
             "losses": len(strat_trades) - strat_wins,
         }
 
+    # Build round-trip trade pairs for Recent Trades display
+    sorted_trades = sorted(all_trades, key=lambda x: x.get("timestamp", ""))
+    pending_buys: dict = {}  # (symbol, strategy, option_type, strike) → BUY row
+    round_trips = []
+    for t in sorted_trades:
+        key = (t.get("symbol"), t.get("strategy"), t.get("option_type"), t.get("strike"))
+        if t.get("side") == "BUY":
+            pending_buys[key] = t
+        elif t.get("side") == "SELL":
+            buy = pending_buys.pop(key, None)
+            round_trips.append({
+                "symbol":      t.get("symbol"),
+                "strike":      t.get("strike"),
+                "option_type": t.get("option_type"),
+                "strategy":    t.get("strategy"),
+                "buy_price":   buy["price"] if buy else None,
+                "sell_price":  t.get("price"),
+                "qty":         t.get("quantity"),
+                "pnl":         t.get("pnl"),
+                "status":      t.get("status"),
+                "entry_time":  buy["timestamp"] if buy else None,
+                "exit_time":   t.get("timestamp"),
+            })
+    round_trips.sort(key=lambda x: x.get("exit_time", ""), reverse=True)
+
     # Today's completed journal (closed trades with full detail)
     today_journal = [
         {
@@ -204,6 +229,7 @@ def _build_snapshot() -> dict:
         "today_journal":    today_journal,
         "prices": prices,
         "recent_trades": all_trades[:20],
+        "round_trips":   round_trips[:20],
         "open_positions": open_pos,
         "equity_curve": equity_curve[-100:],  # last 100 points
         "records": [
