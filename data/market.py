@@ -297,6 +297,10 @@ class RealMarketData:
 
         return result
 
+    def _get_df(self, symbol: str, interval: str = "5m"):
+        """Return intraday OHLCV DataFrame. Used by trend_strategy for pattern detection and ICT scoring."""
+        return _get_intraday_df(symbol, interval)
+
     def get_raw_candles(self, symbol: str, interval: str, limit: int = 30) -> list:
         """
         Return last `limit` OHLCV bars as a list of dicts for the brain to read directly.

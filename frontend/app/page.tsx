@@ -4,7 +4,8 @@ import { useRouter } from "next/navigation";
 import { useWebSocket } from "./hooks/useWebSocket";
 import Header from "./components/Header";
 
-const WS_URL  = process.env.NEXT_PUBLIC_WS_URL  || "ws://localhost:8000/ws";
+const _API    = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const WS_URL  = _API.replace(/^http/, "ws") + "/ws";
 
 const STRATEGIES = [
   {

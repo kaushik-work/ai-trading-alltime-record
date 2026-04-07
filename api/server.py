@@ -371,7 +371,7 @@ def bot_debug(user: str = Depends(get_current_user)):
                 from strategies.patterns import detect_patterns, get_candles_from_df
                 from data.zerodha_fetcher import ZerodhaFetcher
                 fetcher = ZerodhaFetcher.get()
-                intraday_raw = fetcher.fetch_intraday("NIFTY", "15minute")
+                intraday_raw = fetcher.fetch_intraday("NIFTY", "15m")
                 if intraday_raw is None:
                     raise ValueError("No intraday data")
                 opens, highs, lows, closes, volumes, all_closes, bar_time = intraday_raw

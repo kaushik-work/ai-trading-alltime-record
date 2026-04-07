@@ -6,7 +6,7 @@ import Header from "../components/Header";
 import { useWebSocket } from "../hooks/useWebSocket";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-const WS_URL  = process.env.NEXT_PUBLIC_WS_URL  || "ws://localhost:8000/ws";
+const WS_URL  = API_URL.replace(/^http/, "ws") + "/ws";
 
 function authHeaders() {
   return {
