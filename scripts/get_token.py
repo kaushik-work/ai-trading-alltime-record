@@ -15,7 +15,7 @@ import sys
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from dotenv import load_dotenv, set_key
+from dotenv import load_dotenv
 
 load_dotenv()
 
@@ -52,12 +52,20 @@ try:
     access_token = data["access_token"]
 
     from datetime import datetime, timezone, timedelta
+    import re
     ist = timezone(timedelta(hours=5, minutes=30))
     token_set_at = datetime.now(ist).isoformat()
 
     env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
-    set_key(env_path, "ZERODHA_ACCESS_TOKEN", access_token, quote_mode="never")
-    set_key(env_path, "ZERODHA_TOKEN_SET_AT", token_set_at, quote_mode="never")
+
+    # Write in-place (same inode) so Docker bind mounts pick up the new value.
+    # set_key() renames a temp file → new inode → container never sees the update.
+    with open(env_path, "r") as f:
+        content = f.read()
+    content = re.sub(r"^ZERODHA_ACCESS_TOKEN=.*$", f"ZERODHA_ACCESS_TOKEN={access_token}", content, flags=re.MULTILINE)
+    content = re.sub(r"^ZERODHA_TOKEN_SET_AT=.*$", f"ZERODHA_TOKEN_SET_AT={token_set_at}", content, flags=re.MULTILINE)
+    with open(env_path, "w") as f:
+        f.write(content)
 
     print(f"\nSuccess! Access token saved to .env")
     print(f"Token: {access_token[:8]}...{access_token[-4:]}")

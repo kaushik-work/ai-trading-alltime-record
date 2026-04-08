@@ -311,6 +311,11 @@ class ZerodhaFetcher:
                 interval="day",
             )
             if not records or len(records) < 5:
+                logger.error(
+                    "ZerodhaFetcher.fetch_daily_df %s: API returned %d records (need ≥5) — "
+                    "access token may be expired, run scripts/get_token.py",
+                    symbol, len(records) if records else 0,
+                )
                 return None
             df = pd.DataFrame(records)
             df.rename(columns={

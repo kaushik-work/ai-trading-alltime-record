@@ -24,10 +24,10 @@ def _get_daily_df(symbol: str):
             return df
         msg = "fetch_daily_df returned insufficient data"
         logger.error("_get_daily_df: %s for %s", msg, symbol)
-        _log_err("fetch_daily_df", msg, symbol=symbol)
+        _log_err("fetch_daily_df", msg, symbol=symbol, detail="daily")
     except Exception as e:
         logger.error("_get_daily_df: Zerodha failed for %s: %s", symbol, e)
-        _log_err("fetch_daily_df", str(e), symbol=symbol)
+        _log_err("fetch_daily_df", str(e), symbol=symbol, detail="daily")
     return None
 
 

@@ -124,7 +124,7 @@ export default function ErrorsPage() {
                   <tr key={i} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
                     <td className="px-4 py-3 text-xs text-gray-400 whitespace-nowrap">
                       {e.timestamp
-                        ? new Date(e.timestamp).toLocaleString("en-IN", { dateStyle: "short", timeStyle: "medium" })
+                        ? new Date(e.timestamp).toLocaleString("en-IN", { dateStyle: "short", timeStyle: "short" })
                         : "—"}
                     </td>
                     <td className="px-4 py-3">
