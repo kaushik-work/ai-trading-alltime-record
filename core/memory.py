@@ -35,8 +35,13 @@ def init_db():
                 closed_at TEXT,
                 mode TEXT DEFAULT 'paper',
                 strategy TEXT,
+                underlying TEXT,
                 option_type TEXT,
                 strike REAL,
+                expiry TEXT,
+                exchange TEXT,
+                product TEXT,
+                order_type_meta TEXT,
                 lot_size INTEGER DEFAULT 65,
                 sl_price REAL,
                 tp_price REAL,
@@ -66,8 +71,13 @@ def init_db():
     # Migration: add new columns to existing databases
     new_cols = [
         ("strategy",    "TEXT"),
+        ("underlying",  "TEXT"),
         ("option_type", "TEXT"),
         ("strike",      "REAL"),
+        ("expiry",      "TEXT"),
+        ("exchange",    "TEXT"),
+        ("product",     "TEXT"),
+        ("order_type_meta", "TEXT"),
         ("lot_size",    "INTEGER DEFAULT 65"),
         ("sl_price",    "REAL"),
         ("tp_price",    "REAL"),
@@ -92,9 +102,10 @@ class TradeMemory:
                 INSERT OR IGNORE INTO trades
                 (order_id, symbol, side, quantity, price, pnl, status, action_reason,
                  confidence, risk_level, timestamp, mode,
-                 strategy, option_type, strike, lot_size, sl_price, tp_price, close_reason, score,
+                 strategy, underlying, option_type, strike, expiry, exchange, product, order_type_meta,
+                 lot_size, sl_price, tp_price, close_reason, score,
                  entry_remark, exit_remark)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """, (
                 order.get("order_id"),
                 order.get("symbol"),
@@ -109,8 +120,13 @@ class TradeMemory:
                 order.get("timestamp", now_ist().isoformat()),
                 "paper" if config.IS_PAPER else "live",
                 order.get("strategy"),
+                order.get("underlying"),
                 order.get("option_type"),
                 order.get("strike"),
+                order.get("expiry"),
+                order.get("exchange"),
+                order.get("product"),
+                order.get("order_type"),
                 order.get("lot_size", 75),
                 order.get("sl_price"),
                 order.get("tp_price"),

@@ -18,7 +18,7 @@ AishDoc rules enforced here:
 """
 import logging
 import re
-from datetime import datetime, time as dtime
+from datetime import datetime, time as dtime, date
 from typing import Optional
 from core.utils import now_ist as _now_ist, today_ist
 import config
@@ -163,9 +163,7 @@ class TrendStrategy:
 
         # Fetch daily + intraday indicators
         indicators  = self.market.get_indicators(symbol)
-        current_price = indicators.get("price", 0)
-        if current_price == 0:
-            return None
+        indicators["symbol"] = symbol
 
         forced = self._consume_force_trade(symbol, indicators)
         if forced:
@@ -178,6 +176,14 @@ class TrendStrategy:
             if intraday.get("price"):
                 current_price = intraday["price"]
                 indicators["price"] = current_price
+            else:
+                current_price = indicators.get("price", 0)
+        else:
+            current_price = indicators.get("price", 0)
+
+        if current_price == 0:
+            logger.warning("[%s] No usable price for %s — skipping cycle", self.strategy_name, symbol)
+            return None
 
         patterns = self._get_patterns(symbol)
 
@@ -232,7 +238,7 @@ class TrendStrategy:
         option_type = position.get("option_type", "CE")
         strike = position.get("atm_strike") or position.get("strike")
         if strike:
-            _, _, live_ltp = self._get_option_ltp(symbol, option_type, current_price, strike=int(strike))
+            _, _, live_ltp, _ = self._get_option_ltp(symbol, option_type, current_price, strike=int(strike))
             if live_ltp:
                 option_price = live_ltp
         pnl_pct = ((option_price - avg_price) / avg_price) * 100 if avg_price else 0
@@ -371,12 +377,27 @@ class TrendStrategy:
 
     # ── Order execution ────────────────────────────────────────────────────────
 
+    def _estimate_paper_option_ltp(self, symbol: str, option_type: str,
+                                   spot_price: float, strike: int) -> tuple[str, float]:
+        """Paper-only premium model so simulations can proceed without live NFO quotes."""
+        intrinsic = max(0.0, spot_price - strike) if option_type == "CE" else max(0.0, strike - spot_price)
+        distance = abs(spot_price - strike)
+        base_time_value = max(18.0, spot_price * 0.0035)
+        time_value = max(8.0, base_time_value - distance * 0.45)
+        premium = round(intrinsic * 0.55 + time_value, 2)
+        return "", max(1.0, premium)
+
+    def _paper_option_symbol(self, symbol: str, expiry: date, strike: int, option_type: str) -> str:
+        expiry_str = expiry.isoformat() if hasattr(expiry, "isoformat") else str(expiry)
+        return f"{symbol}-{expiry_str}-{strike}{option_type}"
+
     def _get_option_ltp(self, symbol: str, option_type: str, current_price: float,
-                        strike: int = None) -> tuple[str | None, int, float | None]:
+                        strike: int = None) -> tuple[str | None, int, float | None, date | None]:
         """Fetch real ATM option LTP from Zerodha. Returns (atm_strike, ltp) or (atm_strike, None) on failure.
         Caller must abort the trade if ltp is None — never use a made-up fallback price.
         """
         atm_strike = int(strike or round(current_price / 50) * 50)
+        expiry = None
         try:
             from data.zerodha_fetcher import ZerodhaFetcher
             expiry = ZerodhaFetcher.nearest_weekly_expiry()
@@ -384,14 +405,28 @@ class TrendStrategy:
             if ltp and ltp > 0:
                 logger.info("Option LTP: %s %d%s @ ₹%.2f (expiry %s)",
                             symbol, atm_strike, option_type, ltp, expiry)
-                return tradingsymbol, atm_strike, ltp
+                return tradingsymbol, atm_strike, ltp, expiry
         except Exception as e:
             logger.warning("Option LTP fetch failed for %s %d%s: %s", symbol, atm_strike, option_type, e)
+        if config.IS_PAPER:
+            paper_symbol, paper_ltp = self._estimate_paper_option_ltp(symbol, option_type, current_price, atm_strike)
+            if expiry is None:
+                try:
+                    from data.zerodha_fetcher import ZerodhaFetcher
+                    expiry = ZerodhaFetcher.nearest_weekly_expiry()
+                except Exception:
+                    expiry = today_ist()
+            paper_symbol = self._paper_option_symbol(symbol, expiry, atm_strike, option_type)
+            logger.warning(
+                "Paper fallback option LTP for %s %d%s -> %s @ %.2f",
+                symbol, atm_strike, option_type, paper_symbol, paper_ltp,
+            )
+            return paper_symbol, atm_strike, paper_ltp, expiry
         msg = f"Option LTP unavailable for {symbol} {atm_strike}{option_type}"
         logger.error(msg + " — skipping trade")
         from core.zerodha_error_log import log_error as _log_err
         _log_err("get_option_ltp", msg, symbol=symbol, detail=f"{atm_strike}{option_type}")
-        return None, atm_strike, None
+        return None, atm_strike, None, expiry
 
     def _execute(self, decision: dict, indicators: dict) -> dict:
         symbol        = decision["symbol"]
@@ -402,35 +437,47 @@ class TrendStrategy:
 
         if side == "BUY":
             option_type = decision.get("option_type") or ("CE" if decision.get("entry_direction", "BUY") == "BUY" else "PE")
-            option_symbol, atm_strike, option_ltp = self._get_option_ltp(
+            option_symbol, atm_strike, option_ltp, expiry = self._get_option_ltp(
                 symbol, option_type, current_price, strike=decision.get("strike")
             )
             if option_ltp is None:
                 return {"status": "SKIPPED", "reason": "option LTP unavailable"}
-            order = self.broker.place_order(option_symbol, side, quantity, price=option_ltp)
+            order = self.broker.place_order(
+                option_symbol, side, quantity, price=option_ltp,
+                exchange="NFO", product="MIS", order_type="MARKET",
+                variety="regular", validity="DAY", tag=self.strategy_name[:20],
+            )
             order["price"] = option_ltp
             order["timestamp"] = order.get("timestamp") or _now_ist().isoformat()
+            order["expiry"] = expiry.isoformat() if expiry else None
             # Persist option metadata in broker position for accurate exit pricing
             if hasattr(self.broker, "positions") and option_symbol in self.broker.positions:
                 self.broker.positions[option_symbol]["symbol"] = option_symbol
                 self.broker.positions[option_symbol]["underlying"] = symbol
                 self.broker.positions[option_symbol]["option_type"] = option_type
                 self.broker.positions[option_symbol]["atm_strike"]  = atm_strike
+                self.broker.positions[option_symbol]["expiry"] = order["expiry"]
         else:
             pos         = decision.get("_position") or self._find_open_option_position(symbol) or {}
             option_type = pos.get("option_type", "CE")
             atm_strike  = pos.get("atm_strike") or pos.get("strike") or atm_strike
             option_symbol = pos.get("symbol") or symbol
-            _, _, exit_ltp = self._get_option_ltp(
+            _, _, exit_ltp, expiry = self._get_option_ltp(
                 pos.get("underlying", symbol), option_type, current_price, strike=int(atm_strike)
             )
             if exit_ltp is None:
                 return {"status": "SKIPPED", "reason": "option LTP unavailable at exit"}
-            order = self.broker.place_order(option_symbol, side, quantity, price=exit_ltp)
+            order = self.broker.place_order(
+                option_symbol, side, quantity, price=exit_ltp,
+                exchange=pos.get("exchange", "NFO"), product=pos.get("product", "MIS"), order_type="MARKET",
+                variety="regular", validity="DAY", tag=self.strategy_name[:20],
+            )
             order["price"] = exit_ltp
             order["timestamp"] = order.get("timestamp") or _now_ist().isoformat()
+            order["expiry"] = pos.get("expiry") or (expiry.isoformat() if expiry else None)
 
         if order.get("status") in ("COMPLETE", "PLACED"):
+            order["underlying"]  = symbol if side == "BUY" else pos.get("underlying", symbol)
             order["option_type"] = option_type
             order["strike"]      = atm_strike
             order["strategy"]    = self.strategy_name
@@ -452,11 +499,15 @@ class TrendStrategy:
     def _parse_option_meta(self, tradingsymbol: str, underlying: str) -> dict:
         option_type = "PE" if tradingsymbol.endswith("PE") else "CE"
         strike = None
+        expiry = None
         match = re.search(r"(\d{5})(CE|PE)$", tradingsymbol)
         if match:
             strike = int(match.group(1))
+        exp_match = re.match(rf"{re.escape(underlying)}-(\d{{4}}-\d{{2}}-\d{{2}})-\d{{5}}(CE|PE)$", tradingsymbol)
+        if exp_match:
+            expiry = exp_match.group(1)
         return {"symbol": tradingsymbol, "underlying": underlying,
-                "option_type": option_type, "atm_strike": strike}
+                "option_type": option_type, "atm_strike": strike, "expiry": expiry}
 
     def _find_open_option_position(self, underlying: str) -> Optional[dict]:
         positions = self.broker.get_positions()

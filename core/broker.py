@@ -34,13 +34,21 @@ class MockBroker:
 
     def place_order(self, symbol: str, side: str, quantity: int,
                     order_type: str = "MARKET", price: float = 0,
-                    exchange: str = "NFO", product: str = "MIS") -> dict:
+                    exchange: str = "NFO", product: str = "MIS",
+                    variety: str = "regular", validity: str = "DAY",
+                    trigger_price: float | None = None, tag: str | None = None) -> dict:
         order = {
             "order_id": f"PAPER-{len(self.orders)+1:04d}",
             "symbol": symbol,
             "side": side,  # BUY or SELL
             "quantity": quantity,
             "order_type": order_type,
+            "exchange": exchange,
+            "product": product,
+            "variety": variety,
+            "validity": validity,
+            "trigger_price": trigger_price,
+            "tag": tag,
             "price": price or self.get_quote(symbol)["last_price"],
             "status": "COMPLETE",
             "timestamp": now_ist().isoformat(),
@@ -59,7 +67,10 @@ class MockBroker:
                                symbol, premium_cost, self.balance)
                 return order
             self.balance -= premium_cost
-            self.positions[symbol] = self.positions.get(symbol, {"quantity": 0, "avg_price": 0, "premium_cost": 0})
+            self.positions[symbol] = self.positions.get(symbol, {
+                "quantity": 0, "avg_price": 0, "premium_cost": 0,
+                "exchange": exchange, "product": product,
+            })
             pos = self.positions[symbol]
             total_qty = pos["quantity"] + quantity
             pos["avg_price"] = ((pos["avg_price"] * pos["quantity"]) + filled_price * quantity) / total_qty
@@ -137,14 +148,16 @@ class KiteBroker:
 
     def place_order(self, symbol: str, side: str, quantity: int,
                     order_type: str = "MARKET", price: float = 0,
-                    exchange: str = "NFO", product: str = "MIS") -> dict:
+                    exchange: str = "NFO", product: str = "MIS",
+                    variety: str = "regular", validity: str = "DAY",
+                    trigger_price: float | None = None, tag: str | None = None) -> dict:
         """Place an order on Kite.
 
         Defaults: exchange=NFO, product=MIS (intraday options/futures).
         Pass exchange="NSE", product="CNC" for equity delivery orders.
         """
         order_id = self.kite.place_order(
-            variety="regular",
+            variety=variety,
             exchange=exchange,
             tradingsymbol=symbol,
             transaction_type=side,
@@ -152,9 +165,16 @@ class KiteBroker:
             product=product,
             order_type=order_type,
             price=price if order_type == "LIMIT" else None,
+            validity=validity,
+            trigger_price=trigger_price,
+            tag=tag,
         )
         logger.info("[LIVE/KITE] %s %d %s@%s | Order ID: %s", side, quantity, symbol, exchange, order_id)
-        return {"order_id": order_id, "symbol": symbol, "side": side, "quantity": quantity, "status": "PLACED"}
+        return {
+            "order_id": order_id, "symbol": symbol, "side": side, "quantity": quantity, "status": "PLACED",
+            "exchange": exchange, "product": product, "order_type": order_type,
+            "variety": variety, "validity": validity, "trigger_price": trigger_price, "tag": tag,
+        }
 
     def get_positions(self) -> dict:
         positions = self.kite.positions()

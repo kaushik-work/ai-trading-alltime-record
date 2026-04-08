@@ -17,6 +17,43 @@ _daily_df_cache: dict[str, object] = {}
 _daily_df_cache_day: dict[str, str] = {}
 
 
+def _build_daily_df_from_intraday(symbol: str):
+    """Fallback: derive daily OHLCV from recent 15m history when day candles fail."""
+    try:
+        from data.zerodha_fetcher import ZerodhaFetcher
+
+        df = ZerodhaFetcher.get().fetch_historical_df(symbol, "15m", days=60)
+        if df is None or len(df) < 20:
+            return None
+
+        import pandas as pd
+
+        if "Date" in df.columns:
+            df = df.set_index("Date")
+        df.index = pd.to_datetime(df.index)
+        required = ["Open", "High", "Low", "Close", "Volume"]
+        if not all(col in df.columns for col in required):
+            return None
+
+        daily = df[required].resample("1D").agg({
+            "Open": "first",
+            "High": "max",
+            "Low": "min",
+            "Close": "last",
+            "Volume": "sum",
+        }).dropna()
+        if len(daily) < 26:
+            return None
+        logger.warning(
+            "_build_daily_df_from_intraday: using 15m->1D fallback for %s (%d days)",
+            symbol, len(daily),
+        )
+        return daily
+    except Exception as e:
+        logger.warning("_build_daily_df_from_intraday failed for %s: %s", symbol, e)
+        return None
+
+
 def _get_daily_df(symbol: str):
     """Fetch daily OHLCV DataFrame via Zerodha. Returns None on failure."""
     from core.zerodha_error_log import log_error as _log_err
@@ -31,6 +68,11 @@ def _get_daily_df(symbol: str):
         from data.zerodha_fetcher import ZerodhaFetcher
         df = ZerodhaFetcher.get().fetch_daily_df(symbol)
         if df is not None and len(df) >= 10:
+            _daily_df_cache[symbol] = df
+            _daily_df_cache_day[symbol] = today_key
+            return df
+        df = _build_daily_df_from_intraday(symbol)
+        if df is not None:
             _daily_df_cache[symbol] = df
             _daily_df_cache_day[symbol] = today_key
             return df
