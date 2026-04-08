@@ -376,7 +376,8 @@ def bot_debug(user: str = Depends(get_current_user)):
     vix_override     = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE)
     vix_override_atr = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE_ATR)
     vix_override_ict = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE_ICT)
-    any_override = vix_override or vix_override_atr or vix_override_ict
+    vix_override_fib = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE_FIB)
+    any_override = vix_override or vix_override_atr or vix_override_ict or vix_override_fib
     vix_blocked  = (not any_override) and (vix is not None) and (vix > config.VIX_THRESHOLD)
 
     result = {"time_ist": now_ist.isoformat(), "market_open": _is_market_hours(),
@@ -386,13 +387,14 @@ def bot_debug(user: str = Depends(get_current_user)):
               "vix_override": vix_override,
               "vix_override_atr": vix_override_atr,
               "vix_override_ict": vix_override_ict,
+              "vix_override_fib": vix_override_fib,
               "vix_threshold": config.VIX_THRESHOLD,
               "token_set_at": _get_token_status(),
               "strategies": {}}
 
     # Use last_scores from bot cycles (populated after each ATR/ICT cycle).
     # Fall back to a live score fetch if the bot hasn't run yet (e.g. first load).
-    for strat_name, score_mode in [("ATR Intraday", "atr_only"), ("C-ICT", "ict_only")]:
+    for strat_name, score_mode in [("ATR Intraday", "atr_only"), ("C-ICT", "ict_only"), ("Fib-OF", "fib_of_only")]:
         if strat_name in runner.last_scores:
             result["strategies"][strat_name] = runner.last_scores[strat_name]
         else:

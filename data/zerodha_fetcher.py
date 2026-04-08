@@ -216,21 +216,39 @@ class ZerodhaFetcher:
 
     # ── options helpers ───────────────────────────────────────────────────────
 
-    @staticmethod
-    def nearest_weekly_expiry() -> date:
-        """Return the nearest upcoming NIFTY weekly expiry (Thursday).
+    @classmethod
+    def nearest_weekly_expiry(cls) -> date:
+        """Return the nearest tradable NIFTY expiry from the live NFO instruments list.
 
-        If today is Thursday and market is still open (before 15:30 IST),
-        returns today. Otherwise returns the next Thursday.
+        This is safer than assuming "next Thursday" because NSE weekly expiries
+        can shift earlier when Thursday is a trading holiday.
         """
         from zoneinfo import ZoneInfo
+
         now = datetime.now(ZoneInfo("Asia/Kolkata"))
         today = now.date()
-        days_to_thu = (3 - today.weekday()) % 7  # 0 if today is Thu
-        if days_to_thu == 0:
-            # Today is Thursday — use next week's if market already closed
-            if now.hour > 15 or (now.hour == 15 and now.minute >= 30):
-                days_to_thu = 7
+        inst = cls.get()
+
+        try:
+            if inst._ensure_logged_in():
+                expiries = sorted({
+                    i["expiry"]
+                    for i in inst._nfo_instruments()
+                    if i["name"] == "NIFTY" and i["instrument_type"] in ("CE", "PE")
+                    and i["expiry"] >= today
+                })
+                if expiries:
+                    if now.hour > 15 or (now.hour == 15 and now.minute >= 30):
+                        future = [exp for exp in expiries if exp > today]
+                        if future:
+                            return future[0]
+                    return expiries[0]
+        except Exception as e:
+            logger.warning("nearest_weekly_expiry: live expiry discovery failed: %s", e)
+
+        days_to_thu = (3 - today.weekday()) % 7
+        if days_to_thu == 0 and (now.hour > 15 or (now.hour == 15 and now.minute >= 30)):
+            days_to_thu = 7
         return today + timedelta(days=days_to_thu)
 
     def _nfo_instruments(self) -> list:
@@ -270,6 +288,25 @@ class ZerodhaFetcher:
                  and i["expiry"] == expiry),
                 None,
             )
+            if match is None:
+                from zoneinfo import ZoneInfo
+                today = datetime.now(ZoneInfo("Asia/Kolkata")).date()
+                fallback = sorted(
+                    (
+                        i for i in instruments
+                        if i["name"] == symbol
+                        and int(i["strike"]) == strike
+                        and i["instrument_type"] == option_type
+                        and i["expiry"] >= today
+                    ),
+                    key=lambda i: i["expiry"],
+                )
+                if fallback:
+                    match = fallback[0]
+                    logger.warning(
+                        "get_option_ltp: using fallback expiry %s for %s strike=%d %s (requested %s)",
+                        match["expiry"], symbol, strike, option_type, expiry,
+                    )
             if match is None:
                 logger.warning(
                     "get_option_ltp: no instrument for %s %s strike=%d %s",

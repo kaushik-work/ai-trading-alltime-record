@@ -13,14 +13,26 @@ import config
 
 logger = logging.getLogger(__name__)
 
+_daily_df_cache: dict[str, object] = {}
+_daily_df_cache_day: dict[str, str] = {}
+
 
 def _get_daily_df(symbol: str):
     """Fetch daily OHLCV DataFrame via Zerodha. Returns None on failure."""
     from core.zerodha_error_log import log_error as _log_err
+    from core.utils import now_ist
+
+    today_key = now_ist().date().isoformat()
+    cached = _daily_df_cache.get(symbol)
+    if cached is not None and _daily_df_cache_day.get(symbol) == today_key:
+        return cached
+
     try:
         from data.zerodha_fetcher import ZerodhaFetcher
         df = ZerodhaFetcher.get().fetch_daily_df(symbol)
         if df is not None and len(df) >= 10:
+            _daily_df_cache[symbol] = df
+            _daily_df_cache_day[symbol] = today_key
             return df
         msg = "fetch_daily_df returned insufficient data"
         logger.error("_get_daily_df: %s for %s", msg, symbol)
@@ -55,7 +67,34 @@ class RealMarketData:
     """
 
     def get_quote(self, symbol: str) -> dict:
-        """Latest price from daily data (last bar close). Returns empty dict on failure."""
+        """Latest quote using intraday bars first, daily bars as fallback."""
+        df_5m = _get_intraday_df(symbol, "5m")
+        if df_5m is not None and len(df_5m) >= 2:
+            closes = df_5m["Close"].astype(float)
+            highs = df_5m["High"].astype(float)
+            lows = df_5m["Low"].astype(float)
+            last_price = float(closes.iloc[-1])
+            day_open = float(df_5m["Open"].astype(float).iloc[0])
+            prev_close = day_open
+
+            df_d = _daily_df_cache.get(symbol)
+            if df_d is not None and len(df_d) >= 2:
+                prev_close = float(df_d["Close"].astype(float).iloc[-2])
+
+            change = last_price - prev_close
+            return {
+                "symbol": symbol,
+                "last_price": round(last_price, 2),
+                "open": round(day_open, 2),
+                "high": round(float(highs.max()), 2),
+                "low": round(float(lows.min()), 2),
+                "volume": int(df_5m["Volume"].fillna(0).sum()),
+                "change": round(change, 2),
+                "change_pct": round((change / prev_close) * 100, 2) if prev_close else 0,
+                "timestamp": datetime.now().isoformat(),
+                "source": "zerodha_intraday",
+            }
+
         df = _get_daily_df(symbol)
         if df is not None and len(df) >= 2:
             last   = df.iloc[-1]

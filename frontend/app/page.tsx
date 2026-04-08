@@ -73,7 +73,8 @@ export default function Home() {
   const vixOverride       = data?.vix_override             ?? false;
   const vixOverrideAtr    = data?.vix_override_atr         ?? false;
   const vixOverrideIct    = data?.vix_override_ict         ?? false;
-  const anyOverride       = vixOverride || vixOverrideAtr || vixOverrideIct;
+  const vixOverrideFib    = data?.vix_override_fib         ?? false;
+  const anyOverride       = vixOverride || vixOverrideAtr || vixOverrideIct || vixOverrideFib;
   const vixThreshold      = data?.vix_threshold            ?? 20;
   const tokenStatus       = data?.token_set_at       ?? null;
   const tokenLive         = tokenStatus?.live        ?? false;
