@@ -40,7 +40,7 @@ export default function PnLPage() {
   useEffect(() => { fetchPnL(); }, []);
 
   return (
-    <div className="min-h-screen bg-[#f0f2f5]">
+    <div className="min-h-screen bg-[#f0f2f5] text-gray-900">
       <Header
         mode={wsData?.mode ?? "paper"}
         connected={connected}
@@ -48,7 +48,7 @@ export default function PnLPage() {
         onBotToggle={() => {}}
       />
 
-      <div className="max-w-6xl mx-auto p-6 space-y-5">
+      <div className="max-w-6xl mx-auto p-6 space-y-5 text-gray-900">
         <div className="flex items-center gap-3">
           <button onClick={() => router.push("/")} className="text-gray-400 hover:text-gray-700 text-sm font-medium">← Back</button>
           <div className="w-px h-4 bg-gray-200" />
@@ -56,7 +56,7 @@ export default function PnLPage() {
         </div>
 
         {/* ── Date filter ── */}
-        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 text-gray-900">
           <div className="flex flex-wrap items-end gap-4">
             <div>
               <label className="text-xs text-gray-500 mb-1.5 block font-medium uppercase tracking-widest">From</label>
@@ -96,18 +96,18 @@ export default function PnLPage() {
 
         {/* ── Summary KPIs ── */}
         {data && (
-          <div className="grid grid-cols-3 gap-4">
-            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+          <div className="grid grid-cols-3 gap-4 text-gray-900">
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 text-gray-900">
               <div className="text-xs text-gray-500 uppercase tracking-widest font-semibold mb-1">Total P&L</div>
               <div className={`text-2xl font-bold ${data.total_pnl >= 0 ? "text-green-600" : "text-red-500"}`}>
                 ₹{data.total_pnl?.toFixed(2)}
               </div>
             </div>
-            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 text-gray-900">
               <div className="text-xs text-gray-500 uppercase tracking-widest font-semibold mb-1">Total Trades</div>
               <div className="text-2xl font-bold text-gray-900">{data.total_trades}</div>
             </div>
-            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 text-gray-900">
               <div className="text-xs text-gray-500 uppercase tracking-widest font-semibold mb-1">Win Rate</div>
               <div className="text-2xl font-bold text-gray-900">{data.win_rate}%</div>
             </div>
@@ -120,7 +120,7 @@ export default function PnLPage() {
             <div className="text-xs font-bold text-gray-500 uppercase tracking-widest">Daily Breakdown</div>
 
             {data.daily.map((day: any) => (
-              <div key={day.date} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+              <div key={day.date} className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden text-gray-900">
 
                 {/* Day header — clickable to expand */}
                 <button
@@ -146,8 +146,8 @@ export default function PnLPage() {
 
                 {/* Trade details — expanded */}
                 {expandedDate === day.date && (
-                  <div className="border-t border-gray-100 overflow-x-auto">
-                    <table className="w-full text-sm">
+                  <div className="border-t border-gray-100 overflow-x-auto text-gray-900">
+                    <table className="w-full text-sm text-gray-900">
                       <thead>
                         <tr className="bg-gray-50">
                           <th className="px-4 py-2.5 text-left text-xs text-gray-500 font-semibold uppercase">Time</th>
