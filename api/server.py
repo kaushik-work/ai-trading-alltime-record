@@ -371,15 +371,7 @@ def bot_debug(user: str = Depends(get_current_user)):
     runner = get_runner()
     now_ist = datetime.now(IST)
 
-    # VIX: use cached value; if missing, try a fresh fetch now
     vix = runner.last_vix
-    if vix is None:
-        try:
-            from data.zerodha_fetcher import ZerodhaFetcher
-            vix = ZerodhaFetcher.get().fetch_vix()
-            runner.last_vix = vix
-        except Exception:
-            pass
 
     vix_override     = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE)
     vix_override_atr = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE_ATR)

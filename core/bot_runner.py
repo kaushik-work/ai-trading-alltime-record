@@ -141,8 +141,12 @@ class BotRunner:
 
         now_ist = datetime.now(IST)
 
-        # VIX fetch at 9:20 — before trading starts, once per day
-        self.scheduler.add_job(self._fetch_vix, "cron", hour=9, minute=20, id="vix_fetch")
+        # VIX fetch every 30 min during market hours (9:20, 9:50, ..., 15:20)
+        self.scheduler.add_job(
+            self._fetch_vix, "cron",
+            day_of_week="mon-fri", hour="9-15", minute="20,50",
+            id="vix_fetch",
+        )
 
         # ATR Intraday — every 5 min
         self.scheduler.add_job(
