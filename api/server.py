@@ -166,6 +166,55 @@ def _build_snapshot() -> dict:
         for t in today_round_trips
     ]
 
+    open_trade_feed = [
+        {
+            "symbol":       t.get("underlying") or t.get("symbol"),
+            "contract_symbol": t.get("symbol"),
+            "underlying":   t.get("underlying"),
+            "option_type":  t.get("option_type"),
+            "strike":       t.get("strike"),
+            "expiry":       t.get("expiry"),
+            "strategy":     t.get("strategy"),
+            "buy_price":    t.get("price"),
+            "sell_price":   None,
+            "qty":          t.get("quantity"),
+            "pnl":          None,
+            "status":       "OPEN",
+            "entry_time":   t.get("timestamp"),
+            "exit_time":    None,
+            "activity_time": t.get("timestamp"),
+        }
+        for t in all_trades
+        if t.get("side") == "BUY" and not t.get("closed_at") and t.get("strategy")
+    ]
+
+    closed_trade_feed = [
+        {
+            "symbol":         t.get("underlying") or t.get("symbol"),
+            "contract_symbol": t.get("symbol"),
+            "underlying":     t.get("underlying"),
+            "option_type":    t.get("option_type"),
+            "strike":         t.get("strike"),
+            "expiry":         t.get("expiry"),
+            "strategy":       t.get("strategy"),
+            "buy_price":      t.get("entry_price"),
+            "sell_price":     t.get("exit_price"),
+            "qty":            t.get("quantity"),
+            "pnl":            t.get("pnl"),
+            "status":         t.get("status"),
+            "entry_time":     t.get("entry_time"),
+            "exit_time":      t.get("exit_time"),
+            "activity_time":  t.get("exit_time") or t.get("entry_time"),
+        }
+        for t in all_round_trips
+    ]
+
+    recent_activity = sorted(
+        open_trade_feed + closed_trade_feed,
+        key=lambda x: x.get("activity_time", "") or "",
+        reverse=True,
+    )
+
     from zoneinfo import ZoneInfo
     IST = ZoneInfo("Asia/Kolkata")
     now_ist = datetime.now(IST)
@@ -224,6 +273,7 @@ def _build_snapshot() -> dict:
             "today_journal":    today_journal,
             "prices": prices,
             "recent_trades": all_trades[:20],
+            "recent_activity": recent_activity[:20],
             "round_trips":   all_round_trips[:20],
         "zerodha_error_count": len(__import__("core.zerodha_error_log", fromlist=["get_all"]).get_all()),
         "latest_order_issue": _latest_order_issue(),

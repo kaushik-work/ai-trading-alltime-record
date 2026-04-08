@@ -59,7 +59,7 @@ export default function Home() {
   }, []);
 
   const { data, connected } = useWebSocket(authed ? WS_URL : "");
-  const trades            = data?.round_trips        ?? [];
+  const trades            = data?.recent_activity    ?? data?.round_trips ?? [];
   const errorCount        = data?.zerodha_error_count ?? 0;
   const openPos           = data?.open_positions    ?? [];
   const mode              = data?.mode              ?? "paper";
@@ -453,7 +453,7 @@ export default function Home() {
             </div>
           )}
 
-          {/* Recent closed trades */}
+          {/* Recent trades: open entries first, then completed exits */}
           <div>
             <div className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">Recent Trades</div>
             {trades.length === 0 ? (
@@ -498,7 +498,7 @@ export default function Home() {
                           </td>
                           <td className="px-4 py-3 text-right text-gray-700">{t.qty}</td>
                           <td className="px-4 py-3 text-right font-semibold" style={{ color: pnl > 0 ? "#16a34a" : pnl < 0 ? "#ef4444" : "#6b7280" }}>
-                            {pnl !== 0 ? `${pnl > 0 ? "+" : ""}₹${pnl.toFixed(2)}` : "—"}
+                            {typeof pnl === "number" && pnl !== 0 ? `${pnl > 0 ? "+" : ""}₹${pnl.toFixed(2)}` : t.status === "OPEN" ? "OPEN" : "—"}
                           </td>
                           <td className="px-4 py-3 text-xs text-gray-400">
                             <div>{t.entry_time ? new Date(t.entry_time).toLocaleTimeString("en-IN") : "—"}</div>
