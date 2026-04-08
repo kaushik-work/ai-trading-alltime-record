@@ -442,6 +442,34 @@ class TrendStrategy:
             )
             if option_ltp is None:
                 return {"status": "SKIPPED", "reason": "option LTP unavailable"}
+            if not config.IS_PAPER and hasattr(self.broker, "preflight_order"):
+                preflight = self.broker.preflight_order(
+                    symbol=symbol,
+                    side=side,
+                    quantity=quantity,
+                    order_type="MARKET",
+                    price=option_ltp,
+                    exchange="NFO",
+                    product="MIS",
+                    variety="regular",
+                    validity="DAY",
+                    tag=self.strategy_name[:20],
+                    tradingsymbol=option_symbol,
+                    option_type=option_type,
+                    strike=atm_strike,
+                    expiry=expiry,
+                    log_failures=True,
+                )
+                if not preflight.get("ok"):
+                    logger.error("[%s] Live preflight failed for %s: %s", self.strategy_name, option_symbol, preflight.get("error"))
+                    return {
+                        "status": "REJECTED",
+                        "symbol": option_symbol,
+                        "side": side,
+                        "quantity": quantity,
+                        "reason": preflight.get("error"),
+                        "preflight": preflight,
+                    }
             order = self.broker.place_order(
                 option_symbol, side, quantity, price=option_ltp,
                 exchange="NFO", product="MIS", order_type="MARKET",
@@ -467,6 +495,34 @@ class TrendStrategy:
             )
             if exit_ltp is None:
                 return {"status": "SKIPPED", "reason": "option LTP unavailable at exit"}
+            if not config.IS_PAPER and hasattr(self.broker, "preflight_order"):
+                preflight = self.broker.preflight_order(
+                    symbol=pos.get("underlying", symbol),
+                    side=side,
+                    quantity=quantity,
+                    order_type="MARKET",
+                    price=exit_ltp,
+                    exchange=pos.get("exchange", "NFO"),
+                    product=pos.get("product", "MIS"),
+                    variety="regular",
+                    validity="DAY",
+                    tag=self.strategy_name[:20],
+                    tradingsymbol=option_symbol,
+                    option_type=option_type,
+                    strike=int(atm_strike),
+                    expiry=expiry,
+                    log_failures=True,
+                )
+                if not preflight.get("ok"):
+                    logger.error("[%s] Live exit preflight failed for %s: %s", self.strategy_name, option_symbol, preflight.get("error"))
+                    return {
+                        "status": "REJECTED",
+                        "symbol": option_symbol,
+                        "side": side,
+                        "quantity": quantity,
+                        "reason": preflight.get("error"),
+                        "preflight": preflight,
+                    }
             order = self.broker.place_order(
                 option_symbol, side, quantity, price=exit_ltp,
                 exchange=pos.get("exchange", "NFO"), product=pos.get("product", "MIS"), order_type="MARKET",
@@ -491,6 +547,8 @@ class TrendStrategy:
             broken = self.records.check_trade(order)
             if broken:
                 logger.info("ALL-TIME RECORD BROKEN: %s", broken)
+        elif order.get("status") == "REJECTED":
+            logger.error("[%s] Order rejected for %s: %s", self.strategy_name, order.get("symbol"), order.get("reason"))
 
         return order
 

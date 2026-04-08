@@ -171,7 +171,7 @@ class BotRunner:
         self.scheduler.add_job(self._reset_day_bias, "cron", hour=20, minute=0, id="bias_reset")
 
         self.scheduler.start()
-        logger.info("BotRunner started — ATR Intraday(5m) + C-ICT(5m, +2m30s offset)")
+        logger.info("BotRunner started — ATR Intraday(5m) + C-ICT(5m, +2m30s offset) + Fib-OF(15m)")
 
     def stop(self):
         self.scheduler.shutdown(wait=False)

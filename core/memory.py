@@ -202,6 +202,63 @@ class TradeMemory:
             """, (limit,)).fetchall()
         return [dict(r) for r in rows]
 
+    def build_round_trips(self, trades: Optional[list] = None) -> list:
+        """
+        Pair BUY/SELL rows into completed round trips.
+
+        Keyed by option contract identity plus strategy so dashboard, journal,
+        and analytics use the same trade counting model.
+        """
+        trade_rows = trades if trades is not None else self.get_all_trades(limit=2000)
+        sorted_trades = sorted(trade_rows, key=lambda x: x.get("timestamp", ""))
+        pending_buys: dict = {}
+        round_trips: list = []
+
+        for trade in sorted_trades:
+            key = (
+                trade.get("symbol"),
+                trade.get("strategy"),
+                trade.get("option_type"),
+                trade.get("strike"),
+                trade.get("expiry"),
+            )
+            side = trade.get("side")
+            if side == "BUY":
+                pending_buys[key] = trade
+                continue
+            if side != "SELL":
+                continue
+
+            buy = pending_buys.pop(key, None)
+            round_trips.append({
+                "strategy": trade.get("strategy") or (buy or {}).get("strategy"),
+                "symbol": trade.get("symbol"),
+                "underlying": trade.get("underlying") or (buy or {}).get("underlying"),
+                "option_type": trade.get("option_type") or (buy or {}).get("option_type"),
+                "strike": trade.get("strike") if trade.get("strike") is not None else (buy or {}).get("strike"),
+                "expiry": trade.get("expiry") or (buy or {}).get("expiry"),
+                "side": "BUY",
+                "quantity": trade.get("quantity") or (buy or {}).get("quantity"),
+                "lot_size": trade.get("lot_size") or (buy or {}).get("lot_size", 75),
+                "entry_price": (buy or {}).get("price"),
+                "exit_price": trade.get("price"),
+                "avg_buy_price": trade.get("avg_buy_price") or (buy or {}).get("price"),
+                "pnl": round(float(trade.get("pnl") or 0), 2),
+                "close_reason": trade.get("close_reason") or (buy or {}).get("close_reason"),
+                "score": (buy or {}).get("score", trade.get("score")),
+                "entry_time": (buy or {}).get("timestamp"),
+                "exit_time": trade.get("timestamp"),
+                "closed_at": trade.get("closed_at") or (buy or {}).get("closed_at"),
+                "status": trade.get("status"),
+                "entry_remark": (buy or {}).get("entry_remark"),
+                "exit_remark": trade.get("exit_remark"),
+                "buy_order_id": (buy or {}).get("order_id"),
+                "sell_order_id": trade.get("order_id"),
+            })
+
+        round_trips.sort(key=lambda x: x.get("exit_time", ""), reverse=True)
+        return round_trips
+
     def save_daily_summary(self, date: str, trades: list, review: str = ""):
         pnls = [t.get("pnl", 0) for t in trades]
         wins = [p for p in pnls if p > 0]

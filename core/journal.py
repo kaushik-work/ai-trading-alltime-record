@@ -53,7 +53,7 @@ from core.memory import TradeMemory
 
 logger = logging.getLogger(__name__)
 
-STRATEGIES = ["ATR Intraday", "C-ICT"]
+STRATEGIES = ["ATR Intraday", "C-ICT", "Fib-OF"]
 
 
 def _ensure_dir():
@@ -75,6 +75,7 @@ def _collect_vix_context() -> dict:
     vix_override_global = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE)
     vix_override_atr    = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE_ATR)
     vix_override_ict    = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE_ICT)
+    vix_override_fib    = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE_FIB)
     threshold           = config.VIX_THRESHOLD
 
     blocked = (vix is not None) and (vix > threshold) and not vix_override_global
@@ -86,11 +87,12 @@ def _collect_vix_context() -> dict:
         "override_global":   vix_override_global,
         "override_atr":      vix_override_atr,
         "override_ict":      vix_override_ict,
-        "learning": _analyse_vix_decision(vix, threshold, vix_override_global, vix_override_atr, vix_override_ict),
+        "override_fib":      vix_override_fib,
+        "learning": _analyse_vix_decision(vix, threshold, vix_override_global, vix_override_atr, vix_override_ict, vix_override_fib),
     }
 
 
-def _analyse_vix_decision(vix, threshold, override_global, override_atr, override_ict) -> str:
+def _analyse_vix_decision(vix, threshold, override_global, override_atr, override_ict, override_fib) -> str:
     """Generate a human-readable analysis of today's VIX-related decisions."""
     if vix is None:
         return "VIX data unavailable today — no VIX gate decision recorded."
@@ -104,7 +106,8 @@ def _analyse_vix_decision(vix, threshold, override_global, override_atr, overrid
         else:
             atr_status = "bypassed (override ON)" if override_atr else "blocked"
             ict_status = "bypassed (override ON)" if override_ict else "blocked"
-            lines.append(f"ATR Intraday: {atr_status}. C-ICT: {ict_status}.")
+            fib_status = "bypassed (override ON)" if override_fib else "blocked"
+            lines.append(f"ATR Intraday: {atr_status}. C-ICT: {ict_status}. Fib-OF: {fib_status}.")
     return " ".join(lines)
 
 
@@ -172,27 +175,28 @@ def save_daily_journal(date_str: Optional[str] = None) -> str:
     # Pull today's trades from DB
     today_trades = memory.get_today_trades()
 
-    # Separate OPEN/entries from COMPLETE/closes
-    complete_trades = [t for t in today_trades if t.get("status") == "COMPLETE" and t.get("strategy")]
+    round_trips = memory.build_round_trips(today_trades)
 
-    # Build clean trade list from COMPLETE rows (each closed trade has one SELL row)
     trades_list = []
-    for t in complete_trades:
+    for trip in round_trips:
         trades_list.append({
-            "strategy":     t.get("strategy", "—"),
-            "symbol":       t.get("symbol"),
-            "option_type":  t.get("option_type", "—"),
-            "strike":       t.get("strike"),
-            "side":         t.get("side"),
-            "entry_price":  t.get("price"),
-            "lot_size":     t.get("lot_size", 75),
-            "pnl":          round(t.get("pnl", 0), 2),
-            "close_reason": t.get("close_reason", "—"),
-            "score":        t.get("score"),
-            "entry_time":   t.get("timestamp"),
-            "exit_time":    t.get("closed_at"),
-            "entry_remark": t.get("entry_remark", ""),
-            "exit_remark":  t.get("exit_remark", ""),
+            "strategy":     trip.get("strategy", "—"),
+            "symbol":       trip.get("symbol"),
+            "underlying":   trip.get("underlying"),
+            "option_type":  trip.get("option_type", "—"),
+            "strike":       trip.get("strike"),
+            "expiry":       trip.get("expiry"),
+            "side":         trip.get("side", "BUY"),
+            "entry_price":  trip.get("entry_price"),
+            "exit_price":   trip.get("exit_price"),
+            "lot_size":     trip.get("lot_size", 75),
+            "pnl":          round(trip.get("pnl", 0), 2),
+            "close_reason": trip.get("close_reason", "—"),
+            "score":        trip.get("score"),
+            "entry_time":   trip.get("entry_time"),
+            "exit_time":    trip.get("exit_time"),
+            "entry_remark": trip.get("entry_remark", ""),
+            "exit_remark":  trip.get("exit_remark", ""),
         })
 
     # Summary stats
@@ -226,7 +230,7 @@ def save_daily_journal(date_str: Optional[str] = None) -> str:
         "saved_at":  now_ist().isoformat(),
         "summary": {
             "total_pnl":        total_pnl,
-            "total_trades":     len(today_trades),
+            "total_trades":     len(round_trips),
             "completed_trades": len(trades_list),
             "wins":             wins,
             "losses":           losses,

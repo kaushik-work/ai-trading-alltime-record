@@ -15,6 +15,8 @@ const SOURCE_LABELS: Record<string, string> = {
   fetch_intraday_df:  "Intraday DF fetch",
   get_option_ltp:     "Option LTP fetch",
   get_quote:          "Spot price quote",
+  live_order_preflight:"Live order preflight",
+  live_order_rejected:"Live order rejected",
 };
 
 export default function ErrorsPage() {

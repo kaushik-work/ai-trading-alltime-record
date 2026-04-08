@@ -428,9 +428,9 @@ def score_symbol(indicators: dict, oi_data: dict, patterns: dict,
             score += breakdown.get("pdh_pdl", 0)
 
     # ── 12. Strategy C — ICT Order Blocks + Liquidity Sweeps ────────────────────
-    # ict_only keeps Delta + TL scores (directional filter) and adds ICT on top.
-    # fib_of_only discards all prior scores — Fib logic handles everything.
-    if mode == "fib_of_only":
+    # ict_only and fib_of_only discard the ATR stack above and use only their
+    # own strategy-specific scoring blocks.
+    if mode in {"ict_only", "fib_of_only"}:
         score = 0
         signals.clear()
         breakdown.clear()

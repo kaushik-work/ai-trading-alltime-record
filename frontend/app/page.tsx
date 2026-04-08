@@ -79,6 +79,7 @@ export default function Home() {
   const tokenStatus       = data?.token_set_at       ?? null;
   const tokenLive         = tokenStatus?.live        ?? false;
   const tokenSetAt        = tokenStatus?.set_at      ?? null;
+  const latestOrderIssue  = data?.latest_order_issue ?? null;
   const dayBiasData       = data?.day_bias          ?? { bias: "NEUTRAL", note: "", set_at: null };
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -250,6 +251,17 @@ export default function Home() {
               </div>
             </div>
           </div>
+
+          {latestOrderIssue && (
+            <div className="mb-4 bg-red-50 border border-red-200 rounded-xl p-3">
+              <div className="text-[10px] font-bold uppercase tracking-widest text-red-500 mb-1">Latest Live Order Issue</div>
+              <div className="text-sm font-semibold text-red-700">{latestOrderIssue.error}</div>
+              <div className="text-xs text-red-500 mt-1">
+                {latestOrderIssue.symbol || "—"} {latestOrderIssue.detail ? `· ${latestOrderIssue.detail}` : ""}
+                {latestOrderIssue.timestamp ? ` · ${new Date(latestOrderIssue.timestamp).toLocaleTimeString("en-IN")}` : ""}
+              </div>
+            </div>
+          )}
 
           {/* Open positions — highlighted */}
           {openPos.length > 0 && (

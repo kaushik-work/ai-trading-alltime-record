@@ -8,6 +8,8 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 export default function DebugPage() {
   const router = useRouter();
   const [data, setData] = useState<any>(null);
+  const [preflight, setPreflight] = useState<any>(null);
+  const [preflightLoading, setPreflightLoading] = useState(false);
   const [loading, setLoading] = useState(false);
   const [lastFetch, setLastFetch] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -26,6 +28,25 @@ export default function DebugPage() {
       await fetchDebug();
     } finally {
       setVixSaving(s => ({ ...s, [key]: false }));
+    }
+  }
+
+  async function runPreflight() {
+    const token = localStorage.getItem("aq_token");
+    if (!token) { router.replace("/login"); return; }
+    setPreflightLoading(true);
+    try {
+      const res = await fetch(`${API_URL}/api/live/preflight`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ symbol: "NIFTY", side: "BUY", option_type: "CE" }),
+      });
+      const json = await res.json();
+      setPreflight(json);
+    } catch (e: any) {
+      setPreflight({ ok: false, error: e.message, checks: [] });
+    } finally {
+      setPreflightLoading(false);
     }
   }
 
@@ -88,6 +109,65 @@ export default function DebugPage() {
         {error && (
           <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-4 text-sm text-red-600">{error}</div>
         )}
+
+        {data?.latest_order_issue && (
+          <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-4">
+            <div className="text-[10px] text-red-500 uppercase font-semibold mb-1">Latest Live Order Issue</div>
+            <div className="text-sm font-bold text-red-700">{data.latest_order_issue.error}</div>
+            <div className="text-xs text-red-500 mt-1">
+              {data.latest_order_issue.symbol || "—"}
+              {data.latest_order_issue.detail ? ` · ${data.latest_order_issue.detail}` : ""}
+              {data.latest_order_issue.timestamp ? ` · ${new Date(data.latest_order_issue.timestamp).toLocaleTimeString("en-IN")}` : ""}
+            </div>
+          </div>
+        )}
+
+        <div className="bg-white rounded-xl border border-gray-200 p-4 mb-4 md:mb-6">
+          <div className="flex items-center justify-between gap-3 mb-3">
+            <div>
+              <div className="text-[10px] text-gray-400 uppercase font-semibold mb-1">Live Preflight</div>
+              <div className="text-sm text-gray-600">Checks token, contract, LTP, lot size, and estimated margins before live placement.</div>
+            </div>
+            <button
+              onClick={runPreflight}
+              disabled={preflightLoading}
+              className="text-xs font-semibold px-3 py-2 rounded-lg border border-gray-300 bg-white text-gray-700 hover:border-gray-400 disabled:opacity-50"
+            >
+              {preflightLoading ? "Running…" : "Run Preflight"}
+            </button>
+          </div>
+
+          {preflight && (
+            <div>
+              <div className="flex items-center gap-2 mb-3">
+                <span className="text-xs font-bold px-2 py-1 rounded-full"
+                      style={preflight.ok ? { background: "#dcfce7", color: "#15803d" } : { background: "#fee2e2", color: "#dc2626" }}>
+                  {preflight.ok ? "READY" : "BLOCKED"}
+                </span>
+                {preflight.error && <span className="text-xs text-red-500">{preflight.error}</span>}
+              </div>
+              {preflight.resolved && (
+                <div className="text-xs text-gray-500 mb-3">
+                  {preflight.resolved.tradingsymbol || "—"}
+                  {preflight.resolved.expiry ? ` · exp ${preflight.resolved.expiry}` : ""}
+                  {preflight.resolved.price ? ` · ₹${Number(preflight.resolved.price).toFixed(2)}` : ""}
+                  {preflight.resolved.margin_required ? ` · margin ₹${Number(preflight.resolved.margin_required).toLocaleString("en-IN")}` : ""}
+                </div>
+              )}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                {(preflight.checks ?? []).map((c: any, idx: number) => (
+                  <div key={idx} className="rounded-lg border px-3 py-2"
+                       style={c.ok ? { borderColor: "#bbf7d0", background: "#f0fdf4" } : { borderColor: "#fecaca", background: "#fef2f2" }}>
+                    <div className="text-xs font-semibold" style={{ color: c.ok ? "#15803d" : "#dc2626" }}>
+                      {c.ok ? "PASS" : "FAIL"} · {c.name}
+                    </div>
+                    <div className="text-xs text-gray-600 mt-0.5">{c.detail}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
 
         {/* Market status + heartbeat */}
         {data && (

@@ -91,21 +91,31 @@ def _get_prices() -> dict:
     return prices
 
 
+def _latest_order_issue() -> dict | None:
+    from core.zerodha_error_log import get_all
+    for item in get_all():
+        if item.get("source") in {"live_order_preflight", "live_order_rejected"}:
+            return item
+    return None
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _build_snapshot() -> dict:
     all_trades   = memory.get_all_trades(limit=500)
     today_trades = memory.get_today_trades()
+    all_round_trips = memory.build_round_trips(all_trades)
+    today_round_trips = memory.build_round_trips(today_trades)
     all_records  = records.get_all_records()
 
     total_pnl  = sum(t.get("pnl", 0) for t in all_trades)
-    today_pnl  = sum(t.get("pnl", 0) for t in today_trades)
-    win_trades = sum(1 for t in all_trades if t.get("pnl", 0) > 0)
-    win_rate   = round(win_trades / len(all_trades) * 100, 1) if all_trades else 0
+    today_pnl  = sum(t.get("pnl", 0) for t in today_round_trips)
+    win_trades = sum(1 for t in all_round_trips if t.get("pnl", 0) > 0)
+    win_rate   = round(win_trades / len(all_round_trips) * 100, 1) if all_round_trips else 0
     open_pos   = [t for t in all_trades if t.get("side") == "BUY" and not t.get("closed_at")]
 
-    wins_today   = sum(1 for t in today_trades if t.get("pnl", 0) > 0)
-    losses_today = sum(1 for t in today_trades if t.get("pnl", 0) < 0)
+    wins_today   = sum(1 for t in today_round_trips if t.get("pnl", 0) > 0)
+    losses_today = sum(1 for t in today_round_trips if t.get("pnl", 0) < 0)
 
     # Equity curve
     sell_trades = [t for t in all_trades if t.get("side") == "SELL" and t.get("pnl") is not None]
@@ -121,7 +131,7 @@ def _build_snapshot() -> dict:
     # Per-strategy daily summary
     strategy_summary = {}
     for strat in STRATEGIES:
-        strat_trades = [t for t in today_trades if t.get("strategy") == strat and t.get("status") == "COMPLETE"]
+        strat_trades = [t for t in today_round_trips if t.get("strategy") == strat]
         strat_pnl    = round(sum(t.get("pnl", 0) for t in strat_trades), 2)
         strat_wins   = sum(1 for t in strat_trades if t.get("pnl", 0) > 0)
         strategy_summary[strat] = {
@@ -131,53 +141,29 @@ def _build_snapshot() -> dict:
             "losses": len(strat_trades) - strat_wins,
         }
 
-    # Build round-trip trade pairs for Recent Trades display
-    sorted_trades = sorted(all_trades, key=lambda x: x.get("timestamp", ""))
-    pending_buys: dict = {}  # (symbol, strategy, option_type, strike) → BUY row
-    round_trips = []
-    for t in sorted_trades:
-        key = (t.get("symbol"), t.get("strategy"), t.get("option_type"), t.get("strike"))
-        if t.get("side") == "BUY":
-            pending_buys[key] = t
-        elif t.get("side") == "SELL":
-            buy = pending_buys.pop(key, None)
-            round_trips.append({
-                "symbol":      t.get("symbol"),
-                "strike":      t.get("strike"),
-                "option_type": t.get("option_type"),
-                "expiry":      buy["expiry"] if buy else t.get("expiry"),
-                "strategy":    t.get("strategy"),
-                "buy_price":   buy["price"] if buy else None,
-                "sell_price":  t.get("price"),
-                "qty":         t.get("quantity"),
-                "pnl":         t.get("pnl"),
-                "status":      t.get("status"),
-                "entry_time":  buy["timestamp"] if buy else None,
-                "exit_time":   t.get("timestamp"),
-            })
-    round_trips.sort(key=lambda x: x.get("exit_time", ""), reverse=True)
-
     # Today's completed journal (closed trades with full detail)
     today_journal = [
         {
-            "strategy":    t.get("strategy", "—"),
-            "symbol":      t.get("symbol"),
-            "option_type": t.get("option_type", "—"),
-            "strike":      t.get("strike"),
-            "side":        t.get("side"),
-            "lot_size":    t.get("lot_size", 65),
-            "entry_price": t.get("price"),
-            "pnl":         round(t.get("pnl", 0), 2),
+            "strategy":     t.get("strategy", "—"),
+            "symbol":       t.get("symbol"),
+            "underlying":   t.get("underlying"),
+            "option_type":  t.get("option_type", "—"),
+            "strike":       t.get("strike"),
+            "expiry":       t.get("expiry"),
+            "side":         t.get("side", "BUY"),
+            "lot_size":     t.get("lot_size", 65),
+            "entry_price":  t.get("entry_price"),
+            "exit_price":   t.get("exit_price"),
+            "pnl":          round(t.get("pnl", 0), 2),
             "close_reason": t.get("close_reason", "—"),
             "score":        t.get("score"),
-            "entry_time":   t.get("timestamp"),
-            "exit_time":    t.get("closed_at"),
+            "entry_time":   t.get("entry_time"),
+            "exit_time":    t.get("exit_time"),
             "status":       t.get("status"),
             "entry_remark": t.get("entry_remark"),
             "exit_remark":  t.get("exit_remark"),
         }
-        for t in today_trades
-        if t.get("status") == "COMPLETE" and t.get("strategy")
+        for t in today_round_trips
     ]
 
     from zoneinfo import ZoneInfo
@@ -228,18 +214,19 @@ def _build_snapshot() -> dict:
             "total": round(total_pnl, 2),
             "today": round(today_pnl, 2),
             "win_rate": win_rate,
-            "total_trades": len(all_trades),
-            "today_trades": len(today_trades),
+            "total_trades": len(all_round_trips),
+            "today_trades": len(today_round_trips),
             "wins_today": wins_today,
             "losses_today": losses_today,
             "open_positions": len(open_pos),
         },
         "strategy_summary": strategy_summary,
-        "today_journal":    today_journal,
-        "prices": prices,
-        "recent_trades": all_trades[:20],
-        "round_trips":   round_trips[:20],
+            "today_journal":    today_journal,
+            "prices": prices,
+            "recent_trades": all_trades[:20],
+            "round_trips":   all_round_trips[:20],
         "zerodha_error_count": len(__import__("core.zerodha_error_log", fromlist=["get_all"]).get_all()),
+        "latest_order_issue": _latest_order_issue(),
         "open_positions": open_pos,
         "equity_curve": equity_curve[-100:],  # last 100 points
         "records": [
@@ -390,6 +377,7 @@ def bot_debug(user: str = Depends(get_current_user)):
               "vix_override_fib": vix_override_fib,
               "vix_threshold": config.VIX_THRESHOLD,
               "token_set_at": _get_token_status(),
+              "latest_order_issue": _latest_order_issue(),
               "strategies": {}}
 
     # Use last_scores from bot cycles (populated after each ATR/ICT cycle).
@@ -539,6 +527,37 @@ async def force_trade(body: dict, user: str = Depends(get_current_user)):
         return {"error": "A trade is already queued"}
     ipc.write_force_trade(symbol, side, quantity, reason)
     return {"status": "queued", "symbol": symbol, "side": side, "quantity": quantity}
+
+
+@app.post("/api/live/preflight")
+def live_preflight(body: dict, user: str = Depends(get_current_user)):
+    from core.broker import KiteBroker
+    symbol = str(body.get("symbol", "NIFTY")).upper()
+    side = str(body.get("side", "BUY")).upper()
+    option_type = str(body.get("option_type") or ("PE" if side == "SELL" else "CE")).upper()
+    quantity = int(body.get("quantity") or config.LOT_SIZES.get(symbol, 1))
+    strike = body.get("strike")
+    strike = int(strike) if strike not in (None, "") else None
+    order_type = str(body.get("order_type", "MARKET")).upper()
+    product = str(body.get("product", "MIS")).upper()
+    exchange = str(body.get("exchange", "NFO")).upper()
+    try:
+        broker = KiteBroker()
+        report = broker.preflight_order(
+            symbol=symbol,
+            side=side,
+            quantity=quantity,
+            order_type=order_type,
+            exchange=exchange,
+            product=product,
+            option_type=option_type,
+            strike=strike,
+            tag="preflight",
+            log_failures=False,
+        )
+        return report
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.get("/api/journals")
