@@ -8,6 +8,15 @@ logger = logging.getLogger(__name__)
 _BROKER_INSTANCE = None
 _BROKER_MODE = None
 
+# Zerodha NSE instrument keys for index symbols (not the same as tradingsymbol).
+# kite.quote()/kite.ltp() require the correct exchange:tradingsymbol format.
+_INDEX_NSE_KEY = {
+    "NIFTY":      "NSE:NIFTY 50",
+    "BANKNIFTY":  "NSE:NIFTY BANK",
+    "FINNIFTY":   "NSE:NIFTY FIN SERVICE",
+    "MIDCPNIFTY": "NSE:NIFTY MID SELECT",
+}
+
 
 class MockBroker:
     """Paper trading broker — simulates order execution without real money."""
@@ -23,8 +32,9 @@ class MockBroker:
         """Fetch live quote from Zerodha even in paper mode — no mock prices."""
         from data.zerodha_fetcher import ZerodhaFetcher
         try:
-            ltp_data = ZerodhaFetcher.get()._broker.ltp([f"NSE:{symbol}"])
-            price = float(ltp_data.get(f"NSE:{symbol}", {}).get("last_price", 0))
+            instrument = _INDEX_NSE_KEY.get(symbol, f"NSE:{symbol}")
+            ltp_data = ZerodhaFetcher.get()._broker.ltp([instrument])
+            price = float(ltp_data.get(instrument, {}).get("last_price", 0))
             if price > 0:
                 return {"symbol": symbol, "last_price": price, "timestamp": now_ist().isoformat()}
             from core.zerodha_error_log import log_error as _log_err
@@ -150,11 +160,11 @@ class KiteBroker:
             raise RuntimeError(f"Kite Connect connection failed: {e}")
 
     def get_quote(self, symbol: str) -> dict:
-        data = self.kite.quote([f"NSE:{symbol}"])
-        instrument = data.get(f"NSE:{symbol}", {})
+        instrument_key = _INDEX_NSE_KEY.get(symbol, f"NSE:{symbol}")
+        data = self.kite.quote([instrument_key])
         return {
             "symbol": symbol,
-            "last_price": instrument.get("last_price", 0),
+            "last_price": data.get(instrument_key, {}).get("last_price", 0),
             "timestamp": now_ist().isoformat(),
         }
 
@@ -337,8 +347,16 @@ class KiteBroker:
     def get_portfolio_summary(self) -> dict:
         margins = self.kite.margins()
         equity = margins.get("equity", {})
+        available = equity.get("available", {})
+        # "net" is what Zerodha actually uses to determine if order can be placed.
+        # "available.cash" is only the liquid uninvested portion — excludes intraday
+        # payin and collateral, so it can show ₹0 even with full funds.
+        net            = float(equity.get("net", 0) or 0)
+        cash           = float(available.get("cash", 0) or 0)
+        intraday_payin = float(available.get("intraday_payin", 0) or 0)
+        balance = net if net > 0 else (cash + intraday_payin)
         return {
-            "balance": equity.get("available", {}).get("cash", 0),
+            "balance": round(balance, 2),
             "pnl": sum(p.get("pnl", 0) for p in self.kite.positions().get("net", [])),
             "open_positions": len(self.get_positions()),
         }
