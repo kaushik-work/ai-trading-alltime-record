@@ -117,11 +117,14 @@ class RealMarketData:
             lows = df_5m["Low"].astype(float)
             last_price = float(closes.iloc[-1])
             day_open = float(df_5m["Open"].astype(float).iloc[0])
-            prev_close = day_open
 
+            # Use yesterday's close from daily bars for accurate day-over-day % change.
+            # Fall back to day_open (intraday change) only if daily data isn't available.
             df_d = _daily_df_cache.get(symbol)
             if df_d is not None and len(df_d) >= 2:
                 prev_close = float(df_d["Close"].astype(float).iloc[-2])
+            else:
+                prev_close = day_open
 
             change = last_price - prev_close
             return {
