@@ -519,41 +519,50 @@ export default function Home() {
 }
 
 function OpenPositionCard({ trade, prices }: { trade: any; prices: any }) {
-  const q        = prices[trade.symbol] ?? {};
-  const current  = q.price ?? 0;
-  const entry    = trade.price ?? 0;
-  const unreal   = current && entry ? ((current - entry) / entry * 100).toFixed(2) : null;
-  const unrealRs = current && entry ? ((current - entry) * (trade.quantity ?? 1)).toFixed(2) : null;
-  const isProfit = parseFloat(unreal ?? "0") >= 0;
+  // entry is the option premium paid, not the underlying spot price
+  const entry    = trade.buy_price ?? trade.price ?? 0;
+  const qty      = trade.qty ?? trade.quantity ?? 1;
+  const contract = trade.contract_symbol || trade.symbol || "—";
+  const underlying = trade.underlying || trade.symbol || "—";
+  const spotQ    = prices[underlying] ?? {};
+  const spot     = spotQ.price ?? 0;
 
   return (
     <div className="bg-white rounded-xl border-2 border-indigo-100 p-4 flex items-center justify-between">
       <div className="flex items-center gap-4">
         <div className="w-9 h-9 rounded-lg bg-indigo-50 flex items-center justify-center text-indigo-600 font-bold text-sm">
-          {trade.symbol?.[0]}
+          {underlying?.[0]}
         </div>
         <div>
           <div className="flex items-center gap-2">
-            <span className="font-bold text-gray-900">{trade.symbol}</span>
+            <span className="font-bold text-gray-900">{underlying}</span>
             <span className="text-xs bg-green-100 text-green-700 px-2 py-0.5 rounded-full font-semibold">OPEN</span>
+            {trade.option_type && (
+              <span className="text-xs bg-indigo-50 text-indigo-600 px-1.5 py-0.5 rounded font-bold">
+                {trade.strike} {trade.option_type}
+              </span>
+            )}
           </div>
           <div className="text-xs text-gray-500 mt-0.5">
-            Entry ₹{entry.toLocaleString("en-IN")} · Qty {trade.quantity}
+            Entry ₹{entry.toLocaleString("en-IN")} · Qty {qty}
+            {trade.strategy && <span className="ml-2 text-gray-400">· {trade.strategy}</span>}
           </div>
+          <div className="text-[10px] text-gray-400 mt-0.5 font-mono">{contract}</div>
         </div>
       </div>
 
       <div className="text-right">
-        <div className="text-sm font-bold text-gray-900">
-          {current ? `₹${current.toLocaleString("en-IN")}` : "—"}
-        </div>
-        {unreal && (
-          <div className={`text-xs font-semibold ${isProfit ? "text-green-600" : "text-red-500"}`}>
-            {isProfit ? "▲" : "▼"} {Math.abs(parseFloat(unreal))}% · ₹{unrealRs}
+        {spot > 0 && (
+          <div className="text-sm font-bold text-gray-900">
+            NIFTY ₹{spot.toLocaleString("en-IN")}
           </div>
         )}
+        <div className="text-xs text-gray-500">
+          Prem entry ₹{entry} · {qty} qty
+        </div>
         <div className="text-[10px] text-gray-400 mt-0.5">
-          {trade.timestamp ? new Date(trade.timestamp).toLocaleTimeString("en-IN") : ""}
+          {trade.entry_time ? new Date(trade.entry_time).toLocaleTimeString("en-IN") :
+           trade.timestamp  ? new Date(trade.timestamp).toLocaleTimeString("en-IN") : ""}
         </div>
       </div>
     </div>
