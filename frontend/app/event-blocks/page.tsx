@@ -10,6 +10,7 @@ interface Block {
   label: string;
   source: "config" | "runtime";
   is_today: boolean;
+  unblocked: boolean;
 }
 
 export default function EventBlocksPage() {
@@ -17,11 +18,12 @@ export default function EventBlocksPage() {
   const [authed, setAuthed] = useState(false);
   const [blocks, setBlocks] = useState<Block[]>([]);
   const [todayBlocked, setTodayBlocked] = useState(false);
+  const [todayUnblocked, setTodayUnblocked] = useState(false);
   const [todayLabel, setTodayLabel] = useState<string | null>(null);
   const [newDate, setNewDate] = useState("");
   const [newLabel, setNewLabel] = useState("");
   const [saving, setSaving] = useState(false);
-  const [removing, setRemoving] = useState<string | null>(null);
+  const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [flash, setFlash] = useState<string | null>(null);
 
@@ -41,8 +43,13 @@ export default function EventBlocksPage() {
       const json = await res.json();
       setBlocks(json.blocks);
       setTodayBlocked(json.today_blocked);
+      setTodayUnblocked(json.today_unblocked ?? false);
       setTodayLabel(json.today_label);
     }
+  }
+
+  function showFlash(msg: string) {
+    setFlash(msg); setTimeout(() => setFlash(null), 3000);
   }
 
   async function addBlock() {
@@ -56,8 +63,7 @@ export default function EventBlocksPage() {
     });
     setSaving(false);
     if (res.ok) {
-      setFlash("Date blocked."); setNewDate(""); setNewLabel("");
-      setTimeout(() => setFlash(null), 3000);
+      showFlash("Date blocked."); setNewDate(""); setNewLabel("");
       fetchBlocks();
     } else {
       const j = await res.json();
@@ -66,23 +72,44 @@ export default function EventBlocksPage() {
   }
 
   async function removeBlock(date: string) {
-    setRemoving(date);
+    setBusy(date + ":remove");
     const token = localStorage.getItem("aq_token") || "";
     const res = await fetch(`${API_URL}/api/event-blocks/${date}`, {
       method: "DELETE",
       headers: { Authorization: `Bearer ${token}` },
     });
-    setRemoving(null);
-    if (res.ok) {
-      setFlash("Block removed."); setTimeout(() => setFlash(null), 3000);
-      fetchBlocks();
-    } else {
-      const j = await res.json();
-      setError(j.detail || "Cannot remove.");
-    }
+    setBusy(null);
+    if (res.ok) { showFlash("Block removed."); fetchBlocks(); }
+    else { const j = await res.json(); setError(j.detail || "Cannot remove."); }
+  }
+
+  async function unblockDate(date: string) {
+    setBusy(date + ":unblock");
+    const token = localStorage.getItem("aq_token") || "";
+    await fetch(`${API_URL}/api/event-blocks/${date}/unblock`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    setBusy(null);
+    showFlash("Trading unblocked for " + date + " — bot will trade today.");
+    fetchBlocks();
+  }
+
+  async function reblock(date: string) {
+    setBusy(date + ":reblock");
+    const token = localStorage.getItem("aq_token") || "";
+    await fetch(`${API_URL}/api/event-blocks/${date}/unblock`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    setBusy(null);
+    showFlash("Block restored for " + date + ".");
+    fetchBlocks();
   }
 
   if (!authed) return null;
+
+  const effectivelyBlocked = todayBlocked && !todayUnblocked;
 
   return (
     <div className="min-h-screen bg-[#f0f2f5] flex flex-col">
@@ -93,25 +120,62 @@ export default function EventBlocksPage() {
 
           <h2 className="text-lg font-bold text-gray-900 mb-1">Event Block Dates</h2>
           <p className="text-xs text-gray-500 mb-5">
-            Block specific dates (Budget, RBI MPC, etc.) — bot skips all trades on these days.
-            Config-hardcoded dates are read-only.
+            Block or unblock specific dates — bot skips trades on blocked days.
+            Unblock overrides config.py hardcoded dates instantly, no redeploy needed.
           </p>
 
           {/* Today's status banner */}
-          <div className={`rounded-xl border p-3 mb-5 text-sm font-semibold flex items-center gap-2 ${
-            todayBlocked
-              ? "bg-red-50 border-red-200 text-red-700"
-              : "bg-green-50 border-green-200 text-green-700"
-          }`}>
-            {todayBlocked ? "⛔" : "✅"}
-            {todayBlocked
-              ? `Today is BLOCKED — ${todayLabel}`
-              : "Today is NOT blocked — bot can trade normally"}
-          </div>
+          {todayLabel && (
+            <div className={`rounded-xl border p-3 mb-5 flex items-center justify-between ${
+              effectivelyBlocked
+                ? "bg-red-50 border-red-200"
+                : todayUnblocked
+                ? "bg-amber-50 border-amber-200"
+                : "bg-green-50 border-green-200"
+            }`}>
+              <div className="flex items-center gap-2">
+                <span className="text-lg">{effectivelyBlocked ? "⛔" : todayUnblocked ? "⚡" : "✅"}</span>
+                <div>
+                  <div className={`text-sm font-bold ${
+                    effectivelyBlocked ? "text-red-700" : todayUnblocked ? "text-amber-700" : "text-green-700"
+                  }`}>
+                    {effectivelyBlocked
+                      ? `Today is BLOCKED — ${todayLabel}`
+                      : todayUnblocked
+                      ? `Today UNBLOCKED — ${todayLabel} (override active)`
+                      : "Today is not blocked"}
+                  </div>
+                  {todayUnblocked && (
+                    <div className="text-xs text-amber-600 mt-0.5">Bot will trade normally today despite the block</div>
+                  )}
+                </div>
+              </div>
+              {/* Quick toggle for today */}
+              {todayLabel && (
+                todayUnblocked ? (
+                  <button
+                    onClick={() => reblock(blocks.find(b => b.is_today)?.date ?? "")}
+                    disabled={!!busy}
+                    className="text-xs font-bold px-3 py-1.5 rounded-lg border border-red-300 text-red-600 hover:bg-red-50 disabled:opacity-40 transition-colors ml-3 shrink-0"
+                  >
+                    Re-block
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => unblockDate(blocks.find(b => b.is_today)?.date ?? "")}
+                    disabled={!!busy}
+                    className="text-xs font-bold px-3 py-1.5 rounded-lg border border-green-400 text-green-700 bg-green-50 hover:bg-green-100 disabled:opacity-40 transition-colors ml-3 shrink-0"
+                  >
+                    Unblock Today
+                  </button>
+                )
+              )}
+            </div>
+          )}
 
           {/* Flash / error */}
           {flash && <div className="mb-4 text-xs text-green-700 bg-green-50 border border-green-200 rounded-lg px-3 py-2">{flash}</div>}
-          {error && <div className="mb-4 text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2">{error}</div>}
+          {error && <div className="mb-4 text-xs text-red-600 bg-red-50 border border-red-200 rounded-lg px-3 py-2 cursor-pointer" onClick={() => setError(null)}>{error} ✕</div>}
 
           {/* Add new block */}
           <div className="bg-white rounded-xl border border-gray-200 p-4 mb-5">
@@ -154,15 +218,23 @@ export default function EventBlocksPage() {
                     <th className="px-4 py-2 text-left text-xs text-gray-500 font-semibold uppercase">Date</th>
                     <th className="px-4 py-2 text-left text-xs text-gray-500 font-semibold uppercase">Reason</th>
                     <th className="px-4 py-2 text-left text-xs text-gray-500 font-semibold uppercase">Source</th>
-                    <th className="px-4 py-2" />
+                    <th className="px-4 py-2 text-right text-xs text-gray-500 font-semibold uppercase">Action</th>
                   </tr>
                 </thead>
                 <tbody>
                   {blocks.map(b => (
-                    <tr key={b.date} className={`border-b border-gray-50 ${b.is_today ? "bg-red-50" : ""}`}>
+                    <tr key={b.date} className={`border-b border-gray-50 ${
+                      b.is_today ? (b.unblocked ? "bg-amber-50" : "bg-red-50") : ""
+                    }`}>
                       <td className="px-4 py-3 font-mono text-gray-800 font-semibold">
                         {b.date}
-                        {b.is_today && <span className="ml-2 text-[10px] bg-red-100 text-red-600 px-1.5 py-0.5 rounded font-bold">TODAY</span>}
+                        {b.is_today && (
+                          <span className={`ml-2 text-[10px] px-1.5 py-0.5 rounded font-bold ${
+                            b.unblocked ? "bg-amber-100 text-amber-700" : "bg-red-100 text-red-600"
+                          }`}>
+                            {b.unblocked ? "UNBLOCKED" : "TODAY"}
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-gray-600">{b.label}</td>
                       <td className="px-4 py-3">
@@ -173,18 +245,37 @@ export default function EventBlocksPage() {
                         }`}>
                           {b.source === "config" ? "hardcoded" : "runtime"}
                         </span>
+                        {b.unblocked && (
+                          <span className="ml-1.5 text-[10px] font-bold px-2 py-0.5 rounded-full bg-amber-100 text-amber-700">
+                            overridden
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-right">
-                        {b.source === "runtime" ? (
+                        {b.unblocked ? (
                           <button
-                            onClick={() => removeBlock(b.date)}
-                            disabled={removing === b.date}
+                            onClick={() => reblock(b.date)}
+                            disabled={busy === b.date + ":reblock"}
                             className="text-xs font-semibold text-red-500 hover:text-red-700 disabled:opacity-40"
                           >
-                            {removing === b.date ? "…" : "Remove"}
+                            {busy === b.date + ":reblock" ? "…" : "Re-block"}
+                          </button>
+                        ) : b.source === "runtime" ? (
+                          <button
+                            onClick={() => removeBlock(b.date)}
+                            disabled={busy === b.date + ":remove"}
+                            className="text-xs font-semibold text-red-500 hover:text-red-700 disabled:opacity-40"
+                          >
+                            {busy === b.date + ":remove" ? "…" : "Remove"}
                           </button>
                         ) : (
-                          <span className="text-xs text-gray-300">config only</span>
+                          <button
+                            onClick={() => unblockDate(b.date)}
+                            disabled={busy === b.date + ":unblock"}
+                            className="text-xs font-semibold text-green-600 hover:text-green-800 disabled:opacity-40"
+                          >
+                            {busy === b.date + ":unblock" ? "…" : "Unblock"}
+                          </button>
                         )}
                       </td>
                     </tr>
@@ -195,8 +286,7 @@ export default function EventBlocksPage() {
           </div>
 
           <p className="mt-4 text-xs text-gray-400">
-            Hardcoded dates (from config.py) cannot be removed here — redeploy to change them.
-            Runtime blocks take effect immediately without redeployment.
+            Unblock overrides take effect immediately — no redeploy needed. Re-block restores the original block.
           </p>
         </div>
       </div>

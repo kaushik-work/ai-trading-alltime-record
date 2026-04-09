@@ -651,20 +651,29 @@ def get_zerodha_errors(user: str = Depends(get_current_user)):
 
 @app.get("/api/event-blocks")
 def get_event_blocks(user: str = Depends(get_current_user)):
-    """Return all blocked dates: hardcoded config + runtime overrides."""
+    """Return all blocked dates: hardcoded config + runtime overrides, with unblock status."""
     from datetime import date
     today = date.today().isoformat()
-    hardcoded = config.EVENT_BLOCK_DATES
-    runtime   = ipc.read_event_blocks()
+    hardcoded  = config.EVENT_BLOCK_DATES
+    runtime    = ipc.read_event_blocks()
+    unblocks   = ipc.read_event_unblocks()
     merged = {**hardcoded, **runtime}
+    today_blocked_raw = bool(merged.get(today))
+    today_unblocked   = today in unblocks
     return {
         "blocks": [
-            {"date": d, "label": label, "source": "runtime" if d in runtime else "config",
-             "is_today": d == today}
+            {
+                "date":       d,
+                "label":      label,
+                "source":     "runtime" if d in runtime else "config",
+                "is_today":   d == today,
+                "unblocked":  d in unblocks,
+            }
             for d, label in sorted(merged.items())
         ],
-        "today_blocked": bool(merged.get(today)),
-        "today_label": merged.get(today),
+        "today_blocked": today_blocked_raw and not today_unblocked,
+        "today_label":   merged.get(today),
+        "today_unblocked": today_unblocked,
     }
 
 
@@ -688,9 +697,23 @@ def add_event_block(body: dict, user: str = Depends(get_current_user)):
 def remove_event_block(date_str: str, user: str = Depends(get_current_user)):
     """Remove a runtime event block. Config-hardcoded dates cannot be removed here."""
     if date_str in config.EVENT_BLOCK_DATES:
-        raise HTTPException(status_code=400, detail="This date is hardcoded in config.py — edit code to remove it")
+        raise HTTPException(status_code=400, detail="This date is hardcoded in config.py — use unblock instead")
     ipc.remove_event_block(date_str)
     return {"status": "removed", "date": date_str}
+
+
+@app.post("/api/event-blocks/{date_str}/unblock")
+def unblock_date(date_str: str, user: str = Depends(get_current_user)):
+    """Force-allow trading on a blocked date (overrides both config and runtime blocks)."""
+    ipc.add_event_unblock(date_str)
+    return {"status": "unblocked", "date": date_str}
+
+
+@app.delete("/api/event-blocks/{date_str}/unblock")
+def remove_unblock(date_str: str, user: str = Depends(get_current_user)):
+    """Remove the unblock override — date goes back to its original blocked state."""
+    ipc.remove_event_unblock(date_str)
+    return {"status": "block_restored", "date": date_str}
 
 
 @app.post("/api/zerodha/callback")

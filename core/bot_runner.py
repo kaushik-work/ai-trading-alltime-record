@@ -58,8 +58,11 @@ def _is_market_hours() -> bool:
 
 
 def _is_event_blocked() -> bool:
-    """Return True if today is in EVENT_BLOCK_DATES or runtime overrides."""
+    """Return True if today is blocked (config or runtime) and not explicitly unblocked."""
     today_str = now_ist().date().isoformat()
+    if today_str in ipc.read_event_unblocks():
+        logger.info("Trading UNBLOCKED today — %s (manual override). Proceeding.", today_str)
+        return False
     blocked = config.EVENT_BLOCK_DATES.get(today_str) or ipc.read_event_blocks().get(today_str)
     if blocked:
         logger.warning("Trading BLOCKED today — %s (%s). Skipping all cycles.", today_str, blocked)

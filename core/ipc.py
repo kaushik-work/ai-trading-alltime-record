@@ -88,7 +88,8 @@ def write_day_bias(bias: str, note: str = "", parsed: dict = None) -> None:
 
 # ── Event block overrides ─────────────────────────────────────────────────────
 
-EVENT_BLOCKS_FILE = FLAGS_DIR / "event_blocks.json"
+EVENT_BLOCKS_FILE   = FLAGS_DIR / "event_blocks.json"
+EVENT_UNBLOCKS_FILE = FLAGS_DIR / "event_unblocks.json"
 
 
 def read_event_blocks() -> dict:
@@ -106,6 +107,33 @@ def write_event_blocks(blocks: dict) -> None:
     """Persist runtime event block overrides."""
     import json
     EVENT_BLOCKS_FILE.write_text(json.dumps(blocks, indent=2))
+
+
+def read_event_unblocks() -> set:
+    """Return set of dates that are explicitly unblocked (override config.py blocks)."""
+    import json
+    if not EVENT_UNBLOCKS_FILE.exists():
+        return set()
+    try:
+        return set(json.loads(EVENT_UNBLOCKS_FILE.read_text()))
+    except Exception:
+        return set()
+
+
+def add_event_unblock(date: str) -> set:
+    unblocks = read_event_unblocks()
+    unblocks.add(date)
+    import json
+    EVENT_UNBLOCKS_FILE.write_text(json.dumps(sorted(unblocks)))
+    return unblocks
+
+
+def remove_event_unblock(date: str) -> set:
+    unblocks = read_event_unblocks()
+    unblocks.discard(date)
+    import json
+    EVENT_UNBLOCKS_FILE.write_text(json.dumps(sorted(unblocks)))
+    return unblocks
 
 
 def add_event_block(date: str, label: str) -> dict:
