@@ -155,6 +155,10 @@ export default function Header({ mode, connected, botStatus, onBotToggle, errorC
                   </span>
                 )}
               </button>
+              <button onClick={() => { router.push("/event-blocks"); setMenuOpen(false); }}
+                className="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2">
+                <span>📅</span> Event Blocks
+              </button>
 
               <div className="border-t border-gray-100 mx-3 my-1" />
               <button onClick={logout} style={{ color: "#ef4444" }}

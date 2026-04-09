@@ -86,6 +86,42 @@ def write_day_bias(bias: str, note: str = "", parsed: dict = None) -> None:
     )
 
 
+# ── Event block overrides ─────────────────────────────────────────────────────
+
+EVENT_BLOCKS_FILE = FLAGS_DIR / "event_blocks.json"
+
+
+def read_event_blocks() -> dict:
+    """Return runtime event block overrides {date: label}."""
+    import json
+    if not EVENT_BLOCKS_FILE.exists():
+        return {}
+    try:
+        return json.loads(EVENT_BLOCKS_FILE.read_text())
+    except Exception:
+        return {}
+
+
+def write_event_blocks(blocks: dict) -> None:
+    """Persist runtime event block overrides."""
+    import json
+    EVENT_BLOCKS_FILE.write_text(json.dumps(blocks, indent=2))
+
+
+def add_event_block(date: str, label: str) -> dict:
+    blocks = read_event_blocks()
+    blocks[date] = label
+    write_event_blocks(blocks)
+    return blocks
+
+
+def remove_event_block(date: str) -> dict:
+    blocks = read_event_blocks()
+    blocks.pop(date, None)
+    write_event_blocks(blocks)
+    return blocks
+
+
 def read_and_clear_force_trade() -> dict | None:
     """Bot reads this once and immediately deletes it. Returns None if not set."""
     import json

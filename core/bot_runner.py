@@ -58,9 +58,9 @@ def _is_market_hours() -> bool:
 
 
 def _is_event_blocked() -> bool:
-    """Return True if today is in EVENT_BLOCK_DATES (Budget/RBI MPC etc.)."""
+    """Return True if today is in EVENT_BLOCK_DATES or runtime overrides."""
     today_str = now_ist().date().isoformat()
-    blocked = config.EVENT_BLOCK_DATES.get(today_str)
+    blocked = config.EVENT_BLOCK_DATES.get(today_str) or ipc.read_event_blocks().get(today_str)
     if blocked:
         logger.warning("Trading BLOCKED today — %s (%s). Skipping all cycles.", today_str, blocked)
     return bool(blocked)

@@ -649,6 +649,102 @@ def get_zerodha_errors(user: str = Depends(get_current_user)):
     return get_all()
 
 
+@app.get("/api/event-blocks")
+def get_event_blocks(user: str = Depends(get_current_user)):
+    """Return all blocked dates: hardcoded config + runtime overrides."""
+    from datetime import date
+    today = date.today().isoformat()
+    hardcoded = config.EVENT_BLOCK_DATES
+    runtime   = ipc.read_event_blocks()
+    merged = {**hardcoded, **runtime}
+    return {
+        "blocks": [
+            {"date": d, "label": label, "source": "runtime" if d in runtime else "config",
+             "is_today": d == today}
+            for d, label in sorted(merged.items())
+        ],
+        "today_blocked": bool(merged.get(today)),
+        "today_label": merged.get(today),
+    }
+
+
+@app.post("/api/event-blocks")
+def add_event_block(body: dict, user: str = Depends(get_current_user)):
+    """Add a runtime event block date. Body: {date: 'YYYY-MM-DD', label: 'reason'}"""
+    date_str = body.get("date", "").strip()
+    label    = body.get("label", "Manual block").strip()
+    if not date_str:
+        raise HTTPException(status_code=400, detail="date is required (YYYY-MM-DD)")
+    try:
+        from datetime import date as _date
+        _date.fromisoformat(date_str)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="date must be YYYY-MM-DD")
+    ipc.add_event_block(date_str, label)
+    return {"status": "added", "date": date_str, "label": label}
+
+
+@app.delete("/api/event-blocks/{date_str}")
+def remove_event_block(date_str: str, user: str = Depends(get_current_user)):
+    """Remove a runtime event block. Config-hardcoded dates cannot be removed here."""
+    if date_str in config.EVENT_BLOCK_DATES:
+        raise HTTPException(status_code=400, detail="This date is hardcoded in config.py — edit code to remove it")
+    ipc.remove_event_block(date_str)
+    return {"status": "removed", "date": date_str}
+
+
+@app.post("/api/zerodha/callback")
+def zerodha_callback(body: dict, user: str = Depends(get_current_user)):
+    """Exchange Zerodha request_token for access_token and persist to .env."""
+    request_token = body.get("request_token", "").strip()
+    if not request_token:
+        raise HTTPException(status_code=400, detail="request_token is required")
+    try:
+        from kiteconnect import KiteConnect
+        kite = KiteConnect(api_key=config.ZERODHA_API_KEY)
+        data = kite.generate_session(request_token, api_secret=config.ZERODHA_API_SECRET)
+        access_token = data["access_token"]
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Zerodha session error: {e}")
+
+    # Persist to .env
+    from datetime import datetime, timezone, timedelta
+    ist = timezone(timedelta(hours=5, minutes=30))
+    set_at = datetime.now(ist).isoformat()
+    env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+    try:
+        lines = open(env_path).readlines() if os.path.exists(env_path) else []
+        updated, found_token, found_set_at = [], False, False
+        for line in lines:
+            if line.startswith("ZERODHA_ACCESS_TOKEN="):
+                updated.append(f"ZERODHA_ACCESS_TOKEN={access_token}\n"); found_token = True
+            elif line.startswith("ZERODHA_TOKEN_SET_AT="):
+                updated.append(f"ZERODHA_TOKEN_SET_AT={set_at}\n"); found_set_at = True
+            else:
+                updated.append(line)
+        if not found_token:  updated.append(f"ZERODHA_ACCESS_TOKEN={access_token}\n")
+        if not found_set_at: updated.append(f"ZERODHA_TOKEN_SET_AT={set_at}\n")
+        open(env_path, "w").writelines(updated)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to write .env: {e}")
+
+    # Reset ZerodhaFetcher so it picks up the new token immediately
+    _token_cache["result"] = None
+    _token_cache["checked_at"] = 0.0
+    try:
+        from data.zerodha_fetcher import ZerodhaFetcher
+        inst = ZerodhaFetcher.get()
+        with inst._lock:
+            inst._broker = None
+            inst._login_date = None
+            inst._failed_date = None
+            inst._token_used = ""
+    except Exception:
+        pass
+
+    return {"status": "ok", "set_at": set_at}
+
+
 @app.delete("/api/zerodha-errors")
 def clear_zerodha_errors(user: str = Depends(get_current_user)):
     from core.zerodha_error_log import clear
