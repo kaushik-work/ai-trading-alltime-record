@@ -131,6 +131,11 @@ class MockBroker:
             "total_orders": len(self.orders),
         }
 
+    def cancel_order(self, order_id: str, variety: str = "regular") -> bool:
+        """No-op in paper mode — SL is managed in-process."""
+        logger.info("[PAPER] cancel_order %s (no-op in paper mode)", order_id)
+        return True
+
     def preflight_order(self, **kwargs) -> dict:
         return {
             "ok": True,
@@ -339,6 +344,18 @@ class KiteBroker:
                 "variety": variety, "validity": validity, "trigger_price": trigger_price, "tag": tag,
                 "reason": reason,
             }
+
+    def cancel_order(self, order_id: str, variety: str = "regular") -> bool:
+        """Cancel a pending order (e.g. SL-M) by order_id."""
+        from core.zerodha_error_log import log_error as _log_err
+        try:
+            self.kite.cancel_order(variety=variety, order_id=order_id)
+            logger.info("[LIVE/KITE] Cancelled order %s", order_id)
+            return True
+        except Exception as e:
+            logger.error("[LIVE/KITE] Cancel order %s failed: %s", order_id, e)
+            _log_err("cancel_order", str(e), detail=order_id)
+            return False
 
     def get_positions(self) -> dict:
         positions = self.kite.positions()

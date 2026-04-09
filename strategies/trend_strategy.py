@@ -60,6 +60,7 @@ class TrendStrategy:
             if score_mode == "fib_of_only" else config.TAKE_PROFIT_PCT
         )
         self.paused = False
+        self._sl_orders: dict[str, str] = {}  # option_symbol → Zerodha SL-M order_id
         logger.info(
             "TrendStrategy[%s] initialized | score_mode=%s | Trading: %s | Phase: %s | Budget: ₹%s",
             strategy_name, score_mode,
@@ -478,6 +479,32 @@ class TrendStrategy:
             order["price"] = option_ltp
             order["timestamp"] = order.get("timestamp") or _now_ist().isoformat()
             order["expiry"] = expiry.isoformat() if expiry else None
+
+            # Place exchange-level SL-M order immediately after entry (live only).
+            # This protects the position even if the bot process dies.
+            if order.get("status") in ("COMPLETE", "PLACED") and not config.IS_PAPER:
+                sl_trigger = round(option_ltp * (1 - self.stop_loss_pct / 100), 1)
+                try:
+                    sl_ord = self.broker.place_order(
+                        option_symbol, "SELL", quantity,
+                        order_type="SL-M", trigger_price=sl_trigger,
+                        exchange="NFO", product="MIS",
+                        variety="regular", validity="DAY",
+                        tag=f"SL-{self.strategy_name[:14]}",
+                    )
+                    if sl_ord.get("order_id"):
+                        self._sl_orders[option_symbol] = sl_ord["order_id"]
+                        order["sl_order_id"] = sl_ord["order_id"]
+                        order["sl_trigger"]  = sl_trigger
+                        logger.info("[%s] SL-M placed: %s trigger ₹%.2f order_id=%s",
+                                    self.strategy_name, option_symbol, sl_trigger, sl_ord["order_id"])
+                    else:
+                        logger.error("[%s] SL-M order rejected for %s — bot will manage in-process",
+                                     self.strategy_name, option_symbol)
+                except Exception as e:
+                    logger.error("[%s] Failed to place SL-M for %s: %s — bot will manage in-process",
+                                 self.strategy_name, option_symbol, e)
+
             # Persist option metadata in broker position for accurate exit pricing
             if hasattr(self.broker, "positions") and option_symbol in self.broker.positions:
                 self.broker.positions[option_symbol]["symbol"] = option_symbol
@@ -490,6 +517,20 @@ class TrendStrategy:
             option_type = pos.get("option_type", "CE")
             atm_strike  = pos.get("atm_strike") or pos.get("strike") or atm_strike
             option_symbol = pos.get("symbol") or symbol
+
+            # Cancel the exchange SL-M order before placing the normal exit,
+            # so we don't end up with a double sell.
+            if not config.IS_PAPER:
+                sl_order_id = self._sl_orders.pop(option_symbol, None)
+                if sl_order_id:
+                    try:
+                        self.broker.cancel_order(sl_order_id)
+                        logger.info("[%s] Cancelled SL-M %s before normal exit of %s",
+                                    self.strategy_name, sl_order_id, option_symbol)
+                    except Exception as e:
+                        logger.warning("[%s] Could not cancel SL-M %s: %s",
+                                       self.strategy_name, sl_order_id, e)
+
             _, _, exit_ltp, expiry = self._get_option_ltp(
                 pos.get("underlying", symbol), option_type, current_price, strike=int(atm_strike)
             )
