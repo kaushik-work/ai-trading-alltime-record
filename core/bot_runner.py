@@ -23,7 +23,6 @@ IST = ZoneInfo("Asia/Kolkata")
 import config
 from core.memory import TradeMemory
 from core import ipc
-from core.trade_analyst import generate_entry_remark, generate_exit_remark
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +126,7 @@ class BotRunner:
         self._fib_strategy = None   # lazy-init TrendStrategy (Fib-OF, fib_of_only mode)
         self.last_heartbeat: Optional[str] = None   # ISO string, IST
         self.last_scores: dict = {}                 # strategy → last signal scores
-        self.last_vix: Optional[float] = None       # last fetched India VIX
+        self.last_vix = None                        # kept for API compat; no longer populated
         self.last_day_bias: dict = ipc.read_day_bias()  # cached; updated by set_bias API
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
@@ -143,13 +142,6 @@ class BotRunner:
             logger.warning("Zerodha warm-up failed (will retry per cycle): %s", e)
 
         now_ist = datetime.now(IST)
-
-        # VIX fetch every 30 min during market hours (9:20, 9:50, ..., 15:20)
-        self.scheduler.add_job(
-            self._fetch_vix, "cron",
-            day_of_week="mon-fri", hour="9-15", minute="20,50",
-            id="vix_fetch",
-        )
 
         # ATR Intraday — every 5 min
         self.scheduler.add_job(
@@ -183,60 +175,12 @@ class BotRunner:
     def paused(self) -> bool:
         return ipc.flag_exists(ipc.FLAG_PAUSE)
 
-    # ── VIX fetch (9:20 daily) ────────────────────────────────────────────────
-
-    async def _fetch_vix(self):
-        try:
-            from data.zerodha_fetcher import ZerodhaFetcher
-            loop = asyncio.get_event_loop()
-            vix = await loop.run_in_executor(None, ZerodhaFetcher.get().fetch_vix)
-            self.last_vix = vix
-            if vix is not None:
-                threshold = config.VIX_THRESHOLD
-                if vix > threshold:
-                    logger.warning("India VIX %.2f > threshold %.1f — all new entries BLOCKED today.", vix, threshold)
-                else:
-                    logger.info("India VIX %.2f — below threshold %.1f, trading allowed.", vix, threshold)
-        except Exception as e:
-            logger.warning("VIX fetch job failed: %s", e)
-
-    def _is_vix_blocked(self, strategy: str = "all") -> bool:
-        """Return True if VIX exceeds threshold AND no override is set for this strategy.
-
-        strategy: "ATR Intraday" | "C-ICT" | "all" (checks global override only)
-        Per-strategy flags take precedence over VIX threshold.
-        """
-        # Check per-strategy override first
-        per_flag = {
-            "ATR Intraday": ipc.FLAG_VIX_OVERRIDE_ATR,
-            "C-ICT":        ipc.FLAG_VIX_OVERRIDE_ICT,
-            "Fib-OF":       ipc.FLAG_VIX_OVERRIDE_FIB,
-        }.get(strategy)
-        if per_flag and ipc.flag_exists(per_flag):
-            return False  # per-strategy override active
-        # Fall back to global override
-        if ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE):
-            return False  # global override active
-        if self.last_vix is None:
-            return False  # no data = don't block (fail open)
-        return self.last_vix > config.VIX_THRESHOLD
-
     # ── ATR Intraday (TrendStrategy / Claude) ─────────────────────────────────
 
     async def _atr_cycle(self):
         self.last_heartbeat = datetime.now(IST).isoformat()
         if self.paused or not _is_market_hours() or _is_event_blocked():
             return
-        if self._is_vix_blocked("ATR Intraday"):
-            # Allow cycle if trader has explicitly set a directional bias (they know the risk)
-            bias = self.last_day_bias
-            if bias.get("bias", "NEUTRAL") == "NEUTRAL" or not bias.get("set_at"):
-                logger.warning("ATR cycle skipped — India VIX %.2f > threshold %.1f", self.last_vix, config.VIX_THRESHOLD)
-                return
-            logger.warning(
-                "India VIX %.2f > threshold %.1f but trader bias is %s — ATR proceeding.",
-                self.last_vix, config.VIX_THRESHOLD, bias["bias"],
-            )
         try:
             if self._atr_strategy is None:
                 from strategies.trend_strategy import TrendStrategy
@@ -265,15 +209,6 @@ class BotRunner:
         self.last_heartbeat = datetime.now(IST).isoformat()
         if self.paused or not _is_market_hours() or _is_event_blocked():
             return
-        if self._is_vix_blocked("C-ICT"):
-            bias = self.last_day_bias
-            if bias.get("bias", "NEUTRAL") == "NEUTRAL" or not bias.get("set_at"):
-                logger.warning("ICT cycle skipped — India VIX %.2f > threshold %.1f", self.last_vix, config.VIX_THRESHOLD)
-                return
-            logger.warning(
-                "India VIX %.2f > threshold %.1f but trader bias is %s — C-ICT proceeding.",
-                self.last_vix, config.VIX_THRESHOLD, bias["bias"],
-            )
         try:
             if self._ict_strategy is None:
                 from strategies.trend_strategy import TrendStrategy
@@ -303,15 +238,6 @@ class BotRunner:
         self.last_heartbeat = datetime.now(IST).isoformat()
         if self.paused or not _is_market_hours() or _is_event_blocked():
             return
-        if self._is_vix_blocked("Fib-OF"):
-            bias = self.last_day_bias
-            if bias.get("bias", "NEUTRAL") == "NEUTRAL" or not bias.get("set_at"):
-                logger.warning("Fib-OF cycle skipped — India VIX %.2f > threshold %.1f", self.last_vix, config.VIX_THRESHOLD)
-                return
-            logger.warning(
-                "India VIX %.2f > threshold %.1f but trader bias is %s — Fib-OF proceeding.",
-                self.last_vix, config.VIX_THRESHOLD, bias["bias"],
-            )
         try:
             if self._fib_strategy is None:
                 from strategies.trend_strategy import TrendStrategy
@@ -366,39 +292,13 @@ class BotRunner:
 
     # ── trade helpers ─────────────────────────────────────────────────────────
 
-    async def _generate_entry_remark(self, pos: dict, sig: dict):
-        """Run Claude entry remark in background thread — non-blocking."""
-        try:
-            loop = asyncio.get_event_loop()
-            remark = await loop.run_in_executor(
-                None, lambda: generate_entry_remark(pos, sig)
-            )
-            if remark:
-                self.memory.update_remarks(pos["order_id"], entry_remark=remark)
-                logger.info("[%s] Entry remark saved.", pos["strategy"])
-        except Exception as e:
-            logger.debug("Entry remark failed: %s", e)
-
-    async def _generate_exit_remark(self, pos: dict, close_price: float, pnl: float, reason: str):
-        """Run Claude exit remark in background thread — non-blocking."""
-        try:
-            loop = asyncio.get_event_loop()
-            remark = await loop.run_in_executor(
-                None, lambda: generate_exit_remark(pos, close_price, pnl, reason)
-            )
-            if remark:
-                self.memory.update_remarks(pos["order_id"], exit_remark=remark)
-                logger.info("[%s] Exit remark saved.", pos["strategy"])
-        except Exception as e:
-            logger.debug("Exit remark failed: %s", e)
-
     def _open_trade(self, strategy: str, side: str, entry_spot: float,
                     sl: float, tp: float, score: float,
                     option_type: str = "CE", strike: int = 0,
                     expiry=None, opt_sym: str = "", entry_prem: float = 0.0) -> dict:
         ts       = now_ist().isoformat()
         order_id = f"{strategy.upper()}-{now_ist().strftime('%Y%m%d%H%M%S')}"
-        lot_qty  = config.LOT_SIZES.get("NIFTY", 25)
+        lot_qty  = config.LOT_SIZES.get("NIFTY", 65)
         expiry_str = expiry.isoformat() if expiry and hasattr(expiry, "isoformat") else str(expiry or "")
         order = {
             "order_id":    order_id,

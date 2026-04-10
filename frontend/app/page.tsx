@@ -68,14 +68,9 @@ export default function Home() {
   const prices            = data?.prices            ?? {};
   const strategySummary   = data?.strategy_summary  ?? {};
   const todayJournal      = data?.today_journal     ?? [];
-  const indiaVix          = data?.india_vix         ?? null;
-  const vixBlocked        = data?.vix_blocked              ?? false;
-  const vixOverride       = data?.vix_override             ?? false;
-  const vixOverrideAtr    = data?.vix_override_atr         ?? false;
-  const vixOverrideIct    = data?.vix_override_ict         ?? false;
-  const vixOverrideFib    = data?.vix_override_fib         ?? false;
-  const anyOverride       = vixOverride || vixOverrideAtr || vixOverrideIct || vixOverrideFib;
-  const vixThreshold      = data?.vix_threshold            ?? 20;
+  const indiaVix          = null;
+  const vixBlocked        = false;
+  const anyOverride       = false;
   const tokenStatus       = data?.token_set_at       ?? null;
   const tokenLive         = tokenStatus?.live        ?? false;
   const tokenSetAt        = tokenStatus?.set_at      ?? null;
@@ -83,7 +78,7 @@ export default function Home() {
   const dayBiasData       = data?.day_bias          ?? { bias: "NEUTRAL", note: "", set_at: null };
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-  const [vixOverrideSaving, setVixOverrideSaving] = useState(false);
+  const vixOverrideSaving = false;
   const [biasSaving, setBiasSaving]   = useState(false);
   const [biasEdit, setBiasEdit]       = useState(false);
   const [biasNote, setBiasNote]       = useState("");
@@ -98,17 +93,7 @@ export default function Home() {
   }, [dayBiasData.note, biasEdit]);
 
   async function toggleVixOverride() {
-    setVixOverrideSaving(true);
-    try {
-      const token = localStorage.getItem("aq_token");
-      await fetch(`${API_URL}/api/bot/vix-override`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ enable: !vixOverride }),
-      });
-    } finally {
-      setVixOverrideSaving(false);
-    }
+    return;
   }
 
   async function saveBias(bias: string, note: string) {
@@ -407,7 +392,7 @@ export default function Home() {
                           <td className="px-3 py-2 text-right text-gray-700">
                             {t.entry_price ? `₹${Number(t.entry_price).toLocaleString("en-IN")}` : "—"}
                           </td>
-                          <td className="px-3 py-2 text-right text-gray-500">{t.lot_size ?? 75}</td>
+                          <td className="px-3 py-2 text-right text-gray-500">{t.lot_size ?? 65}</td>
                           <td className={`px-3 py-2 text-right font-bold ${pnl >= 0 ? "text-green-600" : "text-red-500"}`}>
                             {pnl >= 0 ? "+" : ""}₹{pnl.toLocaleString("en-IN")}
                           </td>

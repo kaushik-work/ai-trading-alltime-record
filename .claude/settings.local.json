@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(.venv/Scripts/python -c ':*)",
+      "Bash(.venv/Scripts/python scripts/backtest_sd_atr.py --months 2026-04 --no-cache)",
+      "Bash(.venv/Scripts/python scripts/backtest_sd_atr.py --months 2026-04)",
+      "Bash(.venv/Scripts/python scripts/backtest_sd_atr.py --date 2026-04-10)",
+      "Bash(.venv/Scripts/python scripts/backtest_live_atr.py --date 2026-04-10)"
+    ]
+  }
+}

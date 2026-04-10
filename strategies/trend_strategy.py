@@ -24,7 +24,6 @@ from core.utils import now_ist as _now_ist, today_ist
 import config
 from core import ipc
 from core.broker import get_broker
-from core.brain import TradingBrain
 from core.memory import TradeMemory
 from core.records import RecordTracker
 from data.market import get_market_data, RealMarketData
@@ -50,7 +49,6 @@ class TrendStrategy:
         self.score_mode = score_mode      # "full" | "atr_only" | "ict_only"
         self.last_score: dict = {}        # most recent score result — read by BotRunner for debug
         self.broker = get_broker()
-        self.brain = TradingBrain()
         self.memory = TradeMemory()
         self.records = RecordTracker()
         self.market = get_market_data(self.broker if not config.IS_PAPER else None)
@@ -269,33 +267,27 @@ class TrendStrategy:
                                     position=position)
 
         # ③ VWAP flip — AishDoc: if price crosses below VWAP, exit long
-        if intraday.get("above_vwap") is False and scored["action"] == "SELL":
-            logger.info("VWAP flip bearish for %s — asking Claude to exit", symbol)
+        reverse_signal = (
+            (option_type == "CE" and scored["action"] == "SELL")
+            or (option_type == "PE" and scored["action"] == "BUY")
+        )
+        if reverse_signal:
+            return self._force_exit(
+                symbol,
+                quantity,
+                indicators,
+                f"Signal reversed to {scored['action']} at score {scored['score']:+d}",
+                position=position,
+            )
 
-        # ④ Score strongly bearish OR take-profit hit → ask Claude
-        should_review = scored["action"] == "SELL" or pnl_pct >= self.take_profit_pct
-        if should_review:
-            trade_history = self.memory.get_trades_for_symbol(symbol)
-            enriched = {
-                **indicators,
-                "open_position": {
-                    "quantity": quantity,
-                    "avg_buy_price": avg_price,
-                    "current_price": option_price,
-                    "unrealized_pnl_pct": round(pnl_pct, 2),
-                    "unrealized_pnl_inr": round((option_price - avg_price) * quantity, 2),
-                },
-                "signal_score": scored["score"],
-                "signals": scored["signals"],
-                "intraday": intraday,
-                "trading_type": config.TRADING_TYPE,
-                "must_exit_by": config.INTRADAY_EXIT_BY,
-            }
-            decision = self.brain.analyze(symbol, enriched, trade_history, portfolio)
-            if decision["action"] == "SELL" and decision.get("confidence", 0) >= 0.55:
-                decision["quantity"] = quantity
-                decision["_position"] = position
-                return self._execute(decision, indicators)
+        if pnl_pct >= self.take_profit_pct:
+            return self._force_exit(
+                symbol,
+                quantity,
+                indicators,
+                f"Take-profit hit at {pnl_pct:.2f}% (target {self.take_profit_pct:.2f}%)",
+                position=position,
+            )
 
         return None
 
@@ -304,65 +296,27 @@ class TrendStrategy:
     def _confirm_and_execute(self, symbol: str, current_price: float,
                               indicators: dict, intraday: dict,
                               scored: dict, portfolio: dict) -> Optional[dict]:
-        trade_history = self.memory.get_trades_for_symbol(symbol)
+        if scored["action"] not in ("BUY", "SELL"):
+            return None
 
-        # Raw candles — brain reads these directly for price action analysis
-        candles_5m: list = []
-        candles_15m: list = []
-        if isinstance(self.market, RealMarketData):
-            candles_5m  = self.market.get_raw_candles(symbol, "5m",  limit=30)
-            candles_15m = self.market.get_raw_candles(symbol, "15m", limit=20)
+        if abs(scored["score"]) < scored["threshold"]:
+            return None
 
-        enriched = {
-            **indicators,
-            "signal_score": scored["score"],
-            "signal_threshold": scored["threshold"],
+        entry_direction = scored["action"]
+        atr = intraday.get("atr_5m") or indicators.get("atr_14", 0)
+        decision = {
+            "action": "BUY",
+            "symbol": symbol,
+            "quantity": self._calc_quantity(symbol, current_price, atr),
+            "confidence": round(abs(scored["score"]) / 10, 2),
+            "reasoning": f"Deterministic {self.score_mode} entry at score {scored['score']:+d}",
+            "risk_level": "MEDIUM" if abs(scored["score"]) >= 8 else "STANDARD",
+            "score": scored["score"],
             "signals": scored["signals"],
-            "signal_breakdown": scored["breakdown"],
-            "intraday": intraday,
-            "candles_5m":  candles_5m,
-            "candles_15m": candles_15m,
-            "order_flow":  scored.get("order_flow", {}),
-            "trading_type": config.TRADING_TYPE,
-            "trading_phase": config.TRADING_PHASE,
-            "budget": portfolio.get("balance", config.STARTING_BUDGET),
-            "risk_per_trade_pct": config.RISK_PER_TRADE_PCT,
-            "stop_loss_pct": self.stop_loss_pct,
-            "take_profit_pct": self.take_profit_pct,
-            "must_exit_by": config.INTRADAY_EXIT_BY,
-            "lot_size": config.LOT_SIZES.get(symbol, 1),
-            "day_bias": ipc.read_day_bias(),
+            "entry_direction": entry_direction,
+            "option_type": "CE" if entry_direction == "BUY" else "PE",
         }
-
-        decision = self.brain.analyze(symbol, enriched, trade_history, portfolio)
-
-        # When Claude API is overloaded (529), trust strong signals (score ≥ 8)
-        if decision.get("overloaded") and abs(scored["score"]) >= 8:
-            direction = scored["action"]
-            logger.warning("[%s] Claude overloaded — strong signal score %+d ≥ ±8, proceeding with %s",
-                           self.strategy_name, scored["score"], direction)
-            decision = {
-                "action": direction, "confidence": 0.60, "symbol": symbol,
-                "reasoning": f"Claude API overloaded; strong technical signal score {scored['score']:+d} ≥ ±8",
-                "risk_level": "MEDIUM",
-            }
-
-        if decision["action"] in ("BUY", "SELL") and decision.get("confidence", 0) >= 0.55:
-            entry_direction = decision["action"]
-            # ATR-based position sizing — uses intraday ATR if available, else daily ATR
-            atr = intraday.get("atr_5m") or indicators.get("atr_14", 0)
-            decision["quantity"] = self._calc_quantity(symbol, current_price, atr)
-            decision["score"] = scored["score"]
-            decision["signals"] = scored["signals"]
-            decision["entry_direction"] = entry_direction
-            decision["option_type"] = "CE" if entry_direction == "BUY" else "PE"
-            decision["action"] = "BUY"
-            return self._execute(decision, indicators)
-
-        logger.info("Claude vetoed entry for %s (action=%s conf=%.0f%%) — %s",
-                    symbol, decision["action"], decision.get("confidence", 0) * 100,
-                    decision.get("reasoning", "no reason given")[:200])
-        return None
+        return self._execute(decision, indicators)
 
     # ── Force exit (SL / square-off) ──────────────────────────────────────────
 
@@ -715,7 +669,12 @@ class TrendStrategy:
         today = today_ist()
         trades = self.memory.get_today_trades()
         broken_records = self.records.check_daily(trades)
-        review = self.brain.daily_review(trades, self.records.get_all_records())
+        completed = self.memory.build_round_trips(trades)
+        total_pnl = round(sum(t.get("pnl", 0) for t in completed), 2)
+        review = (
+            f"Deterministic review for {self.strategy_name}: "
+            f"{len(completed)} completed trades, total PnL ₹{total_pnl:.2f}."
+        )
         self.memory.save_daily_summary(today, trades, review)
         logger.info("EOD done. Trades: %d | Records: %s", len(trades), broken_records)
         logger.info(review)

@@ -189,7 +189,7 @@ def save_daily_journal(date_str: Optional[str] = None) -> str:
             "side":         trip.get("side", "BUY"),
             "entry_price":  trip.get("entry_price"),
             "exit_price":   trip.get("exit_price"),
-            "lot_size":     trip.get("lot_size", 75),
+            "lot_size":     trip.get("lot_size", config.LOT_SIZES.get("NIFTY", 65)),
             "pnl":          round(trip.get("pnl", 0), 2),
             "close_reason": trip.get("close_reason", "—"),
             "score":        trip.get("score"),

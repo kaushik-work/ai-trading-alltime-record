@@ -234,14 +234,6 @@ def _build_snapshot() -> dict:
     else:
         bot_status = "running"
 
-    vix = runner.last_vix
-    vix_override     = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE)
-    vix_override_atr = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE_ATR)
-    vix_override_ict = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE_ICT)
-    vix_override_fib = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE_FIB)
-    any_override = vix_override or vix_override_atr or vix_override_ict or vix_override_fib
-    vix_blocked  = (not any_override) and (vix is not None) and (vix > config.VIX_THRESHOLD)
-
     return {
         "timestamp": now_ist.isoformat(),
         "bot_status": bot_status,
@@ -249,13 +241,6 @@ def _build_snapshot() -> dict:
         "market_open": market_open,
         "last_heartbeat": runner.last_heartbeat,
         "last_scores": runner.last_scores,
-        "india_vix": vix,
-        "vix_blocked": vix_blocked,
-        "vix_override": vix_override,
-        "vix_override_atr": vix_override_atr,
-        "vix_override_ict": vix_override_ict,
-        "vix_override_fib": vix_override_fib,
-        "vix_threshold": config.VIX_THRESHOLD,
         "token_set_at": _get_token_status(),
         "day_bias": runner.last_day_bias,
         "mode": "paper" if config.IS_PAPER else "live",
@@ -408,24 +393,8 @@ def bot_debug(user: str = Depends(get_current_user)):
     runner = get_runner()
     now_ist = datetime.now(IST)
 
-    vix = runner.last_vix
-
-    vix_override     = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE)
-    vix_override_atr = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE_ATR)
-    vix_override_ict = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE_ICT)
-    vix_override_fib = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE_FIB)
-    any_override = vix_override or vix_override_atr or vix_override_ict or vix_override_fib
-    vix_blocked  = (not any_override) and (vix is not None) and (vix > config.VIX_THRESHOLD)
-
     result = {"time_ist": now_ist.isoformat(), "market_open": _is_market_hours(),
               "last_heartbeat": runner.last_heartbeat, "last_scores": runner.last_scores,
-              "india_vix": vix,
-              "vix_blocked": vix_blocked,
-              "vix_override": vix_override,
-              "vix_override_atr": vix_override_atr,
-              "vix_override_ict": vix_override_ict,
-              "vix_override_fib": vix_override_fib,
-              "vix_threshold": config.VIX_THRESHOLD,
               "token_set_at": _get_token_status(),
               "latest_order_issue": _latest_order_issue(),
               "strategies": {}}
@@ -479,18 +448,6 @@ def set_bias(body: dict, user: str = Depends(get_current_user)):
     if parsed["type"] == "bias" and bias == "NEUTRAL":
         bias = parsed["bias"]
 
-    # Build VIX warning if applicable
-    runner = get_runner()
-    vix = runner.last_vix
-    vix_warn = ""
-    if vix is not None and vix > config.VIX_THRESHOLD:
-        if parsed["type"] == "force_trade":
-            vix_warn = f" ⚠️ VIX={vix:.1f} is high — trade will execute but premiums are expensive."
-        else:
-            vix_warn = f" ⚠️ VIX={vix:.1f} > {config.VIX_THRESHOLD} — bot is currently blocked from taking new entries."
-    if vix_warn:
-        parsed["explanation"] = parsed.get("explanation", "") + vix_warn
-
     # Queue force trade (bypasses signal scorer)
     if parsed["type"] == "force_trade":
         if ipc.flag_exists(ipc.FLAG_FORCE_TRADE):
@@ -526,46 +483,6 @@ def resume_bot(user: str = Depends(get_current_user)):
     ipc.clear_flag(ipc.FLAG_PAUSE)
     ipc.write_flag(ipc.FLAG_RESUME)
     return {"status": "running"}
-
-@app.post("/api/bot/vix-override")
-def set_vix_override(body: dict, user: str = Depends(get_current_user)):
-    """Toggle global VIX gate on/off (affects both strategies)."""
-    enable = body.get("enable", True)
-    if enable:
-        ipc.write_flag(ipc.FLAG_VIX_OVERRIDE)
-    else:
-        ipc.clear_flag(ipc.FLAG_VIX_OVERRIDE)
-    return {"vix_override": enable}
-
-@app.post("/api/bot/vix-override/atr")
-def set_vix_override_atr(body: dict, user: str = Depends(get_current_user)):
-    """Toggle VIX gate for ATR Intraday strategy only."""
-    enable = body.get("enable", True)
-    if enable:
-        ipc.write_flag(ipc.FLAG_VIX_OVERRIDE_ATR)
-    else:
-        ipc.clear_flag(ipc.FLAG_VIX_OVERRIDE_ATR)
-    return {"strategy": "ATR Intraday", "vix_override": enable}
-
-@app.post("/api/bot/vix-override/ict")
-def set_vix_override_ict(body: dict, user: str = Depends(get_current_user)):
-    """Toggle VIX gate for C-ICT strategy only."""
-    enable = body.get("enable", True)
-    if enable:
-        ipc.write_flag(ipc.FLAG_VIX_OVERRIDE_ICT)
-    else:
-        ipc.clear_flag(ipc.FLAG_VIX_OVERRIDE_ICT)
-    return {"strategy": "C-ICT", "vix_override": enable}
-
-@app.post("/api/bot/vix-override/fib")
-def set_vix_override_fib(body: dict, user: str = Depends(get_current_user)):
-    """Toggle VIX gate for Fib-OF strategy only."""
-    enable = body.get("enable", True)
-    if enable:
-        ipc.write_flag(ipc.FLAG_VIX_OVERRIDE_FIB)
-    else:
-        ipc.clear_flag(ipc.FLAG_VIX_OVERRIDE_FIB)
-    return {"strategy": "Fib-OF", "vix_override": enable}
 
 @app.post("/api/trade/force")
 async def force_trade(body: dict, user: str = Depends(get_current_user)):

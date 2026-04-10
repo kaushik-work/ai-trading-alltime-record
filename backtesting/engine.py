@@ -258,7 +258,7 @@ class BacktestEngine:
 
                 # Options config (same for both strategies — both trade CE/PE)
                 is_bn_atr    = symbol == "BANKNIFTY"
-                lot_size_atr = config.LOT_SIZES.get("BANKNIFTY", 15) if is_bn_atr else config.LOT_SIZES.get("NIFTY", 25)
+                lot_size_atr = config.LOT_SIZES.get("BANKNIFTY", 15) if is_bn_atr else config.LOT_SIZES.get("NIFTY", 65)
                 opt_delta    = 0.45
                 strike_gap   = 100 if is_bn_atr else 50
 
@@ -585,7 +585,7 @@ class BacktestEngine:
         # ATM option delta ≈ 0.45 (used to convert spot-point P&L → premium P&L).
         is_bn        = symbol == "BANKNIFTY"
         sl_mult      = 1.5  if is_bn else 1.0   # ATR multiplier for SL
-        lot_size     = config.LOT_SIZES.get("BANKNIFTY", 15) if is_bn else config.LOT_SIZES.get("NIFTY", 25)
+        lot_size     = config.LOT_SIZES.get("BANKNIFTY", 15) if is_bn else config.LOT_SIZES.get("NIFTY", 65)
         opt_delta    = 0.45                      # ATM CE/PE delta approximation
         # Enforce a floor on min_score per symbol regardless of UI setting:
         #   NIFTY    ≥ 8.5  → forces W/M + HAC + VWAP (4+3+1.5)
@@ -852,7 +852,7 @@ class BacktestEngine:
         )
         from backtesting.charges import charges_for_trade
 
-        lot_size   = config.LOT_SIZES.get("NIFTY", 25)
+        lot_size   = config.LOT_SIZES.get("NIFTY", 65)
         opt_delta  = 0.45
         strike_gap = 50
         sl_mult    = 0.6  # tight SL for scalp

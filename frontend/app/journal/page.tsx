@@ -214,7 +214,7 @@ export default function JournalPage() {
                                 <td className="px-3 py-2 text-gray-700">
                                   {t.entry_price ? `₹${Number(t.entry_price).toLocaleString("en-IN")}` : "—"}
                                 </td>
-                                <td className="px-3 py-2 text-gray-500">{t.lot_size ?? 75}</td>
+                                <td className="px-3 py-2 text-gray-500">{t.lot_size ?? 65}</td>
                                 <td className={`px-3 py-2 font-bold ${pnl >= 0 ? "text-green-600" : "text-red-500"}`}>
                                   {pnl >= 0 ? "+" : ""}₹{pnl.toLocaleString("en-IN")}
                                 </td>

@@ -493,6 +493,294 @@ def find_ict_signals(
     }
 
 
+# ── Supply & Demand Zone Detection ────────────────────────────────────────────
+
+def find_sd_zones(
+    df: pd.DataFrame,
+    symbol: str = "NIFTY",
+    lookback: int = 120,
+    min_impulse_pct: float = 0.003,
+    max_base_candles: int = 5,
+    min_impulse_mult: float = 1.5,
+) -> list:
+    """
+    Detect institutional Supply & Demand zones from OHLCV data.
+
+    Patterns (institutional logic: large orders leave unfilled limit orders at base):
+      DBR — Drop-Base-Rally  → Demand zone, REVERSAL   (highest quality)
+      RBR — Rally-Base-Rally → Demand zone, CONTINUATION
+      RBD — Rally-Base-Drop  → Supply zone, REVERSAL   (highest quality)
+      DBD — Drop-Base-Drop   → Supply zone, CONTINUATION
+
+    Each zone:
+      zone_type : "demand" | "supply"
+      pattern   : "DBR" | "RBR" | "RBD" | "DBD"
+      quality   : "reversal" | "continuation"
+      proximal  : near edge (price touches this first on return)
+      distal    : far edge  (breach = zone invalidated)
+      strength  : impulse_ratio × quality_multiplier
+      fresh     : True if price has not returned to proximal since formation
+    """
+    if df is None or len(df) < 10:
+        return []
+
+    src = df.iloc[-lookback:].reset_index(drop=True) if len(df) >= lookback else df.reset_index(drop=True)
+    n = len(src)
+
+    opens  = src["Open"].astype(float).values
+    closes = src["Close"].astype(float).values
+    highs  = src["High"].astype(float).values
+    lows   = src["Low"].astype(float).values
+    bodies = np.abs(closes - opens)
+    avg_body = float(np.median(bodies[bodies > 0])) if (bodies > 0).any() else 1.0
+
+    def _is_impulse(i):
+        body = bodies[i]
+        price = closes[i]
+        if price == 0 or body < avg_body * min_impulse_mult:
+            return False, ""
+        if body / price < min_impulse_pct:
+            return False, ""
+        bull = closes[i] > opens[i]
+        rng = highs[i] - lows[i]
+        if rng == 0:
+            return False, ""
+        # Must close in top 40% (bull) or bottom 40% (bear) of candle range
+        if bull and (highs[i] - closes[i]) / rng > 0.4:
+            return False, ""
+        if not bull and (closes[i] - lows[i]) / rng > 0.4:
+            return False, ""
+        return True, ("bull" if bull else "bear")
+
+    def _is_base(i):
+        return bodies[i] < avg_body * 0.6
+
+    zones = []
+    i = 2
+    while i < n - 3:
+        if not _is_base(i):
+            i += 1
+            continue
+
+        base_start = i
+        base_end   = i
+        while (base_end + 1 < n - 1
+               and _is_base(base_end + 1)
+               and (base_end - base_start) < max_base_candles):
+            base_end += 1
+
+        if base_end >= n - 1:
+            i = base_end + 1
+            continue
+
+        base_high = float(src["High"].astype(float).iloc[base_start:base_end + 1].max())
+        base_low  = float(src["Low"].astype(float).iloc[base_start:base_end + 1].min())
+
+        # What came BEFORE the base?
+        before_imp, before_dir = False, ""
+        for b in range(base_start - 1, max(base_start - 3, -1), -1):
+            imp, d = _is_impulse(b)
+            if imp:
+                before_imp, before_dir = True, d
+                break
+
+        # What comes AFTER the base?
+        after_imp, after_dir = False, ""
+        for a in range(base_end + 1, min(base_end + 3, n)):
+            imp, d = _is_impulse(a)
+            if imp:
+                after_imp, after_dir = True, d
+                break
+
+        if not before_imp or not after_imp:
+            i = base_end + 1
+            continue
+
+        pattern    = f"{'R' if before_dir == 'bull' else 'D'}B{'R' if after_dir == 'bull' else 'D'}"
+        is_demand  = after_dir == "bull"
+        is_reversal = before_dir != after_dir
+
+        # Proximal = edge price touches FIRST when returning to zone
+        proximal = round(base_high, 2) if is_demand else round(base_low, 2)
+        distal   = round(base_low,  2) if is_demand else round(base_high, 2)
+
+        after_body    = bodies[base_end + 1] if base_end + 1 < n else avg_body
+        impulse_ratio = float(after_body / avg_body) if avg_body > 0 else 1.0
+        strength      = round(impulse_ratio * (1.5 if is_reversal else 1.0), 2)
+
+        # Fresh = price has NOT revisited proximal since zone formed
+        future = closes[base_end + 2:]
+        fresh  = not any(c <= proximal for c in future) if is_demand else not any(c >= proximal for c in future)
+
+        zones.append({
+            "zone_type": "demand" if is_demand else "supply",
+            "pattern":   pattern,
+            "quality":   "reversal" if is_reversal else "continuation",
+            "proximal":  proximal,
+            "distal":    distal,
+            "strength":  strength,
+            "fresh":     fresh,
+        })
+        i = base_end + 2
+
+    # Strongest fresh zones first
+    zones.sort(key=lambda z: (z["fresh"], z["strength"]), reverse=True)
+    return zones[:8]
+
+
+def sd_zone_signal(
+    current_price: float,
+    zones: list,
+    proximity_pts: float = 50.0,
+) -> dict:
+    """
+    Check if current price is inside or approaching a S&D zone.
+
+    Returns:
+      sd_score     : +2 inside demand, -2 inside supply; +1/-1 approaching; fresh adds ±1
+      sd_zone_type : "demand" | "supply" | None
+      sd_pattern   : e.g. "DBR"
+      sd_fresh     : bool
+      sd_proximal  : float or None
+      sd_strength  : float or None
+    """
+    best_score, best_zone = 0, None
+
+    for z in zones:
+        lo = min(z["proximal"], z["distal"])
+        hi = max(z["proximal"], z["distal"])
+        inside      = lo <= current_price <= hi
+        approaching = (not inside) and abs(current_price - z["proximal"]) <= proximity_pts
+
+        if inside:
+            raw = 2 if z["zone_type"] == "demand" else -2
+        elif approaching:
+            raw = 1 if z["zone_type"] == "demand" else -1
+        else:
+            continue
+
+        if z["fresh"]:
+            raw = max(-3, min(3, raw + (1 if raw > 0 else -1)))
+
+        if abs(raw) > abs(best_score):
+            best_score, best_zone = raw, z
+
+    if best_zone:
+        return {
+            "sd_score":     best_score,
+            "sd_zone_type": best_zone["zone_type"],
+            "sd_pattern":   best_zone["pattern"],
+            "sd_fresh":     best_zone["fresh"],
+            "sd_proximal":  best_zone["proximal"],
+            "sd_distal":    best_zone["distal"],
+            "sd_strength":  best_zone["strength"],
+        }
+    return {"sd_score": 0, "sd_zone_type": None, "sd_pattern": None,
+            "sd_fresh": False, "sd_proximal": None, "sd_distal": None, "sd_strength": None}
+
+
+def _resample_ohlcv(
+    df: pd.DataFrame,
+    timeframe: str,
+) -> pd.DataFrame:
+    """Resample OHLCV data to a higher timeframe for HTF S&D detection."""
+    if df is None or len(df) == 0:
+        return pd.DataFrame(columns=["Open", "High", "Low", "Close", "Volume"])
+
+    src = df.copy()
+    if "Date" in src.columns:
+        src = src.set_index("Date")
+    src.index = pd.to_datetime(src.index)
+    for col in ["Open", "High", "Low", "Close", "Volume"]:
+        if col not in src.columns:
+            src[col] = 0.0
+
+    out = src[["Open", "High", "Low", "Close", "Volume"]].resample(
+        timeframe, label="right", closed="right"
+    ).agg({
+        "Open": "first",
+        "High": "max",
+        "Low": "min",
+        "Close": "last",
+        "Volume": "sum",
+    }).dropna(subset=["Close"])
+    return out
+
+
+def find_htf_sd_zones(
+    df: pd.DataFrame,
+    symbol: str = "NIFTY",
+    timeframes: tuple[str, ...] = ("60min", "1D"),
+    lookbacks: Optional[dict] = None,
+) -> dict:
+    """
+    Detect supply/demand zones on higher timeframes.
+
+    Returns:
+      {
+        "60min": [...zones...],
+        "1D":    [...zones...],
+      }
+    """
+    lookbacks = lookbacks or {"60min": 120, "1D": 60}
+    zones_by_tf: dict = {}
+    for timeframe in timeframes:
+        htf_df = _resample_ohlcv(df, timeframe)
+        lb = int(lookbacks.get(timeframe, 120))
+        zones_by_tf[timeframe] = find_sd_zones(htf_df, symbol=symbol, lookback=lb)
+    return zones_by_tf
+
+
+def htf_sd_zone_signal(
+    current_price: float,
+    zones_by_tf: dict,
+    symbol: str = "NIFTY",
+    proximity_map: Optional[dict] = None,
+) -> dict:
+    """
+    Select the best higher-timeframe S&D zone touching or approaching current price.
+
+    Priority:
+      1. Stronger absolute score
+      2. Daily zones over hourly zones on ties
+      3. Fresh zones
+      4. Stronger departure strength
+    """
+    tick = _TICK_SIZES.get(symbol, _DEFAULT_TICK)
+    proximity_map = proximity_map or {"60min": tick * 4, "1D": tick * 8}
+
+    best = None
+    best_rank = (-1, -1, -1, -1.0)
+
+    for timeframe, zones in zones_by_tf.items():
+        sig = sd_zone_signal(current_price, zones, proximity_pts=proximity_map.get(timeframe, tick * 4))
+        raw = sig.get("sd_score", 0)
+        if raw == 0:
+            continue
+        rank = (
+            abs(raw),
+            1 if timeframe in {"1D", "D", "daily"} else 0,
+            1 if sig.get("sd_fresh") else 0,
+            float(sig.get("sd_strength") or 0),
+        )
+        if rank > best_rank:
+            best_rank = rank
+            best = {**sig, "sd_tf": timeframe}
+
+    if best:
+        return best
+    return {
+        "sd_score": 0,
+        "sd_zone_type": None,
+        "sd_pattern": None,
+        "sd_fresh": False,
+        "sd_proximal": None,
+        "sd_distal": None,
+        "sd_strength": None,
+        "sd_tf": None,
+    }
+
+
 # ── All-in-one helper ──────────────────────────────────────────────────────────
 
 def analyse(
@@ -504,12 +792,7 @@ def analyse(
     """
     Full order flow analysis in one call.
 
-    proximity_ticks : how many ticks away from a delta-zone counts as "near it"
-                      default=4 (100 pts for NIFTY, 200 pts for BANKNIFTY)
-                      increase for wider zones, decrease for tighter confirmation
-
-    Returns merged dict of hps + dhps + zone_signal + trendline channels —
-    ready to pass to signal_scorer or brain prompt.
+    Returns merged dict of hps + dhps + zone_signal + trendline + ict + sd_zones.
     """
     hps  = find_hps_zones(df, symbol)
     dhps = find_dhps_zones(df, symbol)
@@ -517,4 +800,8 @@ def analyse(
     tl   = find_trendline_channels(df, symbol=symbol)
     ict  = find_ict_signals(df)
 
-    return {**hps, **dhps, **sig, **tl, **ict}
+    tick = _TICK_SIZES.get(symbol, _DEFAULT_TICK)
+    zones = find_sd_zones(df, symbol)
+    sd   = sd_zone_signal(current_price, zones, proximity_pts=tick * 2)
+
+    return {**hps, **dhps, **sig, **tl, **ict, **sd, "sd_zones": zones}
