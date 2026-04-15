@@ -303,6 +303,8 @@ def _run_variant(
     use_atr_min: bool = False,
     atr_min_pts: float = 35.0,
     use_sd: bool = False,
+    use_fib_tp: bool = False,   # TP = swing extreme (0% level) instead of fixed R:R
+    use_fib_sl: bool = False,   # SL = 78.6% level (tight, high R:R) instead of swing low
     combo_key: str = "",
 ) -> dict:
     anchor_all = df_15m if variant.anchor_tf == "15m" else df_5m
@@ -422,14 +424,37 @@ def _run_variant(
 
             atr = max(setup["atr"], _atr(entry_upto), price * 0.002)
             risk_amt = equity * risk_pct / 100
-            sl_dist = max(atr, abs(price - (setup["zone_low"] if setup["side"] == "BUY" else setup["zone_high"])))
-            qty = max(1, int(risk_amt / (sl_dist * LOT_SIZE)))
+            diff = setup["high"] - setup["low"]   # full swing range
+
             if setup["side"] == "BUY":
-                sl = min(setup["low"], price - sl_dist)
-                tp = price + (price - sl) * rr
+                # SL: tight at 78.6% retracement (just below deep pullback level)
+                #     or traditional (swing low)
+                fib786_sl = setup["high"] - diff * 0.786 - atr * 0.25
+                if use_fib_sl:
+                    sl = fib786_sl
+                else:
+                    sl_dist = max(atr, abs(price - setup["zone_low"]))
+                    sl = min(setup["low"], price - sl_dist)
+                # TP: swing high (0% level = natural Fibonacci target)
+                #     or traditional fixed R:R
+                if use_fib_tp:
+                    tp = setup["high"]
+                else:
+                    tp = price + (price - sl) * rr
             else:
-                sl = max(setup["high"], price + sl_dist)
-                tp = price - (sl - price) * rr
+                fib786_sl = setup["low"] + diff * 0.786 + atr * 0.25
+                if use_fib_sl:
+                    sl = fib786_sl
+                else:
+                    sl_dist = max(atr, abs(price - setup["zone_high"]))
+                    sl = max(setup["high"], price + sl_dist)
+                if use_fib_tp:
+                    tp = setup["low"]
+                else:
+                    tp = price - (sl - price) * rr
+
+            sl_dist = abs(price - sl)
+            qty = max(1, int(risk_amt / (sl_dist * LOT_SIZE)) if sl_dist > 0 else 1)
 
             position = {
                 "variant": variant.key,
@@ -537,8 +562,12 @@ def main() -> None:
     parser.add_argument("--threshold", type=int, default=6)
     parser.add_argument("--lookback", type=int, default=16)
     parser.add_argument("--min-impulse-pct", type=float, default=0.25)
-    parser.add_argument("--max-trades-day", type=int, default=1)
+    parser.add_argument("--max-trades-day", type=int, default=10)
     parser.add_argument("--no-lunch", action="store_true", default=True)
+    parser.add_argument("--fib-tp", action="store_true",
+                        help="Use swing extreme (Fibonacci 0%% level) as TP instead of fixed R:R.")
+    parser.add_argument("--fib-sl", action="store_true",
+                        help="Use 78.6%% Fibonacci level as SL (tight, better R:R) instead of swing low.")
     parser.add_argument("--carry-forward", action="store_true",
                         help="Do not force-close at 15:10; hold until SL/TP or final bar.")
     parser.add_argument("--variant", choices=[v.key for v in VARIANTS], default=None,
@@ -585,6 +614,7 @@ def main() -> None:
                     threshold=args.threshold, lookback=args.lookback,
                     min_impulse_pct=args.min_impulse_pct, no_lunch=args.no_lunch,
                     max_trades_day=args.max_trades_day, carry_forward=args.carry_forward,
+                    use_fib_tp=args.fib_tp, use_fib_sl=args.fib_sl,
                     **flags, combo_key=key,
                 ))
     elif args.combo_all:
@@ -601,6 +631,7 @@ def main() -> None:
                     threshold=args.threshold, lookback=args.lookback,
                     min_impulse_pct=args.min_impulse_pct, no_lunch=args.no_lunch,
                     max_trades_day=args.max_trades_day, carry_forward=args.carry_forward,
+                    use_fib_tp=args.fib_tp, use_fib_sl=args.fib_sl,
                     use_vwap=v, use_orb=o, use_rsi=r, use_trend=t, combo_key=key,
                 ))
     else:
@@ -612,6 +643,7 @@ def main() -> None:
                 threshold=args.threshold, lookback=args.lookback,
                 min_impulse_pct=args.min_impulse_pct, no_lunch=args.no_lunch,
                 max_trades_day=args.max_trades_day, carry_forward=args.carry_forward,
+                use_fib_tp=args.fib_tp, use_fib_sl=args.fib_sl,
                 use_vwap="vwap" in active, use_orb="orb" in active,
                 use_rsi="rsi" in active, use_trend="trend" in active,
                 use_of_gate="of" in active or "of_gate" in active,

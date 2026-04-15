@@ -14,8 +14,56 @@ interface Props {
 
 export default function Header({ mode, connected, botStatus, onBotToggle, errorCount = 0 }: Props) {
   const router = useRouter();
-  const [menuOpen, setMenuOpen] = useState(false);
+  const [menuOpen, setMenuOpen]     = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  // Zerodha token modal
+  const [tokenModal, setTokenModal] = useState(false);
+  const [loginUrl, setLoginUrl]     = useState<string | null>(null);
+  const [reqToken, setReqToken]     = useState("");
+  const [tokenSaving, setTokenSaving] = useState(false);
+  const [tokenMsg, setTokenMsg]     = useState<{ok: boolean; text: string} | null>(null);
+
+  async function openTokenModal() {
+    setMenuOpen(false);
+    setTokenModal(true);
+    setReqToken("");
+    setTokenMsg(null);
+    setLoginUrl(null);
+    try {
+      const res = await fetch(`${API_URL}/api/zerodha/login-url`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem("aq_token")}` },
+      });
+      const j = await res.json();
+      setLoginUrl(j.url ?? null);
+    } catch {
+      setLoginUrl(null);
+    }
+  }
+
+  async function submitToken() {
+    if (!reqToken.trim()) return;
+    setTokenSaving(true);
+    setTokenMsg(null);
+    try {
+      const res = await fetch(`${API_URL}/api/zerodha/callback`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("aq_token")}` },
+        body: JSON.stringify({ request_token: reqToken.trim() }),
+      });
+      const j = await res.json();
+      if (res.ok) {
+        setTokenMsg({ ok: true, text: `Token saved` });
+        setTimeout(() => { setTokenModal(false); setReqToken(""); setTokenMsg(null); }, 1500);
+      } else {
+        setTokenMsg({ ok: false, text: j.detail ?? "Failed to save token" });
+      }
+    } catch (e: any) {
+      setTokenMsg({ ok: false, text: e.message ?? "Network error" });
+    } finally {
+      setTokenSaving(false);
+    }
+  }
 
   useEffect(() => {
     function handleClick(e: MouseEvent) {
@@ -53,6 +101,7 @@ export default function Header({ mode, connected, botStatus, onBotToggle, errorC
   }
 
   return (
+    <>
     <header className="w-full bg-white border-b border-gray-200 px-4 md:px-6 py-2 flex items-center justify-between shadow-sm">
 
       {/* Left — Logo */}
@@ -75,6 +124,17 @@ export default function Header({ mode, connected, botStatus, onBotToggle, errorC
         }`}>
           {mode === "live" ? "● LIVE" : "● PAPER"}
         </span>
+
+        {/* Get Token — always visible */}
+        <button
+          onClick={openTokenModal}
+          className="text-sm font-semibold px-3 md:px-4 py-2 rounded-lg transition-colors"
+          style={{ background: "#eff6ff", color: "#2563eb", border: "1px solid #bfdbfe" }}
+          title="Set today's Zerodha access token"
+        >
+          <span className="hidden sm:inline">Get Token</span>
+          <span className="sm:hidden">🔑</span>
+        </button>
 
         {/* Signal Radar — hidden on mobile (in dropdown instead) */}
         <button
@@ -170,5 +230,81 @@ export default function Header({ mode, connected, botStatus, onBotToggle, errorC
         </div>
       </div>
     </header>
+
+    {/* Zerodha Token Modal — fixed overlay, lives outside <header> so z-index is clean */}
+    {tokenModal && (
+      <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
+           style={{ background: "rgba(0,0,0,0.5)" }}
+           onClick={e => { if (e.target === e.currentTarget) { setTokenModal(false); setTokenMsg(null); } }}>
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-5">
+          <div className="flex items-center justify-between">
+            <h3 className="text-base font-bold text-gray-900">Daily Token Setup</h3>
+            <button onClick={() => { setTokenModal(false); setTokenMsg(null); }}
+                    className="text-gray-400 hover:text-gray-600 text-xl font-bold leading-none">×</button>
+          </div>
+
+          <ol className="space-y-3 text-sm text-gray-700">
+            <li className="flex gap-3">
+              <span className="shrink-0 w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 text-[11px] font-bold flex items-center justify-center">1</span>
+              <span>
+                {loginUrl ? (
+                  <>
+                    <a href={loginUrl} target="_blank" rel="noreferrer"
+                       className="text-indigo-600 underline font-semibold">Open Zerodha login</a>
+                    {" "}and log in with your account.
+                  </>
+                ) : (
+                  <span className="text-gray-400">Loading login URL…</span>
+                )}
+              </span>
+            </li>
+            <li className="flex gap-3">
+              <span className="shrink-0 w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 text-[11px] font-bold flex items-center justify-center">2</span>
+              <span>
+                After login you&apos;ll be redirected. Copy the <code className="bg-gray-100 px-1 rounded text-xs font-mono">request_token</code> from the URL
+                {" "}(the value after <code className="bg-gray-100 px-1 rounded text-xs font-mono">?request_token=</code>).
+              </span>
+            </li>
+            <li className="flex gap-3">
+              <span className="shrink-0 w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 text-[11px] font-bold flex items-center justify-center">3</span>
+              <span>Paste it below and hit Submit — the bot picks it up immediately.</span>
+            </li>
+          </ol>
+
+          <div className="space-y-2">
+            <input
+              type="text"
+              value={reqToken}
+              onChange={e => setReqToken(e.target.value)}
+              onKeyDown={e => e.key === "Enter" && submitToken()}
+              placeholder="Paste request_token here…"
+              className="w-full text-sm border border-gray-300 rounded-xl px-3 py-2.5 focus:outline-none focus:border-indigo-400 font-mono placeholder-gray-300"
+              autoFocus
+            />
+            {tokenMsg && (
+              <div className={`text-xs px-3 py-2 rounded-lg ${tokenMsg.ok ? "bg-green-50 text-green-700 border border-green-200" : "bg-red-50 text-red-600 border border-red-200"}`}>
+                {tokenMsg.ok ? "✓ " : "✗ "}{tokenMsg.text}
+              </div>
+            )}
+          </div>
+
+          <div className="flex gap-2">
+            <button
+              onClick={submitToken}
+              disabled={tokenSaving || !reqToken.trim()}
+              className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white transition-colors disabled:opacity-50"
+              style={{ background: "#4f46e5" }}>
+              {tokenSaving ? "Saving…" : "Submit"}
+            </button>
+            <button
+              onClick={() => { setTokenModal(false); setTokenMsg(null); }}
+              className="px-4 py-2.5 rounded-xl text-sm font-semibold border border-gray-200 text-gray-600 hover:border-gray-400 transition-colors">
+              Cancel
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }

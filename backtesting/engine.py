@@ -186,7 +186,7 @@ class BacktestEngine:
 
     def run(self, symbol: str, period: str = "60d",
             interval: str = "15m",
-            min_score: int = 7,
+            min_score: int = 6,
             risk_pct: float = 2.0,
             daily_loss_limit_pct: float = 3.0,
             rr_ratio: float = 2.0,
@@ -197,7 +197,7 @@ class BacktestEngine:
 
         Args:
             interval             : candle timeframe — '5m' or '15m'
-            min_score            : signal score threshold (default 7 — high conviction only)
+            min_score            : signal score threshold (matches live config.MIN_SIGNAL_SCORE=6)
             risk_pct             : % of equity risked per trade (default 2%)
             daily_loss_limit_pct : stop trading for the day after losing this % of day-start equity
             _df                  : pre-fetched DataFrame slice (skips fetch_data if provided)
@@ -235,12 +235,10 @@ class BacktestEngine:
         # Previous-day high / low (updated at start of each day)
         pdh = pdl = None
 
-        MAX_TRADES_PER_DAY = 3
-
         for day_idx, day in enumerate(days):
             day_df = df[df["_date"] == day].copy()
             g_start = day_offsets[day]
-            day_trade_count = 0       # reset each day
+            day_trade_count = 0       # reset each day (kept for stats, no cap)
             day_start_equity = equity # for daily loss limit
 
             # PDH / PDL from previous day
@@ -320,8 +318,6 @@ class BacktestEngine:
                 if bar_time < TRADE_START or bar_time >= TRADE_EXIT:
                     continue
                 if position:
-                    continue
-                if day_trade_count >= MAX_TRADES_PER_DAY:
                     continue
 
                 # Daily loss limit — stop trading for the day
@@ -567,7 +563,7 @@ class BacktestEngine:
     # ── Mining in Water (scalp) backtest ─────────────────────────────────────
 
     def _run_scalp(self, symbol: str, period: str = "60d",
-                   interval: str = "5m", min_score: int = 7,
+                   interval: str = "5m", min_score: int = 6,
                    risk_pct: float = 2.0, daily_loss_limit_pct: float = 3.0,
                    rr_ratio: float = 2.0) -> dict:
         import numpy as np

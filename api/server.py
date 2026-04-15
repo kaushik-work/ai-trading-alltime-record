@@ -633,6 +633,17 @@ def remove_unblock(date_str: str, user: str = Depends(get_current_user)):
     return {"status": "block_restored", "date": date_str}
 
 
+@app.get("/api/zerodha/login-url")
+def zerodha_login_url(user: str = Depends(get_current_user)):
+    """Return the Kite Connect login URL so the frontend can open it."""
+    try:
+        from kiteconnect import KiteConnect
+        kite = KiteConnect(api_key=config.ZERODHA_API_KEY)
+        return {"url": kite.login_url()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Could not build login URL: {e}")
+
+
 @app.post("/api/zerodha/callback")
 def zerodha_callback(body: dict, user: str = Depends(get_current_user)):
     """Exchange Zerodha request_token for access_token and persist to .env."""
@@ -743,7 +754,7 @@ def _safe_json(obj) -> str:
 async def websocket_endpoint(ws: WebSocket, token: str = Query(default="")):
     try:
         decode_token(token)
-    except HTTPException:
+    except Exception:
         await ws.close(code=1008)
         return
     await manager.connect(ws)

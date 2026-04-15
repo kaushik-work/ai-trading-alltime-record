@@ -57,6 +57,9 @@ parser.add_argument("--vix-filter", type=float, default=0.0,
 parser.add_argument("--daily-loss", type=float, default=5.0,
                     help="Daily loss limit as %% of day equity (default 5%%). "
                          "Use 0 to disable. Live bot: 5%% = Rs6,250 on Rs1.25L.")
+parser.add_argument("--adx-filter", type=float, default=0.0,
+                    help="Skip entries when ADX(14) < threshold (e.g. --adx-filter 20). "
+                         "0 = disabled. Filters choppy/sideways sessions.")
 args = parser.parse_args()
 
 INITIAL_CAPITAL = args.capital
@@ -67,6 +70,7 @@ NO_LUNCH        = args.no_lunch
 MIN_LOTS        = args.min_lots
 VIX_FILTER      = args.vix_filter   # 0 = disabled
 DAILY_LOSS_PCT  = args.daily_loss   # 0 = no limit
+ADX_THRESHOLD   = args.adx_filter  # 0 = disabled; 20 = skip choppy sessions
 
 LOT_SIZE    = 65   # NIFTY lot size revised Feb 2026
 TRADE_START = time(9, 45)
@@ -211,6 +215,61 @@ def _atr(df, pos, period=14):
                         (lows - prev_c).abs()], axis=1).max(axis=1)
     atr    = float(tr.ewm(span=period, adjust=False).mean().iloc[-1])
     return atr if atr > 0 else float(closes.iloc[-1]) * 0.005
+
+
+def _adx(df, pos, period=14) -> float:
+    """
+    Wilder's ADX(14) computed at bar `pos`.
+    Returns 0.0 when insufficient history.
+    ADX < 20 → choppy/sideways → skip trades.
+    ADX > 25 → trending → high-confidence entries.
+    """
+    need = period * 3 + 2
+    if pos < need:
+        return 0.0
+    w      = df.iloc[max(0, pos - need): pos + 1]
+    highs  = w["High"].astype(float).values
+    lows   = w["Low"].astype(float).values
+    closes = w["Close"].astype(float).values
+    n      = len(closes)
+    if n < period + 2:
+        return 0.0
+
+    tr_arr, pdm, ndm = [], [], []
+    for i in range(1, n):
+        h, l, pc = highs[i], lows[i], closes[i - 1]
+        tr_arr.append(max(h - l, abs(h - pc), abs(l - pc)))
+        up   = highs[i] - highs[i - 1]
+        down = lows[i - 1] - lows[i]
+        pdm.append(up   if up > down and up > 0   else 0.0)
+        ndm.append(down if down > up and down > 0 else 0.0)
+
+    def _wilder_smooth(arr, p):
+        s = [sum(arr[:p])]
+        for v in arr[p:]:
+            s.append(s[-1] - s[-1] / p + v)
+        return s
+
+    tr_s  = _wilder_smooth(tr_arr, period)
+    pdm_s = _wilder_smooth(pdm, period)
+    ndm_s = _wilder_smooth(ndm, period)
+
+    dx_arr = []
+    for t, p, nd in zip(tr_s, pdm_s, ndm_s):
+        if t == 0:
+            dx_arr.append(0.0)
+            continue
+        pdi = 100 * p / t
+        ndi = 100 * nd / t
+        denom = pdi + ndi
+        dx_arr.append(100 * abs(pdi - ndi) / denom if denom > 0 else 0.0)
+
+    if len(dx_arr) < period:
+        return 0.0
+    adx = sum(dx_arr[:period]) / period
+    for v in dx_arr[period:]:
+        adx = (adx * (period - 1) + v) / period
+    return round(adx, 2)
 
 
 # ── Strategy 1: ATR Intraday signal score ─────────────────────────────────────
@@ -480,6 +539,12 @@ def _run(df, strategy, equity_start, rr=RR_RATIO, risk_pct=RISK_PCT,
             if score == 0:
                 continue
 
+            # ADX regime filter — skip when market is choppy / non-trending
+            if ADX_THRESHOLD > 0:
+                adx_val = _adx(df, full_pos)
+                if adx_val < ADX_THRESHOLD:
+                    continue
+
             atr   = _atr(df, full_pos)
             price = float(row["Close"])
             if price <= 0 or atr <= 0:
@@ -620,8 +685,9 @@ if __name__ == "__main__":
     vix_thr   = VIX_FILTER if VIX_FILTER > 0 else 25.0   # default comparison threshold
     dl_tag    = f" | daily-loss {DAILY_LOSS_PCT:.0f}%" if DAILY_LOSS_PCT > 0 else " | no daily-loss limit"
 
+    adx_tag = f" | ADX filter >{ADX_THRESHOLD:.0f}" if ADX_THRESHOLD > 0 else " | ADX filter OFF"
     print(f"\nATR + C-ICT Backtest — Daily Loss Rule: OFF vs {DAILY_LOSS_PCT:.0f}% | Month-on-Month")
-    print(f"  Capital: Rs{INITIAL_CAPITAL:,.0f}  |  R:R {RR_RATIO}  |  Risk {RISK_PCT}%/trade  |  Min lots {MIN_LOTS}{lunch_tag}\n")
+    print(f"  Capital: Rs{INITIAL_CAPITAL:,.0f}  |  R:R {RR_RATIO}  |  Risk {RISK_PCT}%/trade  |  Min lots {MIN_LOTS}{lunch_tag}{adx_tag}\n")
 
     df = _load_nifty_5m()
     df.index    = pd.to_datetime(df.index)

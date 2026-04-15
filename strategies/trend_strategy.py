@@ -148,15 +148,35 @@ class TrendStrategy:
 
         portfolio = self.broker.get_portfolio_summary()
 
-        # Combined daily loss limit — both bots share the ₹6,250 hard stop.
-        # When hit: write the global IPC pause flag so BOTH bots stop on their
-        # next cycle (no 5-minute gap — they check ipc.FLAG_PAUSE each cycle).
+        # ── Per-strategy daily loss — pauses THIS strategy only ───────────────
+        # Calculate today's realised PnL for this specific strategy from memory.
+        # If it exceeds PER_STRATEGY_DAILY_LOSS_PCT (3% = ₹3,750), pause only
+        # this instance — the other two strategies continue unaffected.
+        try:
+            today_trades = self.memory.get_today_trades()
+            strategy_pnl = sum(
+                t.get("pnl", 0) for t in today_trades
+                if t.get("strategy") == self.strategy_name and t.get("side") == "SELL"
+            )
+            per_strategy_loss_limit = config.STARTING_BUDGET * (config.PER_STRATEGY_DAILY_LOSS_PCT / 100)
+            if strategy_pnl <= -per_strategy_loss_limit:
+                logger.warning(
+                    "[%s] Per-strategy loss limit hit: ₹%.0f today (limit ₹%.0f). Pausing this strategy only.",
+                    self.strategy_name, abs(strategy_pnl), per_strategy_loss_limit,
+                )
+                self.pause()   # only this instance pauses — others keep running
+                return None
+        except Exception as _e:
+            logger.debug("[%s] Per-strategy loss check skipped: %s", self.strategy_name, _e)
+
+        # ── Combined global stop — ALL strategies pause ────────────────────────
+        # ₹6,250 combined hard stop (5% of ₹1.25L). Hits only on catastrophic days.
         if portfolio.get("pnl", 0) <= -config.MAX_DAILY_LOSS:
             logger.warning(
                 "[%s] Combined daily loss limit ₹%s hit. Pausing ALL strategies.",
                 self.strategy_name, config.MAX_DAILY_LOSS,
             )
-            ipc.write_flag(ipc.FLAG_PAUSE)   # stops both bots immediately next cycle
+            ipc.write_flag(ipc.FLAG_PAUSE)   # stops all bots immediately next cycle
             self.pause()                      # also stop this instance right now
             return None
 
