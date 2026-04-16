@@ -644,6 +644,32 @@ def zerodha_login_url(user: str = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=f"Could not build login URL: {e}")
 
 
+@app.get("/api/zerodha/callback")
+def zerodha_callback_redirect(request_token: str = "", status: str = "", action: str = ""):
+    """Zerodha redirects here after login (GET). Show token so user can copy-paste into the modal."""
+    from fastapi.responses import HTMLResponse
+    if status != "success" or not request_token:
+        return HTMLResponse("<h2>Login failed or cancelled. Close this tab and try again.</h2>", status_code=400)
+    html = f"""<!DOCTYPE html><html><head><title>Zerodha Token</title>
+<style>body{{font-family:sans-serif;max-width:480px;margin:60px auto;padding:0 20px;}}
+.box{{background:#f0f9ff;border:1px solid #bae6fd;border-radius:12px;padding:24px;}}
+.token{{font-family:monospace;font-size:14px;word-break:break-all;background:#fff;
+border:1px solid #cbd5e1;border-radius:8px;padding:12px;margin:12px 0;}}
+button{{background:#4f46e5;color:#fff;border:none;padding:10px 20px;border-radius:8px;
+cursor:pointer;font-size:14px;font-weight:600;}}
+button:active{{background:#3730a3;}}
+</style></head><body>
+<div class="box">
+<h3 style="margin-top:0">✓ Zerodha login successful</h3>
+<p>Copy the token below, then go back to the dashboard and paste it in the <b>Get Token</b> modal.</p>
+<div class="token" id="tok">{request_token}</div>
+<button onclick="navigator.clipboard.writeText('{request_token}').then(()=>this.textContent='✓ Copied!')">
+Copy Token</button>
+<p style="margin-top:16px;font-size:12px;color:#64748b">After pasting in the modal, click Submit — the bot picks it up immediately.</p>
+</div></body></html>"""
+    return HTMLResponse(html)
+
+
 @app.post("/api/zerodha/callback")
 def zerodha_callback(body: dict, user: str = Depends(get_current_user)):
     """Exchange Zerodha request_token for access_token and persist to .env."""
@@ -752,10 +778,11 @@ def _safe_json(obj) -> str:
 
 @app.websocket("/ws")
 async def websocket_endpoint(ws: WebSocket, token: str = Query(default="")):
+    await ws.accept()
     try:
         decode_token(token)
     except Exception:
-        await ws.close(code=1008)
+        await ws.close(code=1008, reason="Invalid or expired token")
         return
     await manager.connect(ws)
     try:

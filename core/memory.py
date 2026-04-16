@@ -180,6 +180,23 @@ class TradeMemory:
             """, (symbol, strategy)).fetchone()
         return row is not None
 
+    def has_open_underlying_today(self, underlying: str) -> bool:
+        """Return True if ANY strategy has an unclosed BUY for this underlying today.
+
+        Checks the `underlying` column (e.g. "NIFTY") so it catches any option
+        contract on the same underlying. Scoped to today so stale rows from
+        previous sessions don't block fresh entries.
+        """
+        today = today_ist()
+        with get_connection() as conn:
+            row = conn.execute("""
+                SELECT 1 FROM trades
+                WHERE underlying = ? AND side = 'BUY' AND closed_at IS NULL
+                  AND timestamp >= ?
+                LIMIT 1
+            """, (underlying, f"{today}T00:00:00")).fetchone()
+        return row is not None
+
     def get_trades_for_symbol(self, symbol: str, limit: int = 20) -> list:
         """Get recent trades for a symbol — used as context for Claude."""
         with get_connection() as conn:

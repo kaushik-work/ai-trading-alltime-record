@@ -243,6 +243,17 @@ class TrendStrategy:
         if portfolio.get("open_positions", 0) >= config.MAX_OPEN_POSITIONS:
             return None
 
+        # Duplicate guard — DB-backed so it survives container restarts.
+        # If ANY strategy has an unclosed BUY for this underlying today, skip.
+        # This prevents: (a) cross-strategy double-entries and (b) re-entry
+        # after a restart when broker.positions is empty but the DB is not.
+        if self.memory.has_open_underlying_today(symbol):
+            logger.info(
+                "[%s] %s already has an unclosed BUY in DB today (another strategy or restart). Skipping.",
+                self.strategy_name, symbol,
+            )
+            return None
+
         # Always send to Claude — it reads raw candles and decides autonomously
         return self._confirm_and_execute(symbol, current_price, indicators, intraday, scored, portfolio)
 

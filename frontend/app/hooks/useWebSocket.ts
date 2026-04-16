@@ -12,6 +12,12 @@ export function useWebSocket(url: string) {
   const retry = useRef<ReturnType<typeof setTimeout> | null>(null);
   const poll = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  function logout() {
+    localStorage.removeItem("aq_token");
+    localStorage.removeItem(CACHE_KEY);
+    window.location.replace("/login");
+  }
+
   async function fetchSnapshot() {
     if (!url) return;
     const token = localStorage.getItem("aq_token") || "";
@@ -21,6 +27,7 @@ export function useWebSocket(url: string) {
         headers: token ? { Authorization: `Bearer ${token}` } : {},
         cache: "no-store",
       });
+      if (res.status === 401) { logout(); return; }
       if (!res.ok) return;
       const parsed = await res.json();
       setData(parsed);
@@ -28,12 +35,15 @@ export function useWebSocket(url: string) {
     } catch {}
   }
 
+  const wsFailCount = useRef(0);
+
   function connect() {
     const token = localStorage.getItem("aq_token") || "";
     ws.current = new WebSocket(`${url}?token=${token}`);
 
     ws.current.onopen = () => {
       setConnected(true);
+      wsFailCount.current = 0;
     };
 
     ws.current.onmessage = (e) => {
@@ -44,9 +54,14 @@ export function useWebSocket(url: string) {
       } catch {}
     };
 
-    ws.current.onclose = () => {
+    ws.current.onclose = (e) => {
       setConnected(false);
-      retry.current = setTimeout(connect, 3000); // auto-reconnect
+      // Code 1008 = auth rejected by server — don't retry, go to login
+      if (e.code === 1008) { logout(); return; }
+      wsFailCount.current += 1;
+      // After 5 consecutive failures without ever connecting, token is likely invalid
+      if (wsFailCount.current >= 5) { fetchSnapshot(); wsFailCount.current = 0; }
+      retry.current = setTimeout(connect, 3000);
     };
 
     ws.current.onerror = () => ws.current?.close();
