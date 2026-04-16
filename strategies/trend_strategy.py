@@ -128,15 +128,16 @@ class TrendStrategy:
         # Cap by MAX_TRADE_AMOUNT
         max_qty_by_budget = int(config.MAX_TRADE_AMOUNT / price) if price > 0 else 1
 
-        # Round to lot size, enforce MIN_LOTS
+        # Round to lot size, enforce MIN_LOTS (runtime-configurable from dashboard)
         lot      = config.LOT_SIZES.get(symbol, 1)
-        min_qty  = lot * config.MIN_LOTS
+        min_lots = ipc.read_settings().get("min_lots", config.MIN_LOTS)
+        min_qty  = lot * min_lots
         qty      = max(min_qty, (qty // lot) * lot)
         qty      = min(qty, max(min_qty, (max_qty_by_budget // lot) * lot))
 
         logger.info(
-            "Position sizing %s: risk=₹%.0f / ATR=₹%.2f → %d units (%d lots)",
-            symbol, risk_amount, sl_distance, qty, qty // lot
+            "Position sizing %s: risk=₹%.0f / ATR=₹%.2f → %d units (%d lots, min_lots=%d)",
+            symbol, risk_amount, sl_distance, qty, qty // lot, min_lots
         )
         return max(lot, qty)
 

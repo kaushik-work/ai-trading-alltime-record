@@ -76,10 +76,20 @@ export default function Home() {
   const tokenSetAt        = tokenStatus?.set_at      ?? null;
   const latestOrderIssue  = data?.latest_order_issue ?? null;
   const dayBiasData       = data?.day_bias          ?? { bias: "NEUTRAL", note: "", set_at: null };
+  const settingsData      = data?.settings          ?? { min_lots: 1 };
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
   const vixOverrideSaving = false;
   const [biasSaving, setBiasSaving]   = useState(false);
+  const [lotsSaving, setLotsSaving]   = useState(false);
+  const [lotsValue, setLotsValue]     = useState<number>(1);
+
+  // Sync lots from websocket
+  useEffect(() => {
+    if (settingsData?.min_lots !== undefined) {
+      setLotsValue(settingsData.min_lots);
+    }
+  }, [settingsData?.min_lots]);
   const [biasEdit, setBiasEdit]       = useState(false);
   const [biasNote, setBiasNote]       = useState("");
   const [savedBias, setSavedBias]     = useState<string | null>(null);
@@ -117,6 +127,21 @@ export default function Home() {
       setTimeout(() => setSavedBias(null), 2000);
     } finally {
       setBiasSaving(false);
+    }
+  }
+
+  async function saveLots(n: number) {
+    setLotsSaving(true);
+    setLotsValue(n);
+    try {
+      const token = localStorage.getItem("aq_token");
+      await fetch(`${API_URL}/api/settings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ min_lots: n }),
+      });
+    } finally {
+      setLotsSaving(false);
     }
   }
 
@@ -264,7 +289,21 @@ export default function Home() {
           <div className="flex flex-col md:flex-row gap-4 mb-4 items-start">
             {/* Today's Strategy P&L — always show both cards */}
             <div className="w-full md:flex-1">
-              <div className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">Today's Strategy P&L</div>
+              <div className="flex items-center justify-between mb-2">
+                <div className="text-xs font-bold text-gray-500 uppercase tracking-widest">Today's Strategy P&L</div>
+                <div className="flex items-center gap-1">
+                  <span className="text-[10px] text-gray-400 font-semibold mr-0.5">LOTS</span>
+                  {[1, 2, 3].map(n => (
+                    <button key={n} onClick={() => saveLots(n)} disabled={lotsSaving}
+                      className="w-6 h-6 text-xs font-bold rounded transition-all disabled:opacity-50"
+                      style={lotsValue === n
+                        ? { background: "#4f46e5", color: "#fff" }
+                        : { background: "#f3f4f6", color: "#374151" }}>
+                      {n}
+                    </button>
+                  ))}
+                </div>
+              </div>
               <div className="grid grid-cols-3 gap-3">
                 {(["ATR Intraday", "C-ICT", "Fib-OF"] as const).map(name => {
                   const s: any = strategySummary[name] ?? { pnl: 0, trades: 0, wins: 0, losses: 0 };

@@ -263,6 +263,7 @@ def _build_snapshot() -> dict:
         "zerodha_error_count": len(__import__("core.zerodha_error_log", fromlist=["get_all"]).get_all()),
         "latest_order_issue": _latest_order_issue(),
         "open_positions": open_pos,
+        "settings": ipc.read_settings(),
         "equity_curve": equity_curve[-100:],  # last 100 points
         "records": [
             {"description": r["description"], "value": r["value"],
@@ -558,6 +559,23 @@ def save_journal_now(user: str = Depends(get_current_user)):
     from core.journal import save_daily_journal
     path = save_daily_journal()
     return {"status": "saved", "path": path}
+
+
+@app.get("/api/settings")
+def get_settings(user: str = Depends(get_current_user)):
+    return ipc.read_settings()
+
+@app.post("/api/settings")
+def update_settings(body: dict, user: str = Depends(get_current_user)):
+    min_lots = body.get("min_lots")
+    if min_lots is not None:
+        min_lots = int(min_lots)
+        if min_lots < 1 or min_lots > 10:
+            raise HTTPException(status_code=400, detail="min_lots must be between 1 and 10")
+    patch = {}
+    if min_lots is not None:
+        patch["min_lots"] = min_lots
+    return ipc.write_settings(patch)
 
 
 @app.get("/api/zerodha-errors")

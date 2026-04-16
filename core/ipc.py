@@ -144,6 +144,35 @@ def remove_event_block(date: str) -> dict:
     return blocks
 
 
+# ── Runtime settings (lots, etc.) ────────────────────────────────────────────
+
+SETTINGS_FILE = FLAGS_DIR / "settings.json"
+
+_SETTINGS_DEFAULTS = {
+    "min_lots": 1,
+}
+
+
+def read_settings() -> dict:
+    """Return runtime settings. Falls back to defaults if file missing."""
+    import json
+    if not SETTINGS_FILE.exists():
+        return dict(_SETTINGS_DEFAULTS)
+    try:
+        stored = json.loads(SETTINGS_FILE.read_text())
+        return {**_SETTINGS_DEFAULTS, **stored}
+    except Exception:
+        return dict(_SETTINGS_DEFAULTS)
+
+
+def write_settings(settings: dict) -> dict:
+    """Persist runtime settings and return the merged result."""
+    import json
+    merged = {**read_settings(), **settings}
+    SETTINGS_FILE.write_text(json.dumps(merged, indent=2))
+    return merged
+
+
 def read_and_clear_force_trade() -> dict | None:
     """Bot reads this once and immediately deletes it. Returns None if not set."""
     import json

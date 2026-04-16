@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ── Secrets (env only — never hardcode) ───────────────────────────────────────
-TRADING_MODE         = os.getenv("TRADING_MODE", "paper")   # "paper" | "live"
+TRADING_MODE         = os.getenv("TRADING_MODE", "live")    # "paper" | "live"
 IS_PAPER             = TRADING_MODE == "paper"
 ZERODHA_USER_ID      = os.getenv("ZERODHA_USER_ID", "")
 ZERODHA_API_KEY      = os.getenv("ZERODHA_API_KEY", "")
@@ -40,7 +40,7 @@ PER_STRATEGY_DAILY_LOSS_PCT = 3.0    # each strategy pauses independently at 3% 
 LOT_SIZES = {
     "NIFTY": 65,   # revised Feb 2026
 }
-MIN_LOTS = 3   # always trade at least 3 lots per signal
+MIN_LOTS = 1   # fallback default — runtime value is set from dashboard settings
 
 # ── Intraday Timing ────────────────────────────────────────────────────────────
 TRADING_TYPE     = "intraday"
