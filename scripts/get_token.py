@@ -62,8 +62,18 @@ try:
     # set_key() renames a temp file → new inode → container never sees the update.
     with open(env_path, "r") as f:
         content = f.read()
-    content = re.sub(r"^ZERODHA_ACCESS_TOKEN=.*$", f"ZERODHA_ACCESS_TOKEN={access_token}", content, flags=re.MULTILINE)
-    content = re.sub(r"^ZERODHA_TOKEN_SET_AT=.*$", f"ZERODHA_TOKEN_SET_AT={token_set_at}", content, flags=re.MULTILINE)
+
+    # Replace in-place; append if key missing (same fallback as API callback)
+    if re.search(r"^ZERODHA_ACCESS_TOKEN=", content, flags=re.MULTILINE):
+        content = re.sub(r"^ZERODHA_ACCESS_TOKEN=.*$", f"ZERODHA_ACCESS_TOKEN={access_token}", content, flags=re.MULTILINE)
+    else:
+        content += f"\nZERODHA_ACCESS_TOKEN={access_token}\n"
+
+    if re.search(r"^ZERODHA_TOKEN_SET_AT=", content, flags=re.MULTILINE):
+        content = re.sub(r"^ZERODHA_TOKEN_SET_AT=.*$", f"ZERODHA_TOKEN_SET_AT={token_set_at}", content, flags=re.MULTILINE)
+    else:
+        content += f"ZERODHA_TOKEN_SET_AT={token_set_at}\n"
+
     with open(env_path, "w") as f:
         f.write(content)
 
