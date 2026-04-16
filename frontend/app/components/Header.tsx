@@ -3,6 +3,10 @@ import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const ZERODHA_API_KEY = process.env.NEXT_PUBLIC_ZERODHA_API_KEY || "";
+const ZERODHA_LOGIN_URL = ZERODHA_API_KEY
+  ? `https://kite.zerodha.com/connect/login?v=3&api_key=${ZERODHA_API_KEY}`
+  : null;
 
 interface Props {
   mode: string;
@@ -19,26 +23,15 @@ export default function Header({ mode, connected, botStatus, onBotToggle, errorC
 
   // Zerodha token modal
   const [tokenModal, setTokenModal] = useState(false);
-  const [loginUrl, setLoginUrl]     = useState<string | null>(null);
   const [reqToken, setReqToken]     = useState("");
   const [tokenSaving, setTokenSaving] = useState(false);
   const [tokenMsg, setTokenMsg]     = useState<{ok: boolean; text: string} | null>(null);
 
-  async function openTokenModal() {
+  function openTokenModal() {
     setMenuOpen(false);
     setTokenModal(true);
     setReqToken("");
     setTokenMsg(null);
-    setLoginUrl(null);
-    try {
-      const res = await fetch(`${API_URL}/api/zerodha/login-url`, {
-        headers: { Authorization: `Bearer ${localStorage.getItem("aq_token")}` },
-      });
-      const j = await res.json();
-      setLoginUrl(j.url ?? null);
-    } catch {
-      setLoginUrl(null);
-    }
   }
 
   async function submitToken() {
@@ -247,14 +240,19 @@ export default function Header({ mode, connected, botStatus, onBotToggle, errorC
             <li className="flex gap-3">
               <span className="shrink-0 w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 text-[11px] font-bold flex items-center justify-center">1</span>
               <span>
-                {loginUrl ? (
+                {ZERODHA_LOGIN_URL ? (
                   <>
-                    <a href={loginUrl} target="_blank" rel="noreferrer"
+                    <a href={ZERODHA_LOGIN_URL} target="_blank" rel="noreferrer"
                        className="text-indigo-600 underline font-semibold">Open Zerodha login</a>
                     {" "}and log in with your account.
                   </>
                 ) : (
-                  <span className="text-gray-400">Loading login URL…</span>
+                  <span className="text-gray-500">
+                    Open{" "}
+                    <a href="https://kite.zerodha.com" target="_blank" rel="noreferrer"
+                       className="text-indigo-600 underline font-semibold">kite.zerodha.com</a>
+                    {" "}and log in (set NEXT_PUBLIC_ZERODHA_API_KEY in .env).
+                  </span>
                 )}
               </span>
             </li>
