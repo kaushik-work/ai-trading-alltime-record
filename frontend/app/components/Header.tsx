@@ -20,6 +20,26 @@ export default function Header({ mode, connected, botStatus, onBotToggle, errorC
   const router = useRouter();
   const [menuOpen, setMenuOpen]     = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
+  const [lots, setLots]             = useState(1);
+
+  useEffect(() => {
+    const token = localStorage.getItem("aq_token");
+    if (!token) return;
+    fetch(`${API_URL}/api/settings`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => { if (d?.min_lots) setLots(d.min_lots); })
+      .catch(() => {});
+  }, []);
+
+  async function saveLots(n: number) {
+    setLots(n);
+    const token = localStorage.getItem("aq_token");
+    await fetch(`${API_URL}/api/settings`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ min_lots: n }),
+    });
+  }
 
   // Zerodha token modal
   const [tokenModal, setTokenModal] = useState(false);
@@ -105,18 +125,19 @@ export default function Header({ mode, connected, botStatus, onBotToggle, errorC
       {/* Right — actions */}
       <div className="flex items-center gap-2 md:gap-3">
 
-        {/* Live indicator */}
-        <div className="flex items-center gap-1.5 text-xs text-gray-500">
-          <span className={`w-2 h-2 rounded-full ${connected ? "bg-green-500 animate-pulse" : "bg-red-400"}`} />
-          <span className="hidden sm:inline">{connected ? "Live" : "Offline"}</span>
+        {/* Lots dropdown */}
+        <div className="flex items-center gap-1.5">
+          <span className="text-[10px] font-bold text-gray-400 hidden sm:inline">LOTS</span>
+          <select
+            value={lots}
+            onChange={e => saveLots(Number(e.target.value))}
+            className="text-xs font-bold border border-gray-200 rounded-lg px-2 py-1.5 bg-white text-gray-700 cursor-pointer focus:outline-none focus:border-indigo-400"
+          >
+            {[1, 2, 3, 4, 5].map(n => (
+              <option key={n} value={n}>{n} {n === 1 ? "Lot" : "Lots"}</option>
+            ))}
+          </select>
         </div>
-
-        {/* Mode badge */}
-        <span className={`text-xs font-semibold px-2 md:px-3 py-1 rounded-full ${
-          mode === "live" ? "bg-red-100 text-red-600" : "bg-blue-100 text-blue-600"
-        }`}>
-          {mode === "live" ? "● LIVE" : "● PAPER"}
-        </span>
 
         {/* Get Token — always visible */}
         <button

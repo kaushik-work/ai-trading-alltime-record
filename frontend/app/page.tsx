@@ -59,7 +59,10 @@ export default function Home() {
   }, []);
 
   const { data, connected } = useWebSocket(authed ? WS_URL : "");
-  const trades            = data?.recent_activity    ?? data?.round_trips ?? [];
+  const todayStr = new Date().toLocaleDateString("en-CA"); // YYYY-MM-DD
+  const trades            = (data?.recent_activity ?? data?.round_trips ?? []).filter(
+    (t: any) => (t.entry_time || t.timestamp || "").startsWith(todayStr)
+  );
   const errorCount        = data?.zerodha_error_count ?? 0;
   const openPos           = data?.open_positions    ?? [];
   const mode              = data?.mode              ?? "paper";
@@ -219,6 +222,13 @@ export default function Home() {
                     </button>
                   </div>
                 )}
+                {/* Mode badge */}
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full"
+                      style={mode === "live"
+                        ? { background: "#fee2e2", color: "#dc2626" }
+                        : { background: "#dbeafe", color: "#1d4ed8" }}>
+                  {mode === "live" ? "● LIVE" : "● PAPER"}
+                </span>
                 {/* Zerodha token badge */}
                 {data && (
                   tokenLive ? (
@@ -273,37 +283,11 @@ export default function Home() {
             </div>
           )}
 
-          {/* Open positions — highlighted */}
-          {openPos.length > 0 && (
-            <div className="mb-4">
-              <div className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">Open Positions</div>
-              <div className="space-y-2">
-                {openPos.map((t: any, i: number) => (
-                  <OpenPositionCard key={i} trade={t} prices={prices} />
-                ))}
-              </div>
-            </div>
-          )}
-
           {/* Strategy P&L + Day Bias row */}
           <div className="flex flex-col md:flex-row gap-4 mb-4 items-start">
             {/* Today's Strategy P&L — always show both cards */}
             <div className="w-full md:flex-1">
-              <div className="flex items-center justify-between mb-2">
-                <div className="text-xs font-bold text-gray-500 uppercase tracking-widest">Today's Strategy P&L</div>
-                <div className="flex items-center gap-1">
-                  <span className="text-[10px] text-gray-400 font-semibold mr-0.5">LOTS</span>
-                  {[1, 2, 3].map(n => (
-                    <button key={n} onClick={() => saveLots(n)} disabled={lotsSaving}
-                      className="w-6 h-6 text-xs font-bold rounded transition-all disabled:opacity-50"
-                      style={lotsValue === n
-                        ? { background: "#4f46e5", color: "#fff" }
-                        : { background: "#f3f4f6", color: "#374151" }}>
-                      {n}
-                    </button>
-                  ))}
-                </div>
-              </div>
+              <div className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">Today's Strategy P&L</div>
               <div className="grid grid-cols-3 gap-3">
                 {(["ATR Intraday", "C-ICT", "Fib-OF"] as const).map(name => {
                   const s: any = strategySummary[name] ?? { pnl: 0, trades: 0, wins: 0, losses: 0 };
