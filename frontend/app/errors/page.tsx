@@ -69,7 +69,7 @@ export default function ErrorsPage() {
             <button onClick={() => router.push("/")} className="text-xs text-gray-400 hover:text-gray-600 mb-1 block">
               ← Back to dashboard
             </button>
-            <h1 className="text-xl font-bold text-gray-900">Zerodha Error Log</h1>
+            <h1 className="text-xl font-bold text-gray-900">Angel One Error Log</h1>
             <p className="text-xs text-gray-400 mt-0.5">
               {lastRefresh ? `Refreshed ${lastRefresh.toLocaleTimeString("en-IN")} · auto every 30s` : "Loading…"}
             </p>
@@ -107,7 +107,7 @@ export default function ErrorsPage() {
           <div className="bg-white rounded-xl border border-gray-200 p-12 text-center">
             <div className="text-2xl mb-2">✓</div>
             <div className="text-gray-500 font-medium">No errors logged</div>
-            <div className="text-xs text-gray-400 mt-1">Zerodha is working fine</div>
+            <div className="text-xs text-gray-400 mt-1">Angel One is working fine</div>
           </div>
         ) : (
           <div className="bg-white rounded-xl border border-gray-200 overflow-hidden overflow-x-auto">

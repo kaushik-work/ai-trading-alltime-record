@@ -199,9 +199,9 @@ export default function DebugPage() {
 
             {/* Token + VIX status row */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4 md:mb-6">
-              {/* Zerodha token */}
+              {/* Angel One session */}
               <div className="bg-white rounded-xl border border-gray-200 p-4">
-                <div className="text-[10px] text-gray-400 uppercase font-semibold mb-1">Zerodha Token</div>
+                <div className="text-[10px] text-gray-400 uppercase font-semibold mb-1">Angel One Session</div>
                 {data.token_set_at?.live ? (
                   <div className="flex items-center gap-2">
                     <span className="w-2.5 h-2.5 rounded-full bg-green-500 inline-block flex-shrink-0" />
@@ -212,7 +212,7 @@ export default function DebugPage() {
                 ) : (
                   <div className="flex items-center gap-2">
                     <span className="w-2.5 h-2.5 rounded-full bg-red-500 inline-block flex-shrink-0" />
-                    <span className="text-sm font-bold text-red-500">Expired — run get_token.py</span>
+                    <span className="text-sm font-bold text-red-500">Expired — click Session button</span>
                   </div>
                 )}
               </div>

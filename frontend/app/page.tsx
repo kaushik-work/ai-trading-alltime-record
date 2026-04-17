@@ -229,7 +229,7 @@ export default function Home() {
                         : { background: "#dbeafe", color: "#1d4ed8" }}>
                   {mode === "live" ? "● LIVE" : "● PAPER"}
                 </span>
-                {/* Zerodha token badge */}
+                {/* Angel One session badge */}
                 {data && (
                   tokenLive ? (
                     <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
