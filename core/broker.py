@@ -8,13 +8,22 @@ logger = logging.getLogger(__name__)
 _BROKER_INSTANCE = None
 _BROKER_MODE = None
 
-# Zerodha NSE instrument keys for index symbols (not the same as tradingsymbol).
-# kite.quote()/kite.ltp() require the correct exchange:tradingsymbol format.
-_INDEX_NSE_KEY = {
-    "NIFTY":      "NSE:NIFTY 50",
-    "BANKNIFTY":  "NSE:NIFTY BANK",
-    "FINNIFTY":   "NSE:NIFTY FIN SERVICE",
-    "MIDCPNIFTY": "NSE:NIFTY MID SELECT",
+# Angel One product type mapping (Zerodha → Angel One)
+_PRODUCT_MAP = {
+    "MIS":      "INTRADAY",
+    "NRML":     "CARRYFORWARD",
+    "CNC":      "DELIVERY",
+    "INTRADAY": "INTRADAY",
+    "CARRYFORWARD": "CARRYFORWARD",
+    "DELIVERY": "DELIVERY",
+}
+
+# Angel One variety mapping
+_VARIETY_MAP = {
+    "regular": "NORMAL",
+    "amo":     "AMO",
+    "NORMAL":  "NORMAL",
+    "AMO":     "AMO",
 }
 
 
@@ -29,18 +38,16 @@ class MockBroker:
         logger.info("Paper trading mode active. Virtual balance: ₹%.2f", self.balance)
 
     def get_quote(self, symbol: str) -> dict:
-        """Fetch live quote from Zerodha even in paper mode — no mock prices."""
-        from data.zerodha_fetcher import ZerodhaFetcher
+        """Fetch live spot price from Angel One even in paper mode."""
+        from data.angel_fetcher import AngelFetcher
         try:
-            instrument = _INDEX_NSE_KEY.get(symbol, f"NSE:{symbol}")
-            ltp_data = ZerodhaFetcher.get()._broker.ltp([instrument])
-            price = float(ltp_data.get(instrument, {}).get("last_price", 0))
-            if price > 0:
+            price = AngelFetcher.get().get_index_ltp(symbol)
+            if price and price > 0:
                 return {"symbol": symbol, "last_price": price, "timestamp": now_ist().isoformat()}
             from core.zerodha_error_log import log_error as _log_err
             _log_err("get_quote", "LTP returned 0", symbol=symbol)
         except Exception as e:
-            logger.warning("MockBroker.get_quote: Zerodha LTP failed for %s: %s", symbol, e)
+            logger.warning("MockBroker.get_quote: Angel One LTP failed for %s: %s", symbol, e)
             from core.zerodha_error_log import log_error as _log_err
             _log_err("get_quote", str(e), symbol=symbol)
         return {"symbol": symbol, "last_price": 0, "timestamp": now_ist().isoformat()}
@@ -54,7 +61,7 @@ class MockBroker:
         order = {
             "order_id": paper_order_id,
             "symbol": symbol,
-            "side": side,  # BUY or SELL
+            "side": side,
             "quantity": quantity,
             "order_type": order_type,
             "exchange": exchange,
@@ -72,8 +79,6 @@ class MockBroker:
         filled_price = order["price"]
 
         if side == "BUY":
-            # For options paper trading: cap cost at MAX_TRADE_AMOUNT (simulates premium outlay).
-            # Using spot price × quantity (≈₹4M notional) would always reject — options cost is premium only.
             premium_cost = min(filled_price * quantity, float(config.MAX_TRADE_AMOUNT))
             if premium_cost > self.balance:
                 order["status"] = "REJECTED"
@@ -99,7 +104,6 @@ class MockBroker:
                 return order
             pnl = (filled_price - pos["avg_price"]) * quantity
             self.pnl += pnl
-            # Restore the original premium paid, adjusted for partial closes
             close_ratio = quantity / pos["quantity"]
             returned_premium = pos.get("premium_cost", 0) * close_ratio
             self.balance += returned_premium + pnl
@@ -117,7 +121,6 @@ class MockBroker:
         return self.positions
 
     def get_unrealized_pnl_pct(self, symbol: str, current_price: float) -> float:
-        """Returns unrealized P&L % for an open position. 0 if no position."""
         pos = self.positions.get(symbol)
         if not pos or pos["avg_price"] == 0:
             return 0.0
@@ -132,7 +135,6 @@ class MockBroker:
         }
 
     def cancel_order(self, order_id: str, variety: str = "regular") -> bool:
-        """No-op in paper mode — SL is managed in-process."""
         logger.info("[PAPER] cancel_order %s (no-op in paper mode)", order_id)
         return True
 
@@ -145,31 +147,34 @@ class MockBroker:
         }
 
 
-class KiteBroker:
-    """Live broker using Zerodha Kite Connect API (https://kite.trade/docs/connect/v3/)."""
+class AngelOneBroker:
+    """Live broker using Angel One SmartAPI (https://smartapi.angelbroking.com/)."""
 
     def __init__(self):
-        try:
-            from kiteconnect import KiteConnect
-            if not config.ZERODHA_API_KEY or not config.ZERODHA_ACCESS_TOKEN:
-                raise RuntimeError(
-                    "ZERODHA_API_KEY or ZERODHA_ACCESS_TOKEN not set. "
-                    "Run scripts/get_token.py to generate today's token."
-                )
-            self.kite = KiteConnect(api_key=config.ZERODHA_API_KEY)
-            self.kite.set_access_token(config.ZERODHA_ACCESS_TOKEN)
-            logger.info("Kite Connect broker connected successfully.")
-        except ImportError:
-            raise RuntimeError("kiteconnect not installed. Run: pip install kiteconnect")
-        except Exception as e:
-            raise RuntimeError(f"Kite Connect connection failed: {e}")
+        from data.angel_fetcher import AngelFetcher
+        self._fetcher = AngelFetcher.get()
+        if not self._fetcher._ensure_logged_in():
+            raise RuntimeError(
+                "Angel One login failed. Check ANGEL_API_KEY / ANGEL_CLIENT_ID / "
+                "ANGEL_PASSWORD / ANGEL_TOTP_TOKEN in .env"
+            )
+        logger.info("Angel One broker connected.")
+
+    @property
+    def _api(self):
+        return self._fetcher._api
+
+    def _angel_product(self, product: str) -> str:
+        return _PRODUCT_MAP.get(product.upper(), "INTRADAY")
+
+    def _angel_variety(self, variety: str) -> str:
+        return _VARIETY_MAP.get(variety, "NORMAL")
 
     def get_quote(self, symbol: str) -> dict:
-        instrument_key = _INDEX_NSE_KEY.get(symbol, f"NSE:{symbol}")
-        data = self.kite.quote([instrument_key])
+        price = self._fetcher.get_index_ltp(symbol)
         return {
             "symbol": symbol,
-            "last_price": data.get(instrument_key, {}).get("last_price", 0),
+            "last_price": price or 0,
             "timestamp": now_ist().isoformat(),
         }
 
@@ -189,7 +194,7 @@ class KiteBroker:
             "resolved": {
                 "underlying": symbol,
                 "exchange": exchange,
-                "product": product,
+                "product": self._angel_product(product),
                 "order_type": order_type,
                 "transaction_type": side,
                 "quantity": quantity,
@@ -200,10 +205,12 @@ class KiteBroker:
             report["checks"].append({"name": name, "ok": ok, "detail": detail, "critical": critical})
 
         try:
-            profile = self.kite.profile()
-            add_check("session", True, f"Logged in as {profile.get('user_name') or profile.get('user_id') or 'user'}")
+            from data.angel_fetcher import AngelFetcher
+            creds = AngelFetcher._read_env()
+            self._fetcher._api.getProfile(creds.get("refresh_token", ""))
+            add_check("session", True, f"Logged in as {config.ANGEL_CLIENT_ID or 'user'}")
         except Exception as e:
-            reason = f"Kite session invalid: {e}"
+            reason = f"Angel One session invalid: {e}"
             add_check("session", False, reason)
             report["error"] = reason
             if log_failures:
@@ -212,7 +219,7 @@ class KiteBroker:
 
         lot = config.LOT_SIZES.get(symbol, 1) if exchange == "NFO" else 1
         lot_ok = quantity > 0 and quantity % lot == 0
-        add_check("lot_size", lot_ok, f"Quantity {quantity} {'matches' if lot_ok else 'must be a multiple of'} lot size {lot}")
+        add_check("lot_size", lot_ok, f"Quantity {quantity} {'matches' if lot_ok else 'must be multiple of'} lot size {lot}")
 
         balance = self.get_portfolio_summary().get("balance", 0)
         add_check("cash_balance", balance > 0, f"Available cash ₹{balance:,.2f}")
@@ -222,78 +229,47 @@ class KiteBroker:
         resolved_expiry = expiry
         resolved_option_type = option_type
         resolved_strike = strike
+        resolved_token = None
 
         try:
             if exchange == "NFO":
-                from data.zerodha_fetcher import ZerodhaFetcher
+                from data.angel_fetcher import AngelFetcher
                 spot = self.get_quote(symbol).get("last_price", 0)
-                add_check("spot_quote", spot > 0, f"NIFTY spot ₹{spot:,.2f}" if spot else "Underlying spot quote unavailable")
+                add_check("spot_quote", spot > 0, f"NIFTY spot ₹{spot:,.2f}" if spot else "Spot quote unavailable")
 
                 resolved_option_type = option_type or ("PE" if side == "SELL" else "CE")
                 resolved_strike = int(strike or round(spot / 50) * 50) if spot else int(strike or 0)
-                resolved_expiry = expiry or ZerodhaFetcher.nearest_weekly_expiry()
+                resolved_expiry = expiry or AngelFetcher.nearest_weekly_expiry()
 
                 if not resolved_symbol and resolved_strike and resolved_option_type:
-                    ts, ltp = ZerodhaFetcher.get().get_option_ltp(symbol, resolved_strike, resolved_option_type, resolved_expiry)
+                    ts, ltp = AngelFetcher.get().get_option_ltp(symbol, resolved_strike, resolved_option_type, resolved_expiry)
                     resolved_symbol = ts
                     resolved_price = resolved_price or float(ltp or 0)
 
-                add_check(
-                    "contract",
-                    bool(resolved_symbol),
-                    f"Resolved {resolved_symbol or 'no tradingsymbol'} for {symbol} {resolved_strike}{resolved_option_type or ''} exp {resolved_expiry}",
-                )
-                add_check(
-                    "option_ltp",
-                    resolved_price > 0,
-                    f"Option LTP ₹{resolved_price:,.2f}" if resolved_price > 0 else "Option LTP unavailable",
-                )
+                if resolved_symbol:
+                    resolved_token = AngelFetcher.get().get_option_token(resolved_symbol)
+
+                add_check("contract", bool(resolved_symbol),
+                          f"Resolved {resolved_symbol or 'no tradingsymbol'} for {symbol} {resolved_strike}{resolved_option_type or ''} exp {resolved_expiry}")
+                add_check("option_ltp", resolved_price > 0,
+                          f"Option LTP ₹{resolved_price:,.2f}" if resolved_price > 0 else "Option LTP unavailable")
             else:
                 if not resolved_symbol:
                     resolved_symbol = symbol
                 if resolved_price <= 0:
                     resolved_price = self.get_quote(symbol).get("last_price", 0)
-                add_check("quote", resolved_price > 0, f"Spot/equity price ₹{resolved_price:,.2f}" if resolved_price > 0 else "Quote unavailable")
+                add_check("quote", resolved_price > 0, f"Price ₹{resolved_price:,.2f}" if resolved_price > 0 else "Quote unavailable")
         except Exception as e:
             add_check("contract_resolution", False, f"Failed to resolve tradingsymbol/LTP: {e}")
 
         report["resolved"].update({
             "tradingsymbol": resolved_symbol,
+            "symboltoken": resolved_token,
             "option_type": resolved_option_type,
             "strike": resolved_strike,
             "expiry": resolved_expiry.isoformat() if hasattr(resolved_expiry, "isoformat") else resolved_expiry,
             "price": resolved_price,
         })
-
-        if resolved_symbol:
-            payload = [{
-                "exchange": exchange,
-                "tradingsymbol": resolved_symbol,
-                "transaction_type": side,
-                "variety": variety,
-                "product": product,
-                "order_type": order_type,
-                "quantity": quantity,
-                "price": resolved_price if order_type == "LIMIT" else None,
-                "trigger_price": trigger_price,
-            }]
-            payload[0] = {k: v for k, v in payload[0].items() if v is not None}
-            try:
-                margins = self.kite.order_margins(payload)
-                margin_row = margins[0] if isinstance(margins, list) and margins else {}
-                margin_required = float(
-                    margin_row.get("total")
-                    or margin_row.get("final", {}).get("total", 0)
-                    or 0
-                )
-                report["resolved"]["margin_required"] = margin_required
-                add_check(
-                    "margins",
-                    margin_required <= balance if margin_required else True,
-                    f"Margin ₹{margin_required:,.2f} vs cash ₹{balance:,.2f}",
-                )
-            except Exception as e:
-                add_check("margins", False, f"Margin check failed: {e}")
 
         report["ok"] = all(c["ok"] for c in report["checks"] if c.get("critical", True))
         if not report["ok"]:
@@ -308,75 +284,97 @@ class KiteBroker:
                     exchange: str = "NFO", product: str = "MIS",
                     variety: str = "regular", validity: str = "DAY",
                     trigger_price: float | None = None, tag: str | None = None) -> dict:
-        """Place an order on Kite.
-
-        Defaults: exchange=NFO, product=MIS (intraday options/futures).
-        Pass exchange="NSE", product="CNC" for equity delivery orders.
-        """
         from core.zerodha_error_log import log_error as _log_err
         try:
-            order_id = self.kite.place_order(
-                variety=variety,
-                exchange=exchange,
-                tradingsymbol=symbol,
-                transaction_type=side,
-                quantity=quantity,
-                product=product,
-                order_type=order_type,
-                price=price if order_type == "LIMIT" else None,
-                validity=validity,
-                trigger_price=trigger_price,
-                tag=tag,
-            )
-            logger.info("[LIVE/KITE] %s %d %s@%s | Order ID: %s", side, quantity, symbol, exchange, order_id)
+            # Look up Angel One symboltoken (required for all orders)
+            from data.angel_fetcher import AngelFetcher
+            token = AngelFetcher.get().get_option_token(symbol)
+            if not token and exchange == "NFO":
+                raise RuntimeError(f"Angel One symboltoken not found for {symbol} — is it in the instrument master?")
+
+            params = {
+                "variety":         self._angel_variety(variety),
+                "tradingsymbol":   symbol,
+                "symboltoken":     token or "",
+                "transactiontype": side,
+                "exchange":        exchange,
+                "ordertype":       order_type,
+                "producttype":     self._angel_product(product),
+                "duration":        validity,
+                "price":           str(price) if order_type == "LIMIT" else "0",
+                "quantity":        str(quantity),
+            }
+            if trigger_price:
+                params["triggerprice"] = str(trigger_price)
+
+            resp = self._api.placeOrder(params)
+            order_id = resp.get("data", {}).get("orderid") if isinstance(resp, dict) else None
+            logger.info("[LIVE/ANGEL] %s %d %s@%s | Order ID: %s", side, quantity, symbol, exchange, order_id)
             return {
-                "order_id": order_id, "symbol": symbol, "side": side, "quantity": quantity, "status": "PLACED",
-                "exchange": exchange, "product": product, "order_type": order_type,
-                "variety": variety, "validity": validity, "trigger_price": trigger_price, "tag": tag,
+                "order_id": order_id, "symbol": symbol, "side": side, "quantity": quantity,
+                "status": "PLACED", "exchange": exchange, "product": product,
+                "order_type": order_type, "variety": variety, "validity": validity,
+                "trigger_price": trigger_price, "tag": tag,
             }
         except Exception as e:
             reason = str(e)
-            logger.error("[LIVE/KITE] order rejected for %s: %s", symbol, reason)
+            logger.error("[LIVE/ANGEL] order rejected for %s: %s", symbol, reason)
             _log_err("live_order_rejected", reason, symbol=symbol, detail=f"{exchange}:{product}")
             return {
-                "order_id": None, "symbol": symbol, "side": side, "quantity": quantity, "status": "REJECTED",
-                "exchange": exchange, "product": product, "order_type": order_type,
-                "variety": variety, "validity": validity, "trigger_price": trigger_price, "tag": tag,
-                "reason": reason,
+                "order_id": None, "symbol": symbol, "side": side, "quantity": quantity,
+                "status": "REJECTED", "exchange": exchange, "product": product,
+                "order_type": order_type, "variety": variety, "validity": validity,
+                "trigger_price": trigger_price, "tag": tag, "reason": reason,
             }
 
     def cancel_order(self, order_id: str, variety: str = "regular") -> bool:
-        """Cancel a pending order (e.g. SL-M) by order_id."""
         from core.zerodha_error_log import log_error as _log_err
         try:
-            self.kite.cancel_order(variety=variety, order_id=order_id)
-            logger.info("[LIVE/KITE] Cancelled order %s", order_id)
+            self._api.cancelOrder(order_id=order_id, variety=self._angel_variety(variety))
+            logger.info("[LIVE/ANGEL] Cancelled order %s", order_id)
             return True
         except Exception as e:
-            logger.error("[LIVE/KITE] Cancel order %s failed: %s", order_id, e)
+            logger.error("[LIVE/ANGEL] Cancel order %s failed: %s", order_id, e)
             _log_err("cancel_order", str(e), detail=order_id)
             return False
 
     def get_positions(self) -> dict:
-        positions = self.kite.positions()
-        return {p["tradingsymbol"]: p for p in positions.get("net", []) if p.get("quantity", 0) != 0}
+        try:
+            resp = self._api.position()
+            if resp and resp.get("status") and resp.get("data"):
+                return {p["tradingsymbol"]: p for p in resp["data"] if int(p.get("netqty", 0)) != 0}
+        except Exception as e:
+            logger.error("AngelOneBroker.get_positions: %s", e)
+        return {}
 
     def get_portfolio_summary(self) -> dict:
-        margins = self.kite.margins()
-        equity = margins.get("equity", {})
-        available = equity.get("available", {})
-        # "net" is what Zerodha actually uses to determine if order can be placed.
-        # "available.cash" is only the liquid uninvested portion — excludes intraday
-        # payin and collateral, so it can show ₹0 even with full funds.
-        net            = float(equity.get("net", 0) or 0)
-        cash           = float(available.get("cash", 0) or 0)
-        intraday_payin = float(available.get("intraday_payin", 0) or 0)
-        balance = net if net > 0 else (cash + intraday_payin)
-        return {
-            "balance": round(balance, 2),
-            "pnl": sum(p.get("pnl", 0) for p in self.kite.positions().get("net", [])),
-            "open_positions": len(self.get_positions()),
-        }
+        try:
+            rms = self._api.rmsLimit()
+            if rms and rms.get("status") and rms.get("data"):
+                d = rms["data"]
+                net = float(d.get("net", 0) or 0)
+                available = float(d.get("availablecash", 0) or d.get("net", 0) or 0)
+                balance = net if net > 0 else available
+                positions = self.get_positions()
+                pnl = sum(float(p.get("unrealised", 0) or 0) for p in positions.values())
+                return {"balance": round(balance, 2), "pnl": round(pnl, 2), "open_positions": len(positions)}
+        except Exception as e:
+            logger.error("AngelOneBroker.get_portfolio_summary: %s", e)
+        return {"balance": 0, "pnl": 0, "open_positions": 0}
+
+    def get_unrealized_pnl_pct(self, symbol: str, current_price: float) -> float:
+        positions = self.get_positions()
+        pos = positions.get(symbol)
+        if not pos:
+            return 0.0
+        avg = float(pos.get("averageprice", 0) or 0)
+        if avg == 0:
+            return 0.0
+        return ((current_price - avg) / avg) * 100
+
+
+# Keep KiteBroker as alias so any leftover import doesn't crash
+KiteBroker = AngelOneBroker
 
 
 def get_broker():
@@ -384,6 +382,6 @@ def get_broker():
     global _BROKER_INSTANCE, _BROKER_MODE
     mode = "paper" if config.IS_PAPER else "live"
     if _BROKER_INSTANCE is None or _BROKER_MODE != mode:
-        _BROKER_INSTANCE = MockBroker() if config.IS_PAPER else KiteBroker()
+        _BROKER_INSTANCE = MockBroker() if config.IS_PAPER else AngelOneBroker()
         _BROKER_MODE = mode
     return _BROKER_INSTANCE

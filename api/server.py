@@ -333,18 +333,18 @@ _token_cache: dict = {"result": None, "checked_at": 0.0}
 _TOKEN_CACHE_TTL = 300  # re-check token liveness every 5 minutes
 
 def _get_token_status() -> dict:
-    """Check Zerodha token liveness (cached for 5 minutes to avoid hammering the API)."""
+    """Check Angel One session liveness (cached for 5 minutes)."""
     import time
     now = time.monotonic()
     if now - _token_cache["checked_at"] < _TOKEN_CACHE_TTL and _token_cache["result"] is not None:
         return _token_cache["result"]
     try:
-        from data.zerodha_fetcher import ZerodhaFetcher
-        live = ZerodhaFetcher.get().is_token_live()
+        from data.angel_fetcher import AngelFetcher
+        live = AngelFetcher.get().is_token_live()
         if live:
             from dotenv import dotenv_values
             env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
-            set_at = dotenv_values(env_path).get("ZERODHA_TOKEN_SET_AT") or None
+            set_at = dotenv_values(env_path).get("ANGEL_TOKEN_SET_AT") or None
             result = {"live": True, "set_at": set_at}
         else:
             result = {"live": False, "set_at": None}
@@ -352,35 +352,31 @@ def _get_token_status() -> dict:
         logger.error("Token liveness check failed: %s", e, exc_info=True)
         result = {"live": False, "set_at": None}
     _token_cache["result"] = result
-    # Only cache live=True for the full TTL; expired token retries after 30s
     _token_cache["checked_at"] = now if result["live"] else now - _TOKEN_CACHE_TTL + 30
     return result
 
 
 @app.post("/api/token/refresh")
 def token_refresh(user: str = Depends(get_current_user)):
-    """Force-clear the token cache and ZerodhaFetcher state, then re-check liveness."""
+    """Force-clear token cache and Angel One session, then re-check liveness."""
     import traceback
-    # Clear server-level cache
     _token_cache["result"] = None
     _token_cache["checked_at"] = 0.0
-    # Reset ZerodhaFetcher so it re-reads .env from scratch
+    error = None
+    live = False
     try:
-        from data.zerodha_fetcher import ZerodhaFetcher
-        inst = ZerodhaFetcher.get()
+        from data.angel_fetcher import AngelFetcher
+        inst = AngelFetcher.get()
         with inst._lock:
-            inst._broker = None
+            inst._api = None
             inst._login_date = None
             inst._failed_date = None
-            inst._token_used = ""
-        # Now attempt login + profile check and capture any error
-        error = None
         try:
             live = inst.is_token_live()
-        except Exception as e:
+        except Exception:
             live = False
             error = traceback.format_exc()
-    except Exception as e:
+    except Exception:
         live = False
         error = traceback.format_exc()
     status = _get_token_status()
@@ -507,7 +503,7 @@ async def force_trade(body: dict, user: str = Depends(get_current_user)):
 
 @app.post("/api/live/preflight")
 def live_preflight(body: dict, user: str = Depends(get_current_user)):
-    from core.broker import KiteBroker
+    from core.broker import AngelOneBroker
     symbol = str(body.get("symbol", "NIFTY")).upper()
     side = str(body.get("side", "BUY")).upper()
     option_type = str(body.get("option_type") or ("PE" if side == "SELL" else "CE")).upper()
@@ -518,7 +514,7 @@ def live_preflight(body: dict, user: str = Depends(get_current_user)):
     product = str(body.get("product", "MIS")).upper()
     exchange = str(body.get("exchange", "NFO")).upper()
     try:
-        broker = KiteBroker()
+        broker = AngelOneBroker()
         report = broker.preflight_order(
             symbol=symbol,
             side=side,
@@ -659,93 +655,29 @@ def remove_unblock(date_str: str, user: str = Depends(get_current_user)):
     return {"status": "block_restored", "date": date_str}
 
 
-@app.get("/api/zerodha/login-url")
-def zerodha_login_url(user: str = Depends(get_current_user)):
-    """Return the Kite Connect login URL so the frontend can open it."""
-    try:
-        from kiteconnect import KiteConnect
-        kite = KiteConnect(api_key=config.ZERODHA_API_KEY)
-        return {"url": kite.login_url()}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Could not build login URL: {e}")
-
-
-@app.get("/api/zerodha/callback")
-def zerodha_callback_redirect(request_token: str = "", status: str = "", action: str = ""):
-    """Zerodha redirects here after login (GET). Show token so user can copy-paste into the modal."""
-    from fastapi.responses import HTMLResponse
-    if status != "success" or not request_token:
-        return HTMLResponse("<h2>Login failed or cancelled. Close this tab and try again.</h2>", status_code=400)
-    html = f"""<!DOCTYPE html><html><head><title>Zerodha Token</title>
-<style>body{{font-family:sans-serif;max-width:480px;margin:60px auto;padding:0 20px;}}
-.box{{background:#f0f9ff;border:1px solid #bae6fd;border-radius:12px;padding:24px;}}
-.token{{font-family:monospace;font-size:14px;word-break:break-all;background:#fff;
-border:1px solid #cbd5e1;border-radius:8px;padding:12px;margin:12px 0;}}
-button{{background:#4f46e5;color:#fff;border:none;padding:10px 20px;border-radius:8px;
-cursor:pointer;font-size:14px;font-weight:600;}}
-button:active{{background:#3730a3;}}
-</style></head><body>
-<div class="box">
-<h3 style="margin-top:0">✓ Zerodha login successful</h3>
-<p>Copy the token below, then go back to the dashboard and paste it in the <b>Get Token</b> modal.</p>
-<div class="token" id="tok">{request_token}</div>
-<button onclick="navigator.clipboard.writeText('{request_token}').then(()=>this.textContent='✓ Copied!')">
-Copy Token</button>
-<p style="margin-top:16px;font-size:12px;color:#64748b">After pasting in the modal, click Submit — the bot picks it up immediately.</p>
-</div></body></html>"""
-    return HTMLResponse(html)
-
-
-@app.post("/api/zerodha/callback")
-def zerodha_callback(body: dict, user: str = Depends(get_current_user)):
-    """Exchange Zerodha request_token for access_token and persist to .env."""
-    request_token = body.get("request_token", "").strip()
-    if not request_token:
-        raise HTTPException(status_code=400, detail="request_token is required")
-    try:
-        from kiteconnect import KiteConnect
-        kite = KiteConnect(api_key=config.ZERODHA_API_KEY)
-        data = kite.generate_session(request_token, api_secret=config.ZERODHA_API_SECRET)
-        access_token = data["access_token"]
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Zerodha session error: {e}")
-
-    # Persist to .env
-    from datetime import datetime, timezone, timedelta
-    ist = timezone(timedelta(hours=5, minutes=30))
-    set_at = datetime.now(ist).isoformat()
-    env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
-    try:
-        lines = open(env_path).readlines() if os.path.exists(env_path) else []
-        updated, found_token, found_set_at = [], False, False
-        for line in lines:
-            if line.startswith("ZERODHA_ACCESS_TOKEN="):
-                updated.append(f"ZERODHA_ACCESS_TOKEN={access_token}\n"); found_token = True
-            elif line.startswith("ZERODHA_TOKEN_SET_AT="):
-                updated.append(f"ZERODHA_TOKEN_SET_AT={set_at}\n"); found_set_at = True
-            else:
-                updated.append(line)
-        if not found_token:  updated.append(f"ZERODHA_ACCESS_TOKEN={access_token}\n")
-        if not found_set_at: updated.append(f"ZERODHA_TOKEN_SET_AT={set_at}\n")
-        open(env_path, "w").writelines(updated)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to write .env: {e}")
-
-    # Reset ZerodhaFetcher so it picks up the new token immediately
+@app.post("/api/angel/session")
+def angel_create_session(user: str = Depends(get_current_user)):
+    """Force a fresh Angel One TOTP login — auto-generates TOTP, no manual step needed."""
+    from data.angel_fetcher import AngelFetcher
     _token_cache["result"] = None
     _token_cache["checked_at"] = 0.0
+    inst = AngelFetcher.get()
+    with inst._lock:
+        inst._api = None
+        inst._login_date = None
+        inst._failed_date = None
     try:
-        from data.zerodha_fetcher import ZerodhaFetcher
-        inst = ZerodhaFetcher.get()
-        with inst._lock:
-            inst._broker = None
-            inst._login_date = None
-            inst._failed_date = None
-            inst._token_used = ""
-    except Exception:
-        pass
-
-    return {"status": "ok", "set_at": set_at}
+        ok = inst._ensure_logged_in()
+        if not ok:
+            raise HTTPException(status_code=502, detail="Angel One login failed — check ANGEL_* vars in .env")
+        from dotenv import dotenv_values
+        env_path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".env")
+        set_at = dotenv_values(env_path).get("ANGEL_TOKEN_SET_AT") or "unknown"
+        return {"status": "ok", "set_at": set_at}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @app.delete("/api/zerodha-errors")

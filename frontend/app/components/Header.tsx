@@ -3,8 +3,6 @@ import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-// Login URL is fetched from backend so key rotation is automatic (no Vercel env needed)
-const ZERODHA_API_KEY = "";
 
 interface Props {
   mode: string;
@@ -39,45 +37,31 @@ export default function Header({ mode, connected, botStatus, onBotToggle, errorC
     });
   }
 
-  // Zerodha token modal
+  // Angel One session modal
   const [tokenModal, setTokenModal] = useState(false);
-  const [reqToken, setReqToken]     = useState("");
   const [tokenSaving, setTokenSaving] = useState(false);
   const [tokenMsg, setTokenMsg]     = useState<{ok: boolean; text: string} | null>(null);
-  const [loginUrl, setLoginUrl]     = useState<string | null>(null);
 
   function openTokenModal() {
     setMenuOpen(false);
     setTokenModal(true);
-    setReqToken("");
     setTokenMsg(null);
-    setLoginUrl(null);
-    // Fetch login URL fresh from backend (handles key rotation automatically)
-    const token = localStorage.getItem("aq_token");
-    fetch(`${API_URL}/api/zerodha/login-url`, {
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
-    })
-      .then(r => r.ok ? r.json() : null)
-      .then(d => { if (d?.url) setLoginUrl(d.url); })
-      .catch(() => {});
   }
 
-  async function submitToken() {
-    if (!reqToken.trim()) return;
+  async function generateSession() {
     setTokenSaving(true);
     setTokenMsg(null);
     try {
-      const res = await fetch(`${API_URL}/api/zerodha/callback`, {
+      const res = await fetch(`${API_URL}/api/angel/session`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${localStorage.getItem("aq_token")}` },
-        body: JSON.stringify({ request_token: reqToken.trim() }),
+        headers: { Authorization: `Bearer ${localStorage.getItem("aq_token")}` },
       });
       const j = await res.json();
       if (res.ok) {
-        setTokenMsg({ ok: true, text: `Token saved` });
-        setTimeout(() => { setTokenModal(false); setReqToken(""); setTokenMsg(null); }, 1500);
+        setTokenMsg({ ok: true, text: `Session active — set at ${j.set_at ?? "now"}` });
+        setTimeout(() => { setTokenModal(false); setTokenMsg(null); }, 2000);
       } else {
-        setTokenMsg({ ok: false, text: j.detail ?? "Failed to save token" });
+        setTokenMsg({ ok: false, text: j.detail ?? "Session creation failed" });
       }
     } catch (e: any) {
       setTokenMsg({ ok: false, text: e.message ?? "Network error" });
@@ -147,14 +131,14 @@ export default function Header({ mode, connected, botStatus, onBotToggle, errorC
           </select>
         </div>
 
-        {/* Get Token — always visible */}
+        {/* Session — always visible */}
         <button
           onClick={openTokenModal}
           className="text-sm font-semibold px-3 md:px-4 py-2 rounded-lg transition-colors"
           style={{ background: "#eff6ff", color: "#2563eb", border: "1px solid #bfdbfe" }}
-          title="Set today's Zerodha access token"
+          title="Generate Angel One session (auto-TOTP)"
         >
-          <span className="hidden sm:inline">Get Token</span>
+          <span className="hidden sm:inline">Session</span>
           <span className="sm:hidden">🔑</span>
         </button>
 
@@ -229,7 +213,7 @@ export default function Header({ mode, connected, botStatus, onBotToggle, errorC
                 className="w-full text-left px-4 py-2.5 text-sm hover:bg-red-50 flex items-center gap-2"
                 style={{ color: errorCount > 0 ? "#b91c1c" : "#374151" }}>
                 <span>⚠</span>
-                <span>Zerodha Errors</span>
+                <span>Broker Errors</span>
                 {errorCount > 0 && (
                   <span className="ml-auto text-xs font-bold px-1.5 py-0.5 rounded-full"
                     style={{ background: "#fee2e2", color: "#b91c1c" }}>
@@ -253,70 +237,36 @@ export default function Header({ mode, connected, botStatus, onBotToggle, errorC
       </div>
     </header>
 
-    {/* Zerodha Token Modal — fixed overlay, lives outside <header> so z-index is clean */}
+    {/* Angel One Session Modal — one-click TOTP login, no manual token needed */}
     {tokenModal && (
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4"
            style={{ background: "rgba(0,0,0,0.5)" }}
            onClick={e => { if (e.target === e.currentTarget) { setTokenModal(false); setTokenMsg(null); } }}>
-        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md p-6 space-y-5">
+        <div className="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6 space-y-5">
           <div className="flex items-center justify-between">
-            <h3 className="text-base font-bold text-gray-900">Daily Token Setup</h3>
+            <h3 className="text-base font-bold text-gray-900">Angel One Session</h3>
             <button onClick={() => { setTokenModal(false); setTokenMsg(null); }}
                     className="text-gray-400 hover:text-gray-600 text-xl font-bold leading-none">×</button>
           </div>
 
-          <ol className="space-y-3 text-sm text-gray-700">
-            <li className="flex gap-3">
-              <span className="shrink-0 w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 text-[11px] font-bold flex items-center justify-center">1</span>
-              <span>
-                {loginUrl ? (
-                  <>
-                    <a href={loginUrl} target="_blank" rel="noreferrer"
-                       className="text-indigo-600 underline font-semibold">Open Zerodha login</a>
-                    {" "}and log in with your account.
-                  </>
-                ) : (
-                  <span className="text-gray-400 italic text-xs">Loading login URL…</span>
-                )}
-              </span>
-            </li>
-            <li className="flex gap-3">
-              <span className="shrink-0 w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 text-[11px] font-bold flex items-center justify-center">2</span>
-              <span>
-                After login you&apos;ll be redirected. Copy the <code className="bg-gray-100 px-1 rounded text-xs font-mono">request_token</code> from the URL
-                {" "}(the value after <code className="bg-gray-100 px-1 rounded text-xs font-mono">?request_token=</code>).
-              </span>
-            </li>
-            <li className="flex gap-3">
-              <span className="shrink-0 w-5 h-5 rounded-full bg-indigo-100 text-indigo-700 text-[11px] font-bold flex items-center justify-center">3</span>
-              <span>Paste it below and hit Submit — the bot picks it up immediately.</span>
-            </li>
-          </ol>
+          <p className="text-sm text-gray-600">
+            Generates a fresh Angel One session automatically using TOTP.
+            No manual login or token needed — just click the button.
+          </p>
 
-          <div className="space-y-2">
-            <input
-              type="text"
-              value={reqToken}
-              onChange={e => setReqToken(e.target.value)}
-              onKeyDown={e => e.key === "Enter" && submitToken()}
-              placeholder="Paste request_token here…"
-              className="w-full text-sm border border-gray-300 rounded-xl px-3 py-2.5 focus:outline-none focus:border-indigo-400 font-mono placeholder-gray-300"
-              autoFocus
-            />
-            {tokenMsg && (
-              <div className={`text-xs px-3 py-2 rounded-lg ${tokenMsg.ok ? "bg-green-50 text-green-700 border border-green-200" : "bg-red-50 text-red-600 border border-red-200"}`}>
-                {tokenMsg.ok ? "✓ " : "✗ "}{tokenMsg.text}
-              </div>
-            )}
-          </div>
+          {tokenMsg && (
+            <div className={`text-xs px-3 py-2 rounded-lg ${tokenMsg.ok ? "bg-green-50 text-green-700 border border-green-200" : "bg-red-50 text-red-600 border border-red-200"}`}>
+              {tokenMsg.ok ? "✓ " : "✗ "}{tokenMsg.text}
+            </div>
+          )}
 
           <div className="flex gap-2">
             <button
-              onClick={submitToken}
-              disabled={tokenSaving || !reqToken.trim()}
+              onClick={generateSession}
+              disabled={tokenSaving}
               className="flex-1 py-2.5 rounded-xl text-sm font-bold text-white transition-colors disabled:opacity-50"
               style={{ background: "#4f46e5" }}>
-              {tokenSaving ? "Saving…" : "Submit"}
+              {tokenSaving ? "Connecting…" : "Generate Session"}
             </button>
             <button
               onClick={() => { setTokenModal(false); setTokenMsg(null); }}

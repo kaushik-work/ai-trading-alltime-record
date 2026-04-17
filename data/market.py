@@ -293,29 +293,9 @@ class RealMarketData:
         # ── 15-min bars (trend + RSI) ─────────────────────────────────────────
         df_15m = _get_intraday_df(symbol, "15m")
         if df_15m is None or len(df_15m) < 5:
-            # Fallback: use last 5 days of 15-min bars from Zerodha
             try:
-                from data.zerodha_fetcher import ZerodhaFetcher
-                from zoneinfo import ZoneInfo
-                IST = ZoneInfo("Asia/Kolkata")
-                now = datetime.now(IST)
-                from_d = (now - timedelta(days=5)).strftime("%Y-%m-%d")
-                to_d   = now.strftime("%Y-%m-%d")
-                from data.zerodha_fetcher import _TOKENS, _INTERVAL_MAP
-                token = _TOKENS.get(symbol)
-                if token:
-                    zf = ZerodhaFetcher.get()
-                    if zf._ensure_logged_in():
-                        recs = zf._broker.historical_data(
-                            instrument_token=token,
-                            from_date=f"{from_d} 09:15:00",
-                            to_date=f"{to_d} 15:30:00",
-                            interval="15minute",
-                        )
-                        if recs and len(recs) >= 5:
-                            import pandas as pd
-                            df_15m = pd.DataFrame(recs)
-                            df_15m.rename(columns={"close": "Close"}, inplace=True)
+                from data.angel_fetcher import AngelFetcher
+                df_15m = AngelFetcher.get().fetch_historical_df(symbol, "15m", days=5)
             except Exception:
                 pass
 

@@ -6,11 +6,17 @@ load_dotenv()
 # ── Secrets (env only — never hardcode) ───────────────────────────────────────
 TRADING_MODE         = os.getenv("TRADING_MODE", "live")    # "paper" | "live"
 IS_PAPER             = TRADING_MODE == "paper"
-ZERODHA_USER_ID      = os.getenv("ZERODHA_USER_ID", "")
-ZERODHA_API_KEY      = os.getenv("ZERODHA_API_KEY", "")
-ZERODHA_API_SECRET   = os.getenv("ZERODHA_API_SECRET", "")
-ZERODHA_ACCESS_TOKEN = os.getenv("ZERODHA_ACCESS_TOKEN", "")
-ZERODHA_TOKEN_SET_AT = os.getenv("ZERODHA_TOKEN_SET_AT", "")
+
+# ── Angel One SmartAPI ────────────────────────────────────────────────────────
+ANGEL_API_KEY        = os.getenv("ANGEL_API_KEY", "")
+ANGEL_CLIENT_ID      = os.getenv("ANGEL_CLIENT_ID", "")
+ANGEL_PASSWORD       = os.getenv("ANGEL_PASSWORD", "")
+ANGEL_TOTP_TOKEN     = os.getenv("ANGEL_TOTP_TOKEN", "")    # QR secret for pyotp
+ANGEL_JWT_TOKEN      = os.getenv("ANGEL_JWT_TOKEN", "")     # set at runtime
+ANGEL_REFRESH_TOKEN  = os.getenv("ANGEL_REFRESH_TOKEN", "") # set at runtime
+ANGEL_FEED_TOKEN     = os.getenv("ANGEL_FEED_TOKEN", "")    # set at runtime
+ANGEL_TOKEN_SET_AT   = os.getenv("ANGEL_TOKEN_SET_AT", "")  # set at runtime
+
 ANTHROPIC_API_KEY    = os.getenv("ANTHROPIC_API_KEY", "")
 DB_PATH              = os.getenv("DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "db", "trading.db"))
 

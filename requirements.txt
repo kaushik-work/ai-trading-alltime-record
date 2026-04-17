@@ -1,5 +1,6 @@
 anthropic
-kiteconnect
+smartapi-python
+pyotp
 apscheduler
 streamlit
 pandas
@@ -11,3 +12,4 @@ fastapi
 uvicorn[standard]
 python-jose[cryptography]
 python-multipart
+websocket-client
