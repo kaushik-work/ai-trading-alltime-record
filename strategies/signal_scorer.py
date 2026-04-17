@@ -21,9 +21,13 @@ logger = logging.getLogger(__name__)
 
 
 def _score_fib_of(indicators: dict, intraday: dict = None, df_5m=None) -> tuple[int, list, dict, dict]:
-    """15m Fibonacci pullback + 15m confirmation + 5m order-flow filter."""
-    if df_5m is None or len(df_5m) < 60:
-        return 0, ["Fib-OF: insufficient 5m history"], {"fib_of": 0}, {}
+    """15m Fibonacci pullback + 15m confirmation + 5m order-flow filter.
+
+    Uses multi-day history (last 5 days from _get_df) so fib swings are detectable
+    from market open on day 1 — mirrors how the backtest engine feeds data.
+    """
+    if df_5m is None or len(df_5m) < 20:
+        return 0, ["Fib-OF: insufficient bars (need 20+)"], {"fib_of": 0}, {}
 
     import pandas as pd
 
@@ -34,11 +38,6 @@ def _score_fib_of(indicators: dict, intraday: dict = None, df_5m=None) -> tuple[
     needed = ["Open", "High", "Low", "Close", "Volume"]
     if not all(c in df.columns for c in needed):
         return 0, ["Fib-OF: missing OHLCV columns"], {"fib_of": 0}, {}
-
-    day = df.index[-1].date()
-    df = df[df.index.date == day]
-    if len(df) < 60:
-        return 0, ["Fib-OF: insufficient intraday bars"], {"fib_of": 0}, {}
 
     df_15 = df[needed].resample("15min", label="right", closed="right").agg({
         "Open": "first", "High": "max", "Low": "min", "Close": "last", "Volume": "sum",

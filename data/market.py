@@ -346,7 +346,16 @@ class RealMarketData:
         return result
 
     def _get_df(self, symbol: str, interval: str = "5m"):
-        """Return intraday OHLCV DataFrame. Used by trend_strategy for pattern detection and ICT scoring."""
+        """Return recent OHLCV DataFrame for scoring. Fetches last 5 days of bars so
+        Fib-OF and ICT can detect swings from market open on day 1 (same as backtest).
+        Falls back to today-only if multi-day fetch fails."""
+        try:
+            from data.zerodha_fetcher import ZerodhaFetcher
+            df = ZerodhaFetcher.get().fetch_historical_df(symbol, interval, days=5)
+            if df is not None and len(df) >= 6:
+                return df
+        except Exception:
+            pass
         return _get_intraday_df(symbol, interval)
 
     def get_raw_candles(self, symbol: str, interval: str, limit: int = 30) -> list:

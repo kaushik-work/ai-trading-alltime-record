@@ -411,16 +411,24 @@ def bot_debug(user: str = Depends(get_current_user)):
                 from strategies.patterns import detect_patterns, get_candles_from_df
                 from data.zerodha_fetcher import ZerodhaFetcher
                 fetcher = ZerodhaFetcher.get()
-                intraday_raw = fetcher.fetch_intraday("NIFTY", "15m")
+                intraday_raw = fetcher.fetch_intraday("NIFTY", "5m")
                 if intraday_raw is None:
-                    raise ValueError("No intraday data")
+                    result["strategies"][strat_name] = {
+                        "score": 0, "direction": "HOLD", "action": "HOLD",
+                        "threshold": 6, "will_trade": False,
+                        "note": "Waiting for market data (< 3 bars since open)",
+                    }
+                    continue
                 opens, highs, lows, closes, volumes, all_closes, bar_time = intraday_raw
                 import pandas as pd
                 import numpy as np
-                df = pd.DataFrame({"open": opens, "high": highs, "low": lows, "close": closes, "volume": volumes})
+                df_5m = pd.DataFrame({
+                    "Open": opens, "High": highs, "Low": lows,
+                    "Close": closes, "Volume": volumes,
+                })
                 price = float(closes[-1]) if len(closes) else 0
                 indicators = {"price": price, "symbol": "NIFTY"}
-                sc = score_symbol(indicators, {}, {}, mode=score_mode, df_5m=None)
+                sc = score_symbol(indicators, {}, {}, mode=score_mode, df_5m=df_5m)
                 result["strategies"][strat_name] = {
                     "score": sc["score"], "direction": sc["action"], "action": sc["action"],
                     "threshold": sc["threshold"], "will_trade": abs(sc["score"]) >= sc["threshold"],
