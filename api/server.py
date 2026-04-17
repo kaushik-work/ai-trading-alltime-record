@@ -260,7 +260,7 @@ def _build_snapshot() -> dict:
             "recent_trades": all_trades[:20],
             "recent_activity": recent_activity[:20],
             "round_trips":   all_round_trips[:20],
-        "zerodha_error_count": len(__import__("core.zerodha_error_log", fromlist=["get_all"]).get_all()),
+        "angel_error_count": len(__import__("core.zerodha_error_log", fromlist=["get_all"]).get_all()),
         "latest_order_issue": _latest_order_issue(),
         "open_positions": open_pos,
         "settings": ipc.read_settings(),

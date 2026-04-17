@@ -63,7 +63,7 @@ export default function Home() {
   const trades            = (data?.recent_activity ?? data?.round_trips ?? []).filter(
     (t: any) => (t.entry_time || t.timestamp || "").startsWith(todayStr)
   );
-  const errorCount        = data?.zerodha_error_count ?? 0;
+  const errorCount        = data?.angel_error_count ?? 0;
   const openPos           = data?.open_positions    ?? [];
   const mode              = data?.mode              ?? "paper";
   const botStatus         = data?.bot_status        ?? "unknown";
