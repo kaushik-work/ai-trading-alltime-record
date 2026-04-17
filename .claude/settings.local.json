@@ -5,7 +5,19 @@
       "Bash(.venv/Scripts/python scripts/backtest_sd_atr.py --months 2026-04 --no-cache)",
       "Bash(.venv/Scripts/python scripts/backtest_sd_atr.py --months 2026-04)",
       "Bash(.venv/Scripts/python scripts/backtest_sd_atr.py --date 2026-04-10)",
-      "Bash(.venv/Scripts/python scripts/backtest_live_atr.py --date 2026-04-10)"
+      "Bash(.venv/Scripts/python scripts/backtest_live_atr.py --date 2026-04-10)",
+      "WebFetch(domain:smartapi.angelbroking.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "WebFetch(domain:margincalculator.angelone.in)",
+      "WebFetch(domain:smartapi.angelone.in)",
+      "WebFetch(domain:docs.angel-one.in)",
+      "WebFetch(domain:api-docs.angel-one.in)",
+      "WebFetch(domain:angel-broking.github.io)",
+      "WebFetch(domain:angel-one.github.io)",
+      "WebFetch(domain:docs.smartapi.angelbroking.com)",
+      "WebFetch(domain:smartapi-api-docs.angelone.in)",
+      "Bash(.venv/Scripts/python -c \"import SmartApi, pyotp; print\\('packages OK'\\)\")",
+      "Bash(.venv/Scripts/python -c ' *)"
     ]
   }
 }
