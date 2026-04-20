@@ -67,21 +67,23 @@ def _test_broker_connection() -> dict:
         return {"status": "ok", "mode": "paper", "message": "Paper mode — no broker needed"}
 
     missing = [k for k, v in {
-        "ZERODHA_API_KEY": config.ZERODHA_API_KEY,
-        "ZERODHA_ACCESS_TOKEN": config.ZERODHA_ACCESS_TOKEN,
+        "ANGEL_API_KEY": config.ANGEL_API_KEY,
+        "ANGEL_CLIENT_ID": config.ANGEL_CLIENT_ID,
+        "ANGEL_PASSWORD": config.ANGEL_PASSWORD,
+        "ANGEL_TOTP_TOKEN": config.ANGEL_TOTP_TOKEN,
     }.items() if not v]
     if missing:
         return {"status": "misconfigured", "missing": missing,
                 "message": f"Missing: {', '.join(missing)}"}
     try:
-        from kiteconnect import KiteConnect
-        kite = KiteConnect(api_key=config.ZERODHA_API_KEY)
-        kite.set_access_token(config.ZERODHA_ACCESS_TOKEN)
-        margins = kite.margins()
-        cash = margins.get("equity", {}).get("available", {}).get("cash", 0)
+        from data.angel_fetcher import AngelFetcher
+        fetcher = AngelFetcher.get()
+        ok = fetcher._ensure_logged_in()
+        if not ok:
+            return {"status": "error", "message": "Angel One login failed — check credentials"}
+        summary = fetcher._api.rmsLimit()
+        cash = float((summary.get("data") or {}).get("availablecash", 0) or 0)
         return {"status": "ok", "mode": "live", "balance": cash, "message": "Connected"}
-    except ImportError:
-        return {"status": "error", "message": "kiteconnect not installed. Run: pip install kiteconnect"}
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
@@ -518,9 +520,10 @@ TRADING_MODE=live    # real trades — ensure credentials are set first
     # ── Credentials Status ────────────────────────────────────────────────────
     st.subheader("Credentials Status")
     creds = {
-        "ZERODHA_API_KEY": config.ZERODHA_API_KEY,
-        "ZERODHA_API_SECRET": config.ZERODHA_API_SECRET,
-        "ZERODHA_ACCESS_TOKEN": config.ZERODHA_ACCESS_TOKEN,
+        "ANGEL_API_KEY": config.ANGEL_API_KEY,
+        "ANGEL_CLIENT_ID": config.ANGEL_CLIENT_ID,
+        "ANGEL_PASSWORD": config.ANGEL_PASSWORD,
+        "ANGEL_TOTP_TOKEN": config.ANGEL_TOTP_TOKEN,
         "ANTHROPIC_API_KEY": config.ANTHROPIC_API_KEY,
     }
     for key, val in creds.items():
@@ -535,7 +538,7 @@ TRADING_MODE=live    # real trades — ensure credentials are set first
 
     # ── Connection Test ───────────────────────────────────────────────────────
     st.subheader("Test Broker Connection")
-    if st.button("Test Zerodha Connection", type="primary"):
+    if st.button("Test Angel One Connection", type="primary"):
         with st.spinner("Attempting login..."):
             result = _test_broker_connection()
         if result["status"] == "ok" and result["mode"] == "live":
@@ -546,7 +549,7 @@ TRADING_MODE=live    # real trades — ensure credentials are set first
             st.warning(f"Credentials missing: {', '.join(result.get('missing', []))}")
         else:
             st.error(f"Connection failed: {result['message']}")
-            st.caption("If TOTP failed, wait 30 seconds and try again — TOTP codes rotate every 30s.")
+            st.caption("TOTP codes rotate every 30s — if login fails, wait and retry.")
 
     st.divider()
 
@@ -567,27 +570,27 @@ TRADING_MODE=live    # real trades — ensure credentials are set first
     # ── Setup Guide ───────────────────────────────────────────────────────────
     st.subheader("Step-by-step: Going Live")
     st.markdown(f"""
-### Step 1 — Create a Kite Connect app
-1. Go to [developers.kite.trade](https://developers.kite.trade) and log in
-2. Click **Create new app** → choose **Connect** type
-3. Copy your **API Key** and **API Secret**
+### Step 1 — Create an Angel One SmartAPI app
+1. Go to [smartapi.angelbroking.com](https://smartapi.angelbroking.com) and log in
+2. Click **Create new app** → copy your **API Key**
+3. Enable TOTP on your Angel One account and copy the base32 secret
 
 ### Step 2 — Fill your `.env` file
 ```
-ZERODHA_API_KEY=your_api_key
-ZERODHA_API_SECRET=your_api_secret
+ANGEL_API_KEY=your_api_key
+ANGEL_CLIENT_ID=your_client_id
+ANGEL_PASSWORD=your_password
+ANGEL_TOTP_TOKEN=your_base32_totp_secret
 TRADING_MODE=paper          # keep as paper until connection is verified
 ```
 
-### Step 3 — Generate today's access token (run every trading day)
+### Step 3 — Verify the connection (optional — bot auto-logins at startup)
 ```
 python scripts/get_token.py
 ```
-This opens the Zerodha login URL, you log in once in the browser, paste back the
-request token, and your `ZERODHA_ACCESS_TOKEN` in `.env` is updated automatically.
 
 ### Step 4 — Test the connection
-Click **"Test Zerodha Connection"** above. If it shows your cash balance, you're good.
+Click **"Test Angel One Connection"** above. If it shows your cash balance, you're good.
 
 ### Step 5 — Switch to live (when ready)
 ```

@@ -63,10 +63,10 @@ def _load_nifty_5m(force_refetch: bool = False) -> pd.DataFrame:
     if os.path.exists(cache_90) and not force_refetch:
         return _normalise_ohlcv(pd.read_csv(cache_90, index_col=0, parse_dates=True))
 
-    from data.zerodha_fetcher import ZerodhaFetcher
-    df = ZerodhaFetcher.get().fetch_historical_df("NIFTY", "5m", days=90)
+    from data.angel_fetcher import AngelFetcher
+    df = AngelFetcher.get().fetch_historical_df("NIFTY", "5m", days=90)
     if df is None or len(df) < 100:
-        raise ValueError("Insufficient Zerodha data. Run scripts/get_token.py first.")
+        raise ValueError("Insufficient Angel One data. Check .env credentials.")
     df = _normalise_ohlcv(df)
     df.to_csv(cache_90)
     return df

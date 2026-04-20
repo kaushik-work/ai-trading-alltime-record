@@ -58,7 +58,7 @@ class TrendStrategy:
             if score_mode == "fib_of_only" else config.TAKE_PROFIT_PCT
         )
         self.paused = False
-        self._sl_orders: dict[str, str] = {}  # option_symbol → Zerodha SL-M order_id
+        self._sl_orders: dict[str, str] = self._load_sl_orders()  # option_symbol → Angel One SL-M order_id
         logger.info(
             "TrendStrategy[%s] initialized | score_mode=%s | Trading: %s | Phase: %s | Budget: ₹%s",
             strategy_name, score_mode,
@@ -380,15 +380,15 @@ class TrendStrategy:
 
     def _get_option_ltp(self, symbol: str, option_type: str, current_price: float,
                         strike: int = None) -> tuple[str | None, int, float | None, date | None]:
-        """Fetch real ATM option LTP from Zerodha. Returns (atm_strike, ltp) or (atm_strike, None) on failure.
+        """Fetch real ATM option LTP from Angel One. Returns (atm_strike, ltp) or (atm_strike, None) on failure.
         Caller must abort the trade if ltp is None — never use a made-up fallback price.
         """
         atm_strike = int(strike or round(current_price / 50) * 50)
         expiry = None
         try:
-            from data.zerodha_fetcher import ZerodhaFetcher
-            expiry = ZerodhaFetcher.nearest_weekly_expiry()
-            tradingsymbol, ltp = ZerodhaFetcher.get().get_option_ltp(symbol, atm_strike, option_type, expiry)
+            from data.angel_fetcher import AngelFetcher
+            expiry = AngelFetcher.nearest_weekly_expiry()
+            tradingsymbol, ltp = AngelFetcher.get().get_option_ltp(symbol, atm_strike, option_type, expiry)
             if ltp and ltp > 0:
                 logger.info("Option LTP: %s %d%s @ ₹%.2f (expiry %s)",
                             symbol, atm_strike, option_type, ltp, expiry)
@@ -399,8 +399,8 @@ class TrendStrategy:
             paper_symbol, paper_ltp = self._estimate_paper_option_ltp(symbol, option_type, current_price, atm_strike)
             if expiry is None:
                 try:
-                    from data.zerodha_fetcher import ZerodhaFetcher
-                    expiry = ZerodhaFetcher.nearest_weekly_expiry()
+                    from data.angel_fetcher import AngelFetcher
+                    expiry = AngelFetcher.nearest_weekly_expiry()
                 except Exception:
                     expiry = today_ist()
             paper_symbol = self._paper_option_symbol(symbol, expiry, atm_strike, option_type)
@@ -411,7 +411,7 @@ class TrendStrategy:
             return paper_symbol, atm_strike, paper_ltp, expiry
         msg = f"Option LTP unavailable for {symbol} {atm_strike}{option_type}"
         logger.error(msg + " — skipping trade")
-        from core.zerodha_error_log import log_error as _log_err
+        from core.angel_error_log import log_error as _log_err
         _log_err("get_option_ltp", msg, symbol=symbol, detail=f"{atm_strike}{option_type}")
         return None, atm_strike, None, expiry
 
@@ -480,6 +480,7 @@ class TrendStrategy:
                     )
                     if sl_ord.get("order_id"):
                         self._sl_orders[option_symbol] = sl_ord["order_id"]
+                        ipc.write_sl_orders(self.strategy_name, self._sl_orders)
                         order["sl_order_id"] = sl_ord["order_id"]
                         order["sl_trigger"]  = sl_trigger
                         logger.info("[%s] SL-M placed: %s trigger ₹%.2f order_id=%s",
@@ -509,6 +510,7 @@ class TrendStrategy:
             if not config.IS_PAPER:
                 sl_order_id = self._sl_orders.pop(option_symbol, None)
                 if sl_order_id:
+                    ipc.write_sl_orders(self.strategy_name, self._sl_orders)
                     try:
                         self.broker.cancel_order(sl_order_id)
                         logger.info("[%s] Cancelled SL-M %s before normal exit of %s",
@@ -655,6 +657,13 @@ class TrendStrategy:
             logger.warning("Pattern detection failed for %s: %s", symbol, e)
         return {"patterns": [], "bias": "neutral", "strength": 0}
 
+    def _load_sl_orders(self) -> dict:
+        """Restore persisted SL-M orders from IPC on startup/restart."""
+        try:
+            return ipc.read_sl_orders(self.strategy_name)
+        except Exception:
+            return {}
+
     # ── Square-off all open positions ─────────────────────────────────────────
 
     def square_off_all(self) -> dict:
@@ -679,6 +688,8 @@ class TrendStrategy:
                     results[symbol] = result
                 except Exception as e:
                     logger.error("Square-off failed for %s: %s", symbol, e)
+        ipc.clear_sl_orders(self.strategy_name)
+        self._sl_orders.clear()
         return results
 
     # ── Watchlist loop ─────────────────────────────────────────────────────────

@@ -43,7 +43,6 @@ Structure:
 import json
 import logging
 import os
-from datetime import datetime
 from typing import Optional
 from core.utils import now_ist, today_ist
 
@@ -67,8 +66,8 @@ def _journal_path(date_str: str) -> str:
 def _collect_vix_context() -> dict:
     """Collect today's VIX level and per-strategy override decisions."""
     try:
-        from data.zerodha_fetcher import ZerodhaFetcher
-        vix = ZerodhaFetcher.get().fetch_vix()
+        from data.angel_fetcher import AngelFetcher
+        vix = AngelFetcher.get().fetch_vix()
     except Exception:
         vix = None
 

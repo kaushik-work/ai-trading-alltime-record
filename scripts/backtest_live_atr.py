@@ -75,11 +75,11 @@ def _load_5m() -> pd.DataFrame:
         df = pd.read_csv(cache_path, index_col=0, parse_dates=True)
         print(f"  (cache) NIFTY_5m_90d.csv: {len(df)} bars")
         return _norm(df)
-    print("  Fetching NIFTY 5m from Zerodha (90d)...")
-    from data.zerodha_fetcher import ZerodhaFetcher
-    df = ZerodhaFetcher.get().fetch_historical_df("NIFTY", "5m", days=90)
+    print("  Fetching NIFTY 5m from Angel One (90d)...")
+    from data.angel_fetcher import AngelFetcher
+    df = AngelFetcher.get().fetch_historical_df("NIFTY", "5m", days=90)
     if df is None or len(df) < 100:
-        raise ValueError("No data — run scripts/get_token.py first.")
+        raise ValueError("No data — check .env Angel One credentials.")
     df = _norm(df)
     df.to_csv(cache_path)
     print(f"  (fetch) {len(df)} bars — cached")

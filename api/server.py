@@ -65,7 +65,7 @@ WATCHLIST = ["NIFTY"]
 STRATEGIES = ["ATR Intraday", "C-ICT", "Fib-OF"]
 
 # ── Price cache — shared across all WebSocket connections ─────────────────────
-# Without this, 5 open browser tabs × every-5s broadcast = 60 Zerodha calls/min
+# Without this, 5 open browser tabs × every-5s broadcast = 60 Angel One calls/min
 import time as _time
 _price_cache: dict = {}
 _price_cache_ts: float = 0.0
@@ -92,7 +92,7 @@ def _get_prices() -> dict:
 
 
 def _latest_order_issue() -> dict | None:
-    from core.zerodha_error_log import get_all
+    from core.angel_error_log import get_all
     for item in get_all():
         if item.get("source") in {"live_order_preflight", "live_order_rejected"}:
             return item
@@ -260,7 +260,7 @@ def _build_snapshot() -> dict:
             "recent_trades": all_trades[:20],
             "recent_activity": recent_activity[:20],
             "round_trips":   all_round_trips[:20],
-        "angel_error_count": len(__import__("core.zerodha_error_log", fromlist=["get_all"]).get_all()),
+        "angel_error_count": len(__import__("core.angel_error_log", fromlist=["get_all"]).get_all()),
         "latest_order_issue": _latest_order_issue(),
         "open_positions": open_pos,
         "settings": ipc.read_settings(),
@@ -405,8 +405,8 @@ def bot_debug(user: str = Depends(get_current_user)):
             try:
                 from strategies.signal_scorer import score_symbol
                 from strategies.patterns import detect_patterns, get_candles_from_df
-                from data.zerodha_fetcher import ZerodhaFetcher
-                fetcher = ZerodhaFetcher.get()
+                from data.angel_fetcher import AngelFetcher
+                fetcher = AngelFetcher.get()
                 intraday_raw = fetcher.fetch_intraday("NIFTY", "5m")
                 if intraday_raw is None:
                     result["strategies"][strat_name] = {
@@ -582,9 +582,9 @@ def update_settings(body: dict, user: str = Depends(get_current_user)):
     return ipc.write_settings(patch)
 
 
-@app.get("/api/zerodha-errors")
-def get_zerodha_errors(user: str = Depends(get_current_user)):
-    from core.zerodha_error_log import get_all
+@app.get("/api/angel-errors")
+def get_angel_errors(user: str = Depends(get_current_user)):
+    from core.angel_error_log import get_all
     return get_all()
 
 
@@ -680,9 +680,9 @@ def angel_create_session(user: str = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/api/zerodha-errors")
-def clear_zerodha_errors(user: str = Depends(get_current_user)):
-    from core.zerodha_error_log import clear
+@app.delete("/api/angel-errors")
+def clear_angel_errors(user: str = Depends(get_current_user)):
+    from core.angel_error_log import clear
     clear()
     return {"status": "cleared"}
 

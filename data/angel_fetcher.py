@@ -1,14 +1,10 @@
 """
 AngelFetcher — Angel One SmartAPI integration for NSE market data.
 
-Replaces ZerodhaFetcher (Kite Connect). Same public interface — all strategy
-code (market.py, broker.py, trend_strategy.py) works without changes.
-
-Key difference from Zerodha:
-  - Auth: TOTP-based (auto-generated from ANGEL_TOTP_TOKEN in .env).
-    No manual OAuth flow. Bot auto-logins at startup each morning.
-  - Historical API returns rows as [timestamp, open, high, low, close, volume].
-  - Option tokens looked up from Angel One master file (cached daily).
+Auth: TOTP-based (auto-generated from ANGEL_TOTP_TOKEN in .env).
+No manual OAuth flow. Bot auto-logins at startup each morning.
+Historical API returns rows as [timestamp, open, high, low, close, volume].
+Option tokens looked up from Angel One master file (cached daily).
 
 Instrument tokens (NSE index spot — stable, don't change):
   NIFTY 50  : 99926000
@@ -48,7 +44,7 @@ _MASTER_URL = "https://margincalculator.angelone.in/OpenAPI_File/files/OpenAPISc
 class AngelFetcher:
     """
     Singleton. Logs in once via TOTP (auto-generated), reuses session all day.
-    Thread-safe. Drop-in replacement for ZerodhaFetcher.
+    Thread-safe singleton.
     """
 
     _instance: Optional["AngelFetcher"] = None
@@ -127,20 +123,23 @@ class AngelFetcher:
                 if stored_jwt:
                     try:
                         api.setAccessToken(stored_jwt)
-                        api.getProfile(stored_refresh)
-                        self._api = api
-                        self._login_date = today
-                        self._failed_date = None
-                        logger.info("AngelFetcher: reused stored JWT for %s", client_id)
-                        return True
+                        profile_resp = api.getProfile(stored_refresh)
+                        if profile_resp and (profile_resp.get("status") or profile_resp.get("success")):
+                            self._api = api
+                            self._login_date = today
+                            self._failed_date = None
+                            logger.info("AngelFetcher: reused stored JWT for %s", client_id)
+                            return True
+                        else:
+                            logger.info("AngelFetcher: stored JWT invalid (api response failed), generating new session via TOTP")
                     except Exception:
-                        logger.info("AngelFetcher: stored JWT invalid, generating new session via TOTP")
+                        logger.info("AngelFetcher: stored JWT invalid (exception), generating new session via TOTP")
 
                 # Auto-generate TOTP and create fresh session
                 totp_code = pyotp.TOTP(totp_token).now()
                 data = api.generateSession(client_id, password, totp_code)
 
-                if not data or not data.get("status"):
+                if not data or not (data.get("status") or data.get("success")):
                     msg = (data or {}).get("message", "Unknown login error")
                     logger.error("AngelFetcher: generateSession failed: %s", msg)
                     self._failed_date = today
@@ -198,8 +197,13 @@ class AngelFetcher:
             return False
         try:
             creds = self._read_env()
-            self._api.getProfile(creds.get("refresh_token", ""))
-            return True
+            resp = self._api.getProfile(creds.get("refresh_token", ""))
+            if resp and (resp.get("status") or resp.get("success")):
+                return True
+            with self._lock:
+                self._api = None
+                self._login_date = None
+            return False
         except Exception:
             with self._lock:
                 self._api = None
@@ -207,6 +211,13 @@ class AngelFetcher:
             return False
 
     # ── Candle helpers ────────────────────────────────────────────────────────
+
+    def _invalidate_token(self):
+        """Force re-login on the next _ensure_logged_in() call."""
+        with self._lock:
+            self._api = None
+            self._login_date = None
+            self._failed_date = None
 
     def _candle_data(self, token: str, exchange: str, angel_interval: str,
                      from_dt: str, to_dt: str) -> Optional[list]:
@@ -221,6 +232,9 @@ class AngelFetcher:
             })
             if resp and resp.get("status") and resp.get("data"):
                 return resp["data"]
+            if resp and resp.get("errorCode") == "AG8001":
+                logger.warning("AngelFetcher._candle_data: token expired (AG8001), forcing re-login")
+                self._invalidate_token()
             logger.warning("AngelFetcher._candle_data empty response for %s %s", token, angel_interval)
             return None
         except Exception as e:
@@ -264,7 +278,7 @@ class AngelFetcher:
         df["_date"] = df.index.date
         return df
 
-    # ── Public fetch API (mirrors ZerodhaFetcher exactly) ────────────────────
+    # ── Public fetch API ──────────────────────────────────────────────────────
 
     def fetch_intraday(self, symbol: str, interval: str):
         """
@@ -408,6 +422,8 @@ class AngelFetcher:
                 if vix > 0:
                     logger.info("India VIX: %.2f", vix)
                     return vix
+            if resp and resp.get("errorCode") == "AG8001":
+                self._invalidate_token()
         except Exception as e:
             logger.warning("AngelFetcher.fetch_vix: %s", e)
         return None
@@ -451,6 +467,8 @@ class AngelFetcher:
             if resp and resp.get("status") and resp.get("data"):
                 ltp = float(resp["data"].get("ltp", 0))
                 return ltp if ltp > 0 else None
+            if resp and resp.get("errorCode") == "AG8001":
+                self._invalidate_token()
         except Exception as e:
             logger.warning("AngelFetcher.get_index_ltp %s: %s", symbol, e)
         return None

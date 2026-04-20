@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 _BROKER_INSTANCE = None
 _BROKER_MODE = None
 
-# Angel One product type mapping (Zerodha → Angel One)
+# Angel One product type mapping
 _PRODUCT_MAP = {
     "MIS":      "INTRADAY",
     "NRML":     "CARRYFORWARD",
@@ -44,11 +44,11 @@ class MockBroker:
             price = AngelFetcher.get().get_index_ltp(symbol)
             if price and price > 0:
                 return {"symbol": symbol, "last_price": price, "timestamp": now_ist().isoformat()}
-            from core.zerodha_error_log import log_error as _log_err
+            from core.angel_error_log import log_error as _log_err
             _log_err("get_quote", "LTP returned 0", symbol=symbol)
         except Exception as e:
             logger.warning("MockBroker.get_quote: Angel One LTP failed for %s: %s", symbol, e)
-            from core.zerodha_error_log import log_error as _log_err
+            from core.angel_error_log import log_error as _log_err
             _log_err("get_quote", str(e), symbol=symbol)
         return {"symbol": symbol, "last_price": 0, "timestamp": now_ist().isoformat()}
 
@@ -185,7 +185,7 @@ class AngelOneBroker:
                         trigger_price: float | None = None, tag: str | None = None,
                         tradingsymbol: str | None = None, option_type: str | None = None,
                         strike: int | None = None, expiry=None, log_failures: bool = False) -> dict:
-        from core.zerodha_error_log import log_error as _log_err
+        from core.angel_error_log import log_error as _log_err
         report = {
             "ok": False,
             "mode": "live",
@@ -284,7 +284,7 @@ class AngelOneBroker:
                     exchange: str = "NFO", product: str = "MIS",
                     variety: str = "regular", validity: str = "DAY",
                     trigger_price: float | None = None, tag: str | None = None) -> dict:
-        from core.zerodha_error_log import log_error as _log_err
+        from core.angel_error_log import log_error as _log_err
         try:
             # Look up Angel One symboltoken (required for all orders)
             from data.angel_fetcher import AngelFetcher
@@ -328,7 +328,7 @@ class AngelOneBroker:
             }
 
     def cancel_order(self, order_id: str, variety: str = "regular") -> bool:
-        from core.zerodha_error_log import log_error as _log_err
+        from core.angel_error_log import log_error as _log_err
         try:
             self._api.cancelOrder(order_id=order_id, variety=self._angel_variety(variety))
             logger.info("[LIVE/ANGEL] Cancelled order %s", order_id)
@@ -342,7 +342,17 @@ class AngelOneBroker:
         try:
             resp = self._api.position()
             if resp and resp.get("status") and resp.get("data"):
-                return {p["tradingsymbol"]: p for p in resp["data"] if int(p.get("netqty", 0)) != 0}
+                result = {}
+                for p in resp["data"]:
+                    qty = int(p.get("netqty", 0))
+                    if qty == 0:
+                        continue
+                    result[p["tradingsymbol"]] = {
+                        **p,
+                        "quantity": qty,
+                        "avg_price": float(p.get("averageprice", 0) or 0),
+                    }
+                return result
         except Exception as e:
             logger.error("AngelOneBroker.get_positions: %s", e)
         return {}
@@ -371,10 +381,6 @@ class AngelOneBroker:
         if avg == 0:
             return 0.0
         return ((current_price - avg) / avg) * 100
-
-
-# Keep KiteBroker as alias so any leftover import doesn't crash
-KiteBroker = AngelOneBroker
 
 
 def get_broker():

@@ -17,7 +17,23 @@
       "WebFetch(domain:docs.smartapi.angelbroking.com)",
       "WebFetch(domain:smartapi-api-docs.angelone.in)",
       "Bash(.venv/Scripts/python -c \"import SmartApi, pyotp; print\\('packages OK'\\)\")",
-      "Bash(.venv/Scripts/python -c ' *)"
+      "Bash(.venv/Scripts/python -c ' *)",
+      "Bash(grep -rn \"zerodha\\\\|Zerodha\\\\|ZERODHA\\\\|kite\\\\|Kite\\\\|KITE\\\\|ZerodhaFetcher\\\\|KiteBroker\\\\|zerodha_error_log\\\\|zerodha_fetcher\" \"d:/main files/github/ai-trading-alltime-record\" --include=\"*.py\" --include=\"*.md\" --include=\"*.txt\" --include=\"*.yml\" --include=\"*.yaml\" --include=\"*.json\" --include=\"*.ts\" --include=\"*.tsx\" --include=\"*.js\" --include=\"*.html\" ! -path \"*/.venv/*\")",
+      "Bash(.venv/Scripts/python.exe -c ' *)",
+      "Bash(cmd /c \"cd /d \\\\\"d:/main files/github/ai-trading-alltime-record\\\\\" && .venv\\\\\\\\Scripts\\\\\\\\python.exe --version\")",
+      "Bash(cmd /c \"\\\\\"d:/main files/github/ai-trading-alltime-record/.venv/Scripts/python.exe\\\\\" --version\")",
+      "Bash(py --version)",
+      "Bash(cmd /c \"\\\\\"d:/main files/github/ai-trading-alltime-record/.venv/Scripts/python.exe\\\\\" -c \\\\\"print\\('python ok'\\)\\\\\" && echo success\")",
+      "Bash(powershell -Command \"& 'd:/main files/github/ai-trading-alltime-record/.venv/Scripts/python.exe' '--version'\")",
+      "Bash(powershell -Command \"Get-Command python* -ErrorAction SilentlyContinue | Select-Object Name, Source\")",
+      "Bash(powershell -Command \"Get-ChildItem 'C:\\\\Users\\\\rkkau\\\\AppData\\\\Local\\\\Programs\\\\Python' -ErrorAction SilentlyContinue\")",
+      "Bash(powershell -Command \"Get-ChildItem 'C:\\\\Users\\\\rkkau\\\\AppData\\\\Local\\\\Python' -ErrorAction SilentlyContinue | Select Name, FullName\")",
+      "Bash(powershell -Command \"Get-ChildItem 'C:\\\\Python*' -ErrorAction SilentlyContinue; Get-ChildItem 'C:\\\\Users\\\\rkkau\\\\AppData\\\\Local\\\\Python*' -ErrorAction SilentlyContinue\")",
+      "Bash(powershell -Command \"Get-ChildItem 'C:\\\\Users\\\\rkkau\\\\AppData\\\\Local\\\\Python' -Recurse -Filter 'python.exe' -ErrorAction SilentlyContinue | Select FullName\")",
+      "Bash(powershell -Command \"where.exe python 2>&1; Get-ChildItem 'C:\\\\' -Filter 'python*.exe' -Recurse -ErrorAction SilentlyContinue -Depth 4 | Select FullName\")",
+      "Bash(powershell -Command \"& 'C:\\\\Users\\\\rkkau\\\\AppData\\\\Local\\\\Microsoft\\\\WindowsApps\\\\python.exe' '-c' 'print\\(42\\)'\")",
+      "Bash(powershell -Command \"Get-Command docker -ErrorAction SilentlyContinue; Get-Process 'Docker Desktop' -ErrorAction SilentlyContinue | Select Name,Id\")",
+      "Bash(powershell -Command ' *)"
     ]
   }
 }

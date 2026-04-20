@@ -1,8 +1,8 @@
 """
 MarketData — OHLCV data and technical indicators for NSE strategies.
 
-Single data source: ZerodhaFetcher (real NSE bars, real volume).
-No fallbacks — if Zerodha fails, the cycle is skipped.
+Single data source: AngelFetcher (Angel One SmartAPI — real NSE bars, real volume).
+No fallbacks — if Angel One fails, the cycle is skipped.
 """
 
 import logging
@@ -20,9 +20,9 @@ _daily_df_cache_day: dict[str, str] = {}
 def _build_daily_df_from_intraday(symbol: str):
     """Fallback: derive daily OHLCV from recent 15m history when day candles fail."""
     try:
-        from data.zerodha_fetcher import ZerodhaFetcher
+        from data.angel_fetcher import AngelFetcher
 
-        df = ZerodhaFetcher.get().fetch_historical_df(symbol, "15m", days=60)
+        df = AngelFetcher.get().fetch_historical_df(symbol, "15m", days=60)
         if df is None or len(df) < 20:
             return None
 
@@ -55,8 +55,8 @@ def _build_daily_df_from_intraday(symbol: str):
 
 
 def _get_daily_df(symbol: str):
-    """Fetch daily OHLCV DataFrame via Zerodha. Returns None on failure."""
-    from core.zerodha_error_log import log_error as _log_err
+    """Fetch daily OHLCV DataFrame via Angel One. Returns None on failure."""
+    from core.angel_error_log import log_error as _log_err
     from core.utils import now_ist
 
     today_key = now_ist().date().isoformat()
@@ -65,8 +65,8 @@ def _get_daily_df(symbol: str):
         return cached
 
     try:
-        from data.zerodha_fetcher import ZerodhaFetcher
-        df = ZerodhaFetcher.get().fetch_daily_df(symbol)
+        from data.angel_fetcher import AngelFetcher
+        df = AngelFetcher.get().fetch_daily_df(symbol)
         if df is not None and len(df) >= 10:
             _daily_df_cache[symbol] = df
             _daily_df_cache_day[symbol] = today_key
@@ -80,24 +80,24 @@ def _get_daily_df(symbol: str):
         logger.error("_get_daily_df: %s for %s", msg, symbol)
         _log_err("fetch_daily_df", msg, symbol=symbol, detail="daily")
     except Exception as e:
-        logger.error("_get_daily_df: Zerodha failed for %s: %s", symbol, e)
+        logger.error("_get_daily_df: Angel One failed for %s: %s", symbol, e)
         _log_err("fetch_daily_df", str(e), symbol=symbol, detail="daily")
     return None
 
 
 def _get_intraday_df(symbol: str, interval: str):
-    """Fetch today's intraday OHLCV DataFrame via Zerodha. Returns None on failure."""
-    from core.zerodha_error_log import log_error as _log_err
+    """Fetch today's intraday OHLCV DataFrame via Angel One. Returns None on failure."""
+    from core.angel_error_log import log_error as _log_err
     try:
-        from data.zerodha_fetcher import ZerodhaFetcher
-        df = ZerodhaFetcher.get().fetch_intraday_df(symbol, interval)
+        from data.angel_fetcher import AngelFetcher
+        df = AngelFetcher.get().fetch_intraday_df(symbol, interval)
         if df is not None and len(df) >= 3:
             return df
         msg = "fetch_intraday_df returned insufficient data"
         logger.error("_get_intraday_df: %s for %s %s", msg, symbol, interval)
         _log_err("fetch_intraday_df", msg, symbol=symbol, detail=interval)
     except Exception as e:
-        logger.error("_get_intraday_df: Zerodha failed for %s %s: %s", symbol, interval, e)
+        logger.error("_get_intraday_df: Angel One failed for %s %s: %s", symbol, interval, e)
         _log_err("fetch_intraday_df", str(e), symbol=symbol, detail=interval)
     return None
 
@@ -105,7 +105,7 @@ def _get_intraday_df(symbol: str, interval: str):
 class RealMarketData:
     """
     Technical indicators computed from real NSE data.
-    No yfinance. Data comes from ZerodhaFetcher / NseFetcher.
+    No yfinance. Data comes from AngelFetcher (Angel One SmartAPI).
     """
 
     def get_quote(self, symbol: str) -> dict:
@@ -137,7 +137,7 @@ class RealMarketData:
                 "change": round(change, 2),
                 "change_pct": round((change / prev_close) * 100, 2) if prev_close else 0,
                 "timestamp": datetime.now().isoformat(),
-                "source": "zerodha_intraday",
+                "source": "angel_intraday",
             }
 
         df = _get_daily_df(symbol)
@@ -157,9 +157,9 @@ class RealMarketData:
                 "change":     round(change, 2),
                 "change_pct": round((change / prev_c) * 100, 2) if prev_c else 0,
                 "timestamp":  datetime.now().isoformat(),
-                "source":     "zerodha",
+                "source":     "angel",
             }
-        logger.error("get_quote: no data for %s — Zerodha unavailable", symbol)
+        logger.error("get_quote: no data for %s — Angel One unavailable", symbol)
         return {"symbol": symbol, "last_price": 0, "source": "unavailable"}
 
     def get_indicators(self, symbol: str) -> dict:
@@ -171,7 +171,7 @@ class RealMarketData:
 
         df = _get_daily_df(symbol)
         if df is None or len(df) < 26:
-            logger.error("get_indicators: insufficient daily data for %s — Zerodha unavailable", symbol)
+            logger.error("get_indicators: insufficient daily data for %s — Angel One unavailable", symbol)
             return {"symbol": symbol, "price": 0, "source": "unavailable"}
 
         closes = df["Close"].astype(float)
@@ -240,7 +240,7 @@ class RealMarketData:
             "volume_ratio":    round(volume / avg_volume, 2) if avg_volume else 1.0,
             "change_pct":      quote["change_pct"],
             "timestamp":       datetime.now().isoformat(),
-            "source":          "zerodha_or_nse",
+            "source":          "angel_one",
         }
 
     def get_intraday_indicators(self, symbol: str) -> dict:
@@ -249,7 +249,7 @@ class RealMarketData:
         Used by ATR Intraday strategy.
         """
         import pandas as pd
-        result = {"symbol": symbol, "timestamp": datetime.now().isoformat(), "source": "zerodha_or_nse"}
+        result = {"symbol": symbol, "timestamp": datetime.now().isoformat(), "source": "angel_one"}
 
         # ── 5-min bars (VWAP, ORB, intraday ATR) ─────────────────────────────
         df_5m = _get_intraday_df(symbol, "5m")
@@ -330,8 +330,8 @@ class RealMarketData:
         Fib-OF and ICT can detect swings from market open on day 1 (same as backtest).
         Falls back to today-only if multi-day fetch fails."""
         try:
-            from data.zerodha_fetcher import ZerodhaFetcher
-            df = ZerodhaFetcher.get().fetch_historical_df(symbol, interval, days=5)
+            from data.angel_fetcher import AngelFetcher
+            df = AngelFetcher.get().fetch_historical_df(symbol, interval, days=5)
             if df is not None and len(df) >= 6:
                 return df
         except Exception:
@@ -364,5 +364,5 @@ class RealMarketData:
         return rows
 
 def get_market_data(broker=None):
-    """Returns Zerodha-backed market data. broker param kept for API compatibility."""
+    """Returns Angel One-backed market data. broker param kept for API compatibility."""
     return RealMarketData()

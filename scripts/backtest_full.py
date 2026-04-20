@@ -108,11 +108,11 @@ def _load_nifty_5m():
         print(f"  (cache) NIFTY 5m 90d: {len(df)} bars")
         return df
 
-    print("  Fetching NIFTY 5m 90d from Zerodha...")
-    from data.zerodha_fetcher import ZerodhaFetcher
-    df = ZerodhaFetcher.get().fetch_historical_df("NIFTY", "5m", days=90)
+    print("  Fetching NIFTY 5m 90d from Angel One...")
+    from data.angel_fetcher import AngelFetcher
+    df = AngelFetcher.get().fetch_historical_df("NIFTY", "5m", days=90)
     if df is None or len(df) < 100:
-        raise ValueError("Insufficient data. Run scripts/get_token.py first.")
+        raise ValueError("Insufficient data. Check .env Angel One credentials.")
     if "_date" not in df.columns:
         df["_date"] = df.index.date
     df.to_csv(cache_90)
@@ -128,7 +128,7 @@ def _load_vix_daily() -> dict:
     Cached to backtest_cache/INDIA_VIX_daily.csv.
 
     Sources (tried in order):
-      1. Zerodha KiteConnect  (needs valid access token)
+      1. Angel One SmartAPI  (TOTP auto-login)
       2. NSE India public API (no auth required — fallback)
     """
     os.makedirs(CACHE_DIR, exist_ok=True)
@@ -140,21 +140,21 @@ def _load_vix_daily() -> dict:
         print(f"  (cache) India VIX daily: {len(result)} days")
         return result
 
-    # ── 1. Zerodha ──────────────────────────────────────────────────────────
-    print("  Fetching India VIX daily from Zerodha...")
+    # ── 1. Angel One ─────────────────────────────────────────────────────────
+    print("  Fetching India VIX daily from Angel One...")
     try:
-        from data.zerodha_fetcher import ZerodhaFetcher
-        df_z = ZerodhaFetcher.get().fetch_vix_historical_df(days=120)
+        from data.angel_fetcher import AngelFetcher
+        df_z = AngelFetcher.get().fetch_vix_historical_df(days=120)
         if df_z is not None and len(df_z) >= 10:
             df_z.to_csv(cache_path)
             result = {pd.Timestamp(k).date(): float(v) for k, v in df_z["vix"].items()}
-            print(f"  (zerodha) India VIX daily: {len(result)} days — cached")
+            print(f"  (angel) India VIX daily: {len(result)} days — cached")
             return result
     except Exception:
         pass
 
     # ── 2. NSE India (session-based, no auth required) ──────────────────────
-    print("  Zerodha unavailable — trying NSE India...")
+    print("  Angel One unavailable — trying NSE India...")
     try:
         import requests, json
         from datetime import datetime as dt
@@ -199,7 +199,7 @@ def _load_vix_daily() -> dict:
         return result
     except Exception as e:
         print(f"  [WARN] NSE VIX fetch failed ({e})")
-        print(f"  Run scripts/get_token.py first to fetch VIX via Zerodha.")
+        print(f"  Check .env Angel One credentials to fetch VIX.")
         return {}
 
 
@@ -770,6 +770,6 @@ if __name__ == "__main__":
                   f"{s['total_trades']:>7}  Rs{net_mo:>8,.0f}/mo")
         print()
 
-    print(f"  VIX data coverage: {len(vix_map)} days loaded from cache/Zerodha")
+    print(f"  VIX data coverage: {len(vix_map)} days loaded from cache/Angel One")
     print(f"  Days skipped by VIX filter: visible as missing months in ON column above")
     print()

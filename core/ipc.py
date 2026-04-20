@@ -173,6 +173,49 @@ def write_settings(settings: dict) -> dict:
     return merged
 
 
+SL_ORDERS_FILE = FLAGS_DIR / "sl_orders.json"
+
+
+def read_sl_orders(strategy: str) -> dict:
+    """Return persisted SL-M order dict for a strategy {option_symbol: order_id}."""
+    import json
+    if not SL_ORDERS_FILE.exists():
+        return {}
+    try:
+        return json.loads(SL_ORDERS_FILE.read_text()).get(strategy, {})
+    except Exception:
+        return {}
+
+
+def write_sl_orders(strategy: str, sl_orders: dict) -> None:
+    """Persist SL-M orders so they survive bot restarts."""
+    import json
+    try:
+        all_data = {}
+        if SL_ORDERS_FILE.exists():
+            try:
+                all_data = json.loads(SL_ORDERS_FILE.read_text())
+            except Exception:
+                pass
+        all_data[strategy] = sl_orders
+        SL_ORDERS_FILE.write_text(json.dumps(all_data, indent=2))
+    except Exception:
+        pass
+
+
+def clear_sl_orders(strategy: str) -> None:
+    """Remove a strategy's SL orders after EOD square-off."""
+    import json
+    if not SL_ORDERS_FILE.exists():
+        return
+    try:
+        all_data = json.loads(SL_ORDERS_FILE.read_text())
+        all_data.pop(strategy, None)
+        SL_ORDERS_FILE.write_text(json.dumps(all_data, indent=2))
+    except Exception:
+        pass
+
+
 def read_and_clear_force_trade() -> dict | None:
     """Bot reads this once and immediately deletes it. Returns None if not set."""
     import json

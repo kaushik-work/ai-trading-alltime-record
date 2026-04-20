@@ -7,7 +7,7 @@ Usage:
     python scripts/run_backtest.py --period 30d        # 30-day window
     python scripts/run_backtest.py --period all        # 30d + 60d + 90d
     python scripts/run_backtest.py --capital 70000
-    python scripts/run_backtest.py --no-cache          # force re-fetch from Zerodha
+    python scripts/run_backtest.py --no-cache          # force re-fetch from Angel One
 """
 
 import sys, os, json, itertools, argparse

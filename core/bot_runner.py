@@ -12,11 +12,10 @@ Strategy:
 import asyncio
 import logging
 from datetime import datetime, date, time as dtime
-from core.utils import now_ist, today_ist
+from core.utils import now_ist
 from zoneinfo import ZoneInfo
 from typing import Optional
 
-import numpy as np
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -25,28 +24,6 @@ from core.memory import TradeMemory
 from core import ipc
 
 logger = logging.getLogger(__name__)
-
-# ── market data helpers ───────────────────────────────────────────────────────
-
-def _fetch_intraday(symbol: str, interval: str):
-    """
-    Fetch today's intraday OHLCV + 60-day daily closes via Zerodha.
-    Returns None if Zerodha fails — caller must skip the cycle.
-    """
-    from core.zerodha_error_log import log_error as _log_err
-    try:
-        from data.zerodha_fetcher import ZerodhaFetcher
-        result = ZerodhaFetcher.get().fetch_intraday(symbol, interval)
-        if result is not None:
-            return result
-        msg = "fetch_intraday returned None"
-        logger.error("_fetch_intraday: Zerodha returned None for %s %s — skipping cycle", symbol, interval)
-        _log_err("fetch_intraday", msg, symbol=symbol, detail=interval)
-    except Exception as e:
-        logger.error("_fetch_intraday: Zerodha error for %s %s: %s — skipping cycle", symbol, interval, e)
-        _log_err("fetch_intraday", str(e), symbol=symbol, detail=interval)
-    return None
-
 
 def _is_market_hours() -> bool:
     now = datetime.now(IST)
@@ -134,12 +111,12 @@ class BotRunner:
     def start(self):
         ipc.clear_all_flags()
 
-        # Warm up Zerodha login so first cycle doesn't pay the auth cost
+        # Warm up Angel One login so first cycle doesn't pay the auth cost
         try:
-            from data.zerodha_fetcher import ZerodhaFetcher
-            ZerodhaFetcher.get()._ensure_logged_in()
+            from data.angel_fetcher import AngelFetcher
+            AngelFetcher.get()._ensure_logged_in()
         except Exception as e:
-            logger.warning("Zerodha warm-up failed (will retry per cycle): %s", e)
+            logger.warning("Angel One warm-up failed (will retry per cycle): %s", e)
 
         now_ist = datetime.now(IST)
 

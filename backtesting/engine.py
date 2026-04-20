@@ -29,23 +29,22 @@ logger = logging.getLogger(__name__)
 def _fetch_backtest_data(symbol: str, period: str, interval: str) -> pd.DataFrame:
     """
     Fetch historical OHLCV for backtesting.
-    Priority: Zerodha → NSE India. No yfinance.
+    Angel One SmartAPI. No yfinance.
     """
     days = {"60d": 60, "30d": 30, "90d": 90}.get(period, 60)
 
-    # 1. Zerodha
     try:
-        from data.zerodha_fetcher import ZerodhaFetcher
-        df = ZerodhaFetcher.get().fetch_historical_df(symbol, interval, days=days)
+        from data.angel_fetcher import AngelFetcher
+        df = AngelFetcher.get().fetch_historical_df(symbol, interval, days=days)
         if df is not None and len(df) >= 20:
-            logger.info("Backtest data: Zerodha — %d bars for %s %s", len(df), symbol, interval)
+            logger.info("Backtest data: Angel One — %d bars for %s %s", len(df), symbol, interval)
             return df
     except Exception as e:
-        logger.warning("Backtest fetch_data Zerodha failed: %s", e)
+        logger.warning("Backtest fetch_data Angel One failed: %s", e)
 
     raise ValueError(
         f"No data available for {symbol} {interval} {period}. "
-        "Ensure Zerodha credentials are set (run scripts/get_token.py for today's token)."
+        "Ensure Angel One credentials are set in .env (ANGEL_API_KEY, ANGEL_CLIENT_ID, ANGEL_PASSWORD, ANGEL_TOTP_TOKEN)."
     )
 
 TRADE_START = time(9, 45)
@@ -64,7 +63,7 @@ class BacktestEngine:
 
     def fetch_data(self, symbol: str, period: str = "60d",
                    interval: str = "15m") -> pd.DataFrame:
-        """Fetch OHLCV via Zerodha → NSE India. No yfinance."""
+        """Fetch OHLCV via Angel One SmartAPI. No yfinance."""
         df = _fetch_backtest_data(symbol, period, interval)
         if "_date" not in df.columns:
             df["_date"] = df.index.date

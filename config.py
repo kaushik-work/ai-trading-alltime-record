@@ -42,7 +42,7 @@ MAX_DAILY_LOSS              = 6_250   # ₹6,250 combined hard stop (5% of ₹1.
 PER_STRATEGY_DAILY_LOSS_PCT = 3.0    # each strategy pauses independently at 3% loss (₹3,750) — doesn't stop others
 
 # ── Lot Sizes (NSE) ────────────────────────────────────────────────────────────
-# Verify at: https://support.zerodha.com/category/trading-and-markets/trading-faqs/f-otrading/articles/lot-size-for-index-derivatives
+# Verify current lot sizes at NSE or Angel One contract specs
 LOT_SIZES = {
     "NIFTY": 65,   # revised Feb 2026
 }

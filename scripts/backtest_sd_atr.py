@@ -102,9 +102,9 @@ def _load_5m() -> pd.DataFrame:
             print(f"  (cache) {fname}: {len(df)} bars")
             return df
 
-    print("  Fetching NIFTY 5m from Zerodha (90d)...")
-    from data.zerodha_fetcher import ZerodhaFetcher
-    df = ZerodhaFetcher.get().fetch_historical_df("NIFTY", "5m", days=90)
+    print("  Fetching NIFTY 5m from Angel One (90d)...")
+    from data.angel_fetcher import AngelFetcher
+    df = AngelFetcher.get().fetch_historical_df("NIFTY", "5m", days=90)
     if df is None or len(df) < 100:
         raise ValueError("No data. Run scripts/get_token.py first.")
     df = _norm(df)

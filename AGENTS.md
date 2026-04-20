@@ -3,7 +3,7 @@
 ## Architecture Overview (updated 2026-04-07)
 
 This is an **intraday NIFTY options trading bot** targeting ₹1.25L → ₹15L.
-Stack: Python 3.12, FastAPI, Next.js, SQLite, Zerodha Kite Connect, Claude claude-sonnet-4-6.
+Stack: Python 3.12, FastAPI, Next.js, SQLite, Angel One SmartAPI, Claude claude-sonnet-4-6.
 
 ### Two Independent Bots (NOT combined)
 

@@ -60,7 +60,7 @@ CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file_
                          "backtest_cache", "mean_reversion")
 
 # ── Nifty50 universe ──────────────────────────────────────────────────────────
-# Zerodha NSE symbols (no exchange prefix needed for historical API)
+# NSE symbols
 NIFTY50 = [
     # Financials
     "HDFCBANK", "ICICIBANK", "KOTAKBANK", "AXISBANK", "SBIN",
@@ -87,7 +87,7 @@ NIFTY50 = list(dict.fromkeys(NIFTY50))   # deduplicate
 # ── Data fetch ────────────────────────────────────────────────────────────────
 
 def _fetch_daily(symbol: str):
-    """Fetch daily OHLCV from Zerodha. Returns None on failure."""
+    """Fetch daily OHLCV from Angel One. Returns None on failure."""
     os.makedirs(CACHE_DIR, exist_ok=True)
     cache = os.path.join(CACHE_DIR, f"{symbol}_daily_{PERIOD_DAYS}d.csv")
 
@@ -96,8 +96,8 @@ def _fetch_daily(symbol: str):
         return df if len(df) >= 30 else None
 
     try:
-        from data.zerodha_fetcher import ZerodhaFetcher
-        zf = ZerodhaFetcher.get()
+        from data.angel_fetcher import AngelFetcher
+        zf = AngelFetcher.get()
         df = zf.fetch_equity_daily(symbol, days=PERIOD_DAYS)
         if df is None or len(df) < 30:
             return None
