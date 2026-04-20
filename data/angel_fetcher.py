@@ -53,7 +53,7 @@ class AngelFetcher:
     def __init__(self):
         self._api = None
         self._login_date: Optional[date] = None
-        self._failed_date: Optional[date] = None
+        self._failed_at: Optional[datetime] = None   # datetime of last failure; retry after 10 min
         self._instruments: Optional[list] = None
         self._instruments_date: Optional[date] = None
 
@@ -78,23 +78,29 @@ class AngelFetcher:
             "feed_token":    v.get("ANGEL_FEED_TOKEN", ""),
         }
 
+    _LOGIN_RETRY_SECS = 600  # retry failed login after 10 minutes
+
     def _ensure_logged_in(self) -> bool:
         """
         Auto-login using TOTP (no manual step needed).
         Tries stored JWT first; falls back to full generateSession if expired.
+        Failed logins are retried after 10 min (not blocked all day).
         """
         from core.utils import now_ist
-        today = now_ist().date()
+        now = now_ist()
+        today = now.date()
 
         if self._api is not None and self._login_date == today:
             return True
-        if self._failed_date == today:
-            return False
+        if (self._failed_at is not None and
+                (now - self._failed_at).total_seconds() < self._LOGIN_RETRY_SECS):
+            return False  # within cooldown window, skip retry
 
         with self._lock:
             if self._api is not None and self._login_date == today:
                 return True
-            if self._failed_date == today:
+            if (self._failed_at is not None and
+                    (now - self._failed_at).total_seconds() < self._LOGIN_RETRY_SECS):
                 return False
 
             creds = self._read_env()
@@ -108,7 +114,7 @@ class AngelFetcher:
                     "AngelFetcher: ANGEL_API_KEY / ANGEL_CLIENT_ID / ANGEL_PASSWORD / "
                     "ANGEL_TOTP_TOKEN must all be set in .env"
                 )
-                self._failed_date = today
+                self._failed_at = now   # missing creds → retry after 10 min
                 return False
 
             try:
@@ -127,7 +133,7 @@ class AngelFetcher:
                         if profile_resp and (profile_resp.get("status") or profile_resp.get("success")):
                             self._api = api
                             self._login_date = today
-                            self._failed_date = None
+                            self._failed_at = None
                             logger.info("AngelFetcher: reused stored JWT for %s", client_id)
                             return True
                         else:
@@ -142,13 +148,13 @@ class AngelFetcher:
                 if not data or not (data.get("status") or data.get("success")):
                     msg = (data or {}).get("message", "Unknown login error")
                     logger.error("AngelFetcher: generateSession failed: %s", msg)
-                    self._failed_date = today
+                    self._failed_at = now   # retry after 10 min
                     return False
 
                 session = data["data"]
                 self._api = api
                 self._login_date = today
-                self._failed_date = None
+                self._failed_at = None
                 self._save_tokens(
                     session["jwtToken"],
                     session["refreshToken"],
@@ -160,7 +166,7 @@ class AngelFetcher:
             except Exception as e:
                 logger.error("AngelFetcher login failed: %s", e)
                 self._api = None
-                self._failed_date = today
+                self._failed_at = now   # retry after 10 min
                 return False
 
     def _save_tokens(self, jwt: str, refresh: str, feed: str):
@@ -217,7 +223,7 @@ class AngelFetcher:
         with self._lock:
             self._api = None
             self._login_date = None
-            self._failed_date = None
+            self._failed_at = None
 
     def _candle_data(self, token: str, exchange: str, angel_interval: str,
                      from_dt: str, to_dt: str) -> Optional[list]:

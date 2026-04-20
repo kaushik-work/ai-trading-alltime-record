@@ -104,8 +104,11 @@ class BotRunner:
         self.last_heartbeat: Optional[str] = None   # ISO string, IST
         self.last_scores: dict = {}                 # strategy → last signal scores
         self._last_vision_run: Optional[datetime] = None  # throttle Vision-ICT calls
-        self.last_vix = None                        # kept for API compat; no longer populated
+        self.last_vix: Optional[float] = None       # India VIX, updated each cycle
+        self.last_vix_regime: str = "UNKNOWN"       # VIX regime string
         self.last_day_bias: dict = ipc.read_day_bias()  # cached; updated by set_bias API
+        from core.paper_seller import get_paper_seller
+        self._paper_seller = get_paper_seller()
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -136,10 +139,25 @@ class BotRunner:
             self._fib_cycle, "interval", minutes=15,
             id="fib_of_intraday", next_run_time=now_ist + timedelta(minutes=1, seconds=15),
         )
+        # SMC Algo — every 5 min, offset +4m (separate from ATR/ICT/Fib API calls)
+        self.scheduler.add_job(
+            self._smc_cycle, "interval", minutes=5,
+            id="smc_algo", next_run_time=now_ist + timedelta(minutes=4),
+        )
         # Vision-ICT — every 15 min, offset +7m30s (Claude API call, don't collide)
         self.scheduler.add_job(
             self._vision_cycle, "interval", minutes=15,
             id="vision_ict", next_run_time=now_ist + timedelta(minutes=7, seconds=30),
+        )
+        # VIX regime — every 15 min, offset +6m (feeds into SMC/signal filters)
+        self.scheduler.add_job(
+            self._vix_refresh, "interval", minutes=15,
+            id="vix_refresh", next_run_time=now_ist + timedelta(minutes=6),
+        )
+        # Paper seller monitor — every 5 min, offset +3m (between ATR and ICT)
+        self.scheduler.add_job(
+            self._paper_monitor, "interval", minutes=5,
+            id="paper_monitor", next_run_time=now_ist + timedelta(minutes=3),
         )
         # EOD square-off at configured intraday cutoff, journal save after exits settle.
         exit_hour, exit_minute = map(int, config.INTRADAY_EXIT_BY.split(":"))
@@ -149,7 +167,7 @@ class BotRunner:
         self.scheduler.add_job(self._reset_day_bias, "cron", hour=20, minute=0, id="bias_reset")
 
         self.scheduler.start()
-        logger.info("BotRunner started — ATR Intraday(5m) + C-ICT(5m, +2m30s offset) + Fib-OF(15m) + Vision-ICT(15m, +7m30s offset)")
+        logger.info("BotRunner started — ATR(5m) + C-ICT(5m,+2m30s) + Fib-OF(15m) + SMC-Algo(5m,+4m) + Vision-ICT(15m,+7m30s) + VIX(15m,+6m) + PaperMonitor(5m,+3m)")
 
     def stop(self):
         self.scheduler.shutdown(wait=False)
@@ -175,7 +193,7 @@ class BotRunner:
             # Update last_scores for the debug/signal-radar endpoint
             sc = self._atr_strategy.last_score
             if sc:
-                self.last_scores["ATR Intraday"] = {
+                entry = {
                     "score": sc.get("score", 0),
                     "direction": sc.get("action", "HOLD"),
                     "action": sc.get("action", "HOLD"),
@@ -183,6 +201,8 @@ class BotRunner:
                     "will_trade": abs(sc.get("score", 0)) >= sc.get("threshold", 6),
                     "note": "ATR technical analysis only (sections 1–11)",
                 }
+                self.last_scores["ATR Intraday"] = entry
+                self._paper_seller.on_signal("ATR Intraday", entry)
         except Exception as e:
             logger.error("ATR Intraday cycle: %s", e, exc_info=True)
 
@@ -203,7 +223,7 @@ class BotRunner:
             # Update last_scores for the debug/signal-radar endpoint
             sc = self._ict_strategy.last_score
             if sc:
-                self.last_scores["C-ICT"] = {
+                entry = {
                     "score": sc.get("score", 0),
                     "direction": sc.get("action", "HOLD"),
                     "action": sc.get("action", "HOLD"),
@@ -212,6 +232,8 @@ class BotRunner:
                     "note": "ICT order blocks + liquidity sweeps only (section 12)",
                     "order_flow": sc.get("order_flow", {}),
                 }
+                self.last_scores["C-ICT"] = entry
+                self._paper_seller.on_signal("C-ICT", entry)
         except Exception as e:
             logger.error("C-ICT cycle: %s", e, exc_info=True)
 
@@ -231,7 +253,7 @@ class BotRunner:
 
             sc = self._fib_strategy.last_score
             if sc:
-                self.last_scores["Fib-OF"] = {
+                entry = {
                     "score":      sc.get("score", 0),
                     "direction":  sc.get("action", "HOLD"),
                     "action":     sc.get("action", "HOLD"),
@@ -239,8 +261,91 @@ class BotRunner:
                     "will_trade": abs(sc.get("score", 0)) >= sc.get("threshold", config.FIB_OF_SIGNAL_SCORE),
                     "note":       f"Fib-OF 15m | R:R 1:{config.FIB_OF_RR_RATIO:.0f}",
                 }
+                self.last_scores["Fib-OF"] = entry
+                self._paper_seller.on_signal("Fib-OF", entry)
         except Exception as e:
             logger.error("Fib-OF cycle: %s", e, exc_info=True)
+
+    # ── VIX regime refresh (every 15 min) ────────────────────────────────────
+
+    async def _vix_refresh(self):
+        if not _is_market_hours():
+            return
+        try:
+            from strategies.vix_filter import get_live_regime
+            loop = asyncio.get_event_loop()
+            regime, vix = await loop.run_in_executor(None, get_live_regime)
+            self.last_vix = vix
+            self.last_vix_regime = regime
+            self.last_scores["VIX-Regime"] = {
+                "score": 0, "direction": "HOLD", "action": "HOLD",
+                "threshold": 0, "will_trade": False,
+                "regime": regime,
+                "vix": vix,
+                "note": f"India VIX={vix:.2f} → {regime}" if vix else f"VIX unavailable → {regime}",
+            }
+            logger.info("VIX refresh: regime=%s vix=%.2f", regime, vix or 0)
+        except Exception as e:
+            logger.error("VIX refresh: %s", e)
+
+    def _has_margin(self, min_required: float = 15_000.0) -> bool:
+        """Check Angel One available margin before entering a trade."""
+        try:
+            from data.angel_fetcher import AngelFetcher
+            af = AngelFetcher.get()
+            if not af._ensure_logged_in():
+                return True  # fail-open
+            rms = af._api.rmsLimit()
+            if rms and rms.get("status") and rms.get("data"):
+                d = rms["data"]
+                available = float(d.get("availablecash", 0) or d.get("net", 0) or 0)
+                if available < min_required:
+                    logger.warning(
+                        "Insufficient margin: ₹%.0f available, ₹%.0f required — skipping trade",
+                        available, min_required,
+                    )
+                    return False
+            return True
+        except Exception as e:
+            logger.warning("Margin check failed: %s — allowing trade", e)
+            return True  # fail-open: let Angel One reject if truly insufficient
+
+    # ── SMC Algo (algorithmic SMC pattern detector, 5m) ──────────────────────
+
+    async def _smc_cycle(self):
+        self.last_heartbeat = datetime.now(IST).isoformat()
+        if self.paused or not _is_market_hours() or _is_event_blocked():
+            return
+        try:
+            from data.angel_fetcher import AngelFetcher
+            from strategies.smc_scorer import score_smc
+            from strategies.vix_filter import apply_regime_filter
+
+            loop = asyncio.get_event_loop()
+            df = await loop.run_in_executor(
+                None, lambda: AngelFetcher.get().fetch_historical_df("NIFTY", "5m", days=3)
+            )
+            if df is None or len(df) < 25:
+                logger.warning("SMC cycle: insufficient data")
+                return
+
+            result = score_smc(df)
+
+            # Apply VIX regime filter to the raw signal
+            regime = self.last_vix_regime  # refreshed every 15 min by _vix_refresh
+            filtered = apply_regime_filter(result, regime)
+
+            # Margin check before flagging will_trade
+            if filtered.get("will_trade") and not self._has_margin():
+                filtered["will_trade"] = False
+                filtered["vix_blocked"] = True
+                filtered["note"] = filtered.get("note", "") + " | BLOCKED: insufficient margin"
+
+            entry = {**filtered, "note": filtered.get("note", "SMC algorithmic pattern detector")}
+            self.last_scores["SMC-Algo"] = entry
+            self._paper_seller.on_signal("SMC-Algo", entry)
+        except Exception as e:
+            logger.error("SMC-Algo cycle: %s", e, exc_info=True)
 
     # ── Vision-ICT (Claude Vision API — auto chart analysis) ─────────────────
 
@@ -271,6 +376,17 @@ class BotRunner:
         except Exception as e:
             logger.error("Vision-ICT cycle: %s", e, exc_info=True)
 
+    # ── Paper seller monitor (every 5 min) ───────────────────────────────────
+
+    async def _paper_monitor(self):
+        if not _is_market_hours():
+            return
+        try:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, self._paper_seller.mark_to_market)
+        except Exception as e:
+            logger.error("Paper monitor: %s", e)
+
     # ── EOD square-off ────────────────────────────────────────────────────────
 
     async def _eod_squareoff(self):
@@ -282,6 +398,8 @@ class BotRunner:
             await loop.run_in_executor(None, self._ict_strategy.square_off_all)
         if self._fib_strategy:
             await loop.run_in_executor(None, self._fib_strategy.square_off_all)
+        # Close all paper comparison positions at EOD
+        await loop.run_in_executor(None, self._paper_seller.eod_close)
 
     async def _save_journal(self):
         """Save daily journal JSON at 15:20 (after EOD square-off)."""

@@ -33,7 +33,10 @@
       "Bash(powershell -Command \"where.exe python 2>&1; Get-ChildItem 'C:\\\\' -Filter 'python*.exe' -Recurse -ErrorAction SilentlyContinue -Depth 4 | Select FullName\")",
       "Bash(powershell -Command \"& 'C:\\\\Users\\\\rkkau\\\\AppData\\\\Local\\\\Microsoft\\\\WindowsApps\\\\python.exe' '-c' 'print\\(42\\)'\")",
       "Bash(powershell -Command \"Get-Command docker -ErrorAction SilentlyContinue; Get-Process 'Docker Desktop' -ErrorAction SilentlyContinue | Select Name,Id\")",
-      "Bash(powershell -Command ' *)"
+      "Bash(powershell -Command ' *)",
+      "Bash(\".venv/Scripts/pip.exe\" install *)",
+      "Bash(python -c ' *)",
+      "Bash(py -3 -c \"print\\('ok'\\)\")"
     ]
   }
 }

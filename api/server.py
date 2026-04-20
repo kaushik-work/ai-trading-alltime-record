@@ -370,7 +370,7 @@ def token_refresh(user: str = Depends(get_current_user)):
         with inst._lock:
             inst._api = None
             inst._login_date = None
-            inst._failed_date = None
+            inst._failed_at = None
         try:
             live = inst.is_token_live()
         except Exception:
@@ -665,7 +665,7 @@ def angel_create_session(user: str = Depends(get_current_user)):
     with inst._lock:
         inst._api = None
         inst._login_date = None
-        inst._failed_date = None
+        inst._failed_at = None
     try:
         ok = inst._ensure_logged_in()
         if not ok:
@@ -711,6 +711,19 @@ def run_backtest(body: dict, user: str = Depends(get_current_user)):
         return {"result": result, "metrics": metrics}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/paper-comparison")
+def paper_comparison(user: str = Depends(get_current_user)):
+    """Returns all paper buyer vs seller trades with P&L comparison."""
+    from core.bot_runner import get_runner
+    runner = get_runner()
+    ps = runner._paper_seller
+    return {
+        "summary":        ps.get_summary(),
+        "open_positions": ps.get_open_positions(),
+        "trades":         ps.get_all_trades(),
+    }
 
 
 # ── Safe JSON serializer (handles numpy floats, NaN, Inf) ─────────────────────
