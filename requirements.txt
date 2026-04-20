@@ -8,6 +8,7 @@ pandas
 python-dotenv
 cryptography
 requests
+mplfinance
 numpy
 fastapi
 uvicorn[standard]

@@ -103,6 +103,7 @@ class BotRunner:
         self._fib_strategy = None   # lazy-init TrendStrategy (Fib-OF, fib_of_only mode)
         self.last_heartbeat: Optional[str] = None   # ISO string, IST
         self.last_scores: dict = {}                 # strategy → last signal scores
+        self._last_vision_run: Optional[datetime] = None  # throttle Vision-ICT calls
         self.last_vix = None                        # kept for API compat; no longer populated
         self.last_day_bias: dict = ipc.read_day_bias()  # cached; updated by set_bias API
 
@@ -135,6 +136,11 @@ class BotRunner:
             self._fib_cycle, "interval", minutes=15,
             id="fib_of_intraday", next_run_time=now_ist + timedelta(minutes=1, seconds=15),
         )
+        # Vision-ICT — every 15 min, offset +7m30s (Claude API call, don't collide)
+        self.scheduler.add_job(
+            self._vision_cycle, "interval", minutes=15,
+            id="vision_ict", next_run_time=now_ist + timedelta(minutes=7, seconds=30),
+        )
         # EOD square-off at configured intraday cutoff, journal save after exits settle.
         exit_hour, exit_minute = map(int, config.INTRADAY_EXIT_BY.split(":"))
         self.scheduler.add_job(self._eod_squareoff, "cron", hour=exit_hour, minute=exit_minute, id="eod")
@@ -143,7 +149,7 @@ class BotRunner:
         self.scheduler.add_job(self._reset_day_bias, "cron", hour=20, minute=0, id="bias_reset")
 
         self.scheduler.start()
-        logger.info("BotRunner started — ATR Intraday(5m) + C-ICT(5m, +2m30s offset) + Fib-OF(15m)")
+        logger.info("BotRunner started — ATR Intraday(5m) + C-ICT(5m, +2m30s offset) + Fib-OF(15m) + Vision-ICT(15m, +7m30s offset)")
 
     def stop(self):
         self.scheduler.shutdown(wait=False)
@@ -235,6 +241,35 @@ class BotRunner:
                 }
         except Exception as e:
             logger.error("Fib-OF cycle: %s", e, exc_info=True)
+
+    # ── Vision-ICT (Claude Vision API — auto chart analysis) ─────────────────
+
+    async def _vision_cycle(self):
+        self.last_heartbeat = datetime.now(IST).isoformat()
+        if self.paused or not _is_market_hours() or _is_event_blocked():
+            return
+        try:
+            from strategies.vision_scorer import score_vision
+            loop = asyncio.get_event_loop()
+
+            # Run both 5m and 15m in parallel (separate executor threads)
+            result_5m, result_15m = await asyncio.gather(
+                loop.run_in_executor(None, score_vision, "5m",  "NIFTY"),
+                loop.run_in_executor(None, score_vision, "15m", "NIFTY"),
+            )
+
+            self.last_scores["Vision-5m"] = {
+                **result_5m,
+                "note": "Claude Vision on auto-generated 5m chart",
+            }
+            self.last_scores["Vision-15m"] = {
+                **result_15m,
+                "note": "Claude Vision on auto-generated 15m chart",
+            }
+            self._last_vision_run = datetime.now(IST)
+
+        except Exception as e:
+            logger.error("Vision-ICT cycle: %s", e, exc_info=True)
 
     # ── EOD square-off ────────────────────────────────────────────────────────
 
