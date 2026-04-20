@@ -11,34 +11,53 @@ import base64
 import json
 import logging
 import re
-from typing import Optional
 
 import config
 
 logger = logging.getLogger(__name__)
 
-_PROMPT = """You are an expert ICT (Inner Circle Trader) / Smart Money Concepts analyst.
-You are looking at a live NIFTY 50 (NSE India) candlestick chart, auto-generated from real market data.
+_PROMPT = """You are an expert SMC (Smart Money Concepts) / ICT (Inner Circle Trader) analyst.
+You are looking at a live NIFTY 50 (NSE India) intraday candlestick chart, auto-generated from real market data.
 
-The dashed yellow lines are previous day High (PDH) and previous day Low (PDL).
-The dotted blue line is today's session open price.
-Volume bars are shown at the bottom.
+Chart legend:
+- Dashed YELLOW lines = Previous Day High (PDH) and Previous Day Low (PDL)
+- Dotted BLUE line = Today's session open price
+- Volume bars at the bottom panel
 
-Analyze this chart and identify the following ICT/SMC concepts:
-1. Market Structure — BOS (Break of Structure), CHOCH (Change of Character)
-2. Order Flow direction — are institutional buyers or sellers in control right now?
-3. FVG (Fair Value Gaps / imbalances) — are there unfilled gaps above or below?
-4. Liquidity — equal highs/lows, stop hunts, HTF liquidity grabs
-5. IDM (Inducement) — fake breakouts designed to trap retail traders
-6. Current bias and the highest-probability setup RIGHT NOW
+You know these specific entry models — look for them on the chart:
 
-Respond ONLY with valid JSON (no markdown, no explanation outside JSON):
+MODEL 1 — SUPPLY & DEMAND ENTRY:
+  Bearish: Price makes a Swing High → breaks down (BOS) → retraces back up into the supply zone
+  (Bearish Order Block, above 50% of the swing) → SHORT from supply.
+  Bullish: Mirror — price makes Swing Low → BOS up → retraces into demand zone → LONG.
+
+MODEL 2 — BREAKER BLOCK ENTRY:
+  Bearish: Price makes higher highs → BOS down → rallies back up to retest the previous
+  support level that got broken (now a Breaker = resistance) → SHORT at breaker retest.
+  Bullish: Mirror — lower lows → BOS up → retest of broken resistance (now demand breaker) → LONG.
+
+MODEL 3 — AMD (Accumulation · Manipulation · Distribution):
+  Bearish: Price consolidates in a range (Accumulation) → spikes UP through range highs
+  (Manipulation / stop hunt of buy-side liquidity) → reverses hard DOWN (Distribution to target).
+  Bullish: Mirror — consolidation → spike DOWN (stop hunt of sell-side) → reverses UP.
+
+Also check for:
+- BOS (Break of Structure) and CHOCH (Change of Character) in market structure
+- FVG (Fair Value Gaps / imbalances) that price may be drawn to fill
+- IDM (Inducement) — fake moves before the real directional move
+- Equal highs / equal lows as liquidity targets
+- HTF liquidity grabs above PDH or below PDL
+
+Based on ALL of the above, determine the current setup on this chart.
+
+Respond ONLY with valid JSON — no markdown fences, no explanation outside the JSON object:
 {
   "direction": "BUY" or "SELL" or "HOLD",
-  "score": <integer from -10 to +10, where +10 = very strong BUY, -10 = very strong SELL, 0 = no clear setup>,
+  "score": <integer -10 to +10: +10=very strong BUY, -10=very strong SELL, 0=no setup>,
   "confidence": "low" or "medium" or "high",
   "structure": "bullish" or "bearish" or "ranging",
   "order_flow": "bullish" or "bearish" or "neutral",
+  "model_detected": "supply_demand" or "breaker_block" or "amd" or "none" or "multiple",
   "observations": ["...", "...", "..."],
   "invalidation": "..."
 }"""
@@ -116,16 +135,17 @@ def _parse_response(raw: str) -> dict:
     if direction == "HOLD": score = 0
 
     return {
-        "score":        score,
-        "direction":    direction,
-        "action":       direction,
-        "confidence":   data.get("confidence", "low"),
-        "structure":    data.get("structure", "ranging"),
-        "order_flow":   data.get("order_flow", "neutral"),
-        "observations": data.get("observations", []),
-        "invalidation": data.get("invalidation", ""),
-        "threshold":    6,
-        "will_trade":   abs(score) >= 6,
+        "score":          score,
+        "direction":      direction,
+        "action":         direction,
+        "confidence":     data.get("confidence", "low"),
+        "structure":      data.get("structure", "ranging"),
+        "order_flow":     data.get("order_flow", "neutral"),
+        "model_detected": data.get("model_detected", "none"),
+        "observations":   data.get("observations", []),
+        "invalidation":   data.get("invalidation", ""),
+        "threshold":      6,
+        "will_trade":     abs(score) >= 6,
     }
 
 
