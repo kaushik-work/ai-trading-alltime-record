@@ -515,6 +515,7 @@ class AngelFetcher:
                     if i.get("name") == "NIFTY" and i.get("expiry")
                     and _parse_expiry(i["expiry"]) is not None
                     and _parse_expiry(i["expiry"]) >= today
+                    and _parse_expiry(i["expiry"]).weekday() == 3  # Thursday only (weekly expiry)
                 })
                 if expiries:
                     if now.hour > 15 or (now.hour == 15 and now.minute >= 30):
