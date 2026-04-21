@@ -122,47 +122,51 @@ class BotRunner:
         except Exception as e:
             logger.warning("Angel One warm-up failed (will retry per cycle): %s", e)
 
-        now_ist = datetime.now(IST)
+        # ── Candle-aligned cron schedules ─────────────────────────────────────
+        # NSE 5m candles close at 9:20, 9:25, 9:30 ... (every :00/:05/:10/:15/:20/:25/:30/:35/:40/:45/:50/:55)
+        # NSE 15m candles close at 9:30, 9:45, 10:00 ... (every :00/:15/:30/:45)
+        # Each strategy fires a few seconds after its candle closes so it reads the
+        # freshest closed bar. Staggered seconds prevent simultaneous Angel One API calls.
 
-        # ATR Intraday — every 5 min
+        # ATR Intraday — 5s after every 5m candle close (9:20:05, 9:25:05, ...)
         self.scheduler.add_job(
-            self._atr_cycle, "interval", minutes=5,
-            id="atr_intraday", next_run_time=now_ist,
+            self._atr_cycle, "cron", minute="*/5", second=5,
+            id="atr_intraday",
         )
-        # C-ICT — every 5 min, offset +2m30s so it doesn't collide with ATR API calls
-        from datetime import timedelta
+        # C-ICT — 10s after 5m close (Angel One API won't collide with ATR)
         self.scheduler.add_job(
-            self._ict_cycle, "interval", minutes=5,
-            id="ict_intraday", next_run_time=now_ist + timedelta(minutes=2, seconds=30),
+            self._ict_cycle, "cron", minute="*/5", second=10,
+            id="ict_intraday",
         )
+        # SMC Algo — 15s after 5m close
         self.scheduler.add_job(
-            self._fib_cycle, "interval", minutes=15,
-            id="fib_of_intraday", next_run_time=now_ist + timedelta(minutes=1, seconds=15),
+            self._smc_cycle, "cron", minute="*/5", second=15,
+            id="smc_algo",
         )
-        # SMC Algo — every 5 min, offset +4m (separate from ATR/ICT/Fib API calls)
+        # Paper monitor — 25s after 5m close (after strategies have placed orders)
         self.scheduler.add_job(
-            self._smc_cycle, "interval", minutes=5,
-            id="smc_algo", next_run_time=now_ist + timedelta(minutes=4),
+            self._paper_monitor, "cron", minute="*/5", second=25,
+            id="paper_monitor",
         )
-        # Vision-ICT — every 15 min, offset +7m30s (Claude API call, don't collide)
+        # Fib-OF — 5s after every 15m candle close (9:30:05, 9:45:05, ...)
         self.scheduler.add_job(
-            self._vision_cycle, "interval", minutes=15,
-            id="vision_ict", next_run_time=now_ist + timedelta(minutes=7, seconds=30),
+            self._fib_cycle, "cron", minute="*/15", second=5,
+            id="fib_of_intraday",
         )
-        # VIX regime — every 15 min, offset +6m (feeds into SMC/signal filters)
+        # VIX regime — 20s after 15m close (feeds SMC/signal filters)
         self.scheduler.add_job(
-            self._vix_refresh, "interval", minutes=15,
-            id="vix_refresh", next_run_time=now_ist + timedelta(minutes=6),
+            self._vix_refresh, "cron", minute="*/15", second=20,
+            id="vix_refresh",
         )
-        # Paper seller monitor — every 5 min, offset +3m (between ATR and ICT)
+        # Vision-ICT — 30s after 15m close (Claude API call, intentionally last)
         self.scheduler.add_job(
-            self._paper_monitor, "interval", minutes=5,
-            id="paper_monitor", next_run_time=now_ist + timedelta(minutes=3),
+            self._vision_cycle, "cron", minute="*/15", second=30,
+            id="vision_ict",
         )
         # Force trade fast-poll — every 30s, no-op unless flag file exists
         self.scheduler.add_job(
             self._force_trade_poll, "interval", seconds=30,
-            id="force_trade_poll", next_run_time=now_ist,
+            id="force_trade_poll",
         )
         # EOD square-off at configured intraday cutoff, journal save after exits settle.
         exit_hour, exit_minute = map(int, config.INTRADAY_EXIT_BY.split(":"))
@@ -172,7 +176,11 @@ class BotRunner:
         self.scheduler.add_job(self._reset_day_bias, "cron", hour=20, minute=0, id="bias_reset")
 
         self.scheduler.start()
-        logger.info("BotRunner started — ATR(5m) + C-ICT(5m,+2m30s) + Fib-OF(15m) + SMC-Algo(5m,+4m) + Vision-ICT(15m,+7m30s) + VIX(15m,+6m) + PaperMonitor(5m,+3m) + ForceTradePoll(30s)")
+        logger.info(
+            "BotRunner started — candle-aligned cron: "
+            "ATR(5m+5s) C-ICT(5m+10s) SMC(5m+15s) PaperMon(5m+25s) "
+            "Fib-OF(15m+5s) VIX(15m+20s) Vision(15m+30s) ForcePoll(30s)"
+        )
 
     def stop(self):
         self.scheduler.shutdown(wait=False)
