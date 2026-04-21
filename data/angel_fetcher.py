@@ -544,10 +544,14 @@ class AngelFetcher:
         try:
             instruments = self._nfo_instruments()
 
+            # Angel One master stores strike * 100 (e.g. 24550 → 2455000). Divide by 100 to compare.
+            def _master_strike(i) -> int:
+                return int(float(i.get("strike", 0))) // 100
+
             match = next((
                 i for i in instruments
                 if i.get("name") == symbol
-                and int(float(i.get("strike", 0))) == strike
+                and _master_strike(i) == strike
                 and i.get("instrumenttype") == "OPTIDX"
                 and i.get("symbol", "").endswith(option_type)
                 and _parse_expiry(i.get("expiry", "")) == expiry
@@ -557,7 +561,7 @@ class AngelFetcher:
                 # Exact strike not found — find nearest available strike for this expiry.
                 # Hard limit: only accept strikes within 200 pts of requested (prevents deep ITM/OTM accidents).
                 available = [
-                    int(float(i.get("strike", 0)))
+                    _master_strike(i)
                     for i in instruments
                     if i.get("name") == symbol
                     and i.get("instrumenttype") == "OPTIDX"
@@ -582,11 +586,27 @@ class AngelFetcher:
                     match = next((
                         i for i in instruments
                         if i.get("name") == symbol
-                        and int(float(i.get("strike", 0))) == nearest
+                        and _master_strike(i) == nearest
                         and i.get("instrumenttype") == "OPTIDX"
                         and i.get("symbol", "").endswith(option_type)
                         and _parse_expiry(i.get("expiry", "")) == expiry
                     ), None)
+
+            if match is None:
+                # Master lookup exhausted — try searchScrip with exact tradingsymbol
+                ts = f"{symbol}{expiry.strftime('%d%b%y').upper()}{strike}{option_type}"
+                logger.info("get_option_ltp: master miss, trying searchScrip for %s", ts)
+                try:
+                    sr = self._api.searchScrip(exchange="NFO", searchscrip=ts)
+                    if sr and sr.get("status") and sr.get("data"):
+                        item = next(
+                            (x for x in sr["data"] if x.get("tradingsymbol") == ts),
+                            sr["data"][0],
+                        )
+                        match = {"symbol": item["tradingsymbol"], "token": item["symboltoken"]}
+                        logger.info("get_option_ltp: searchScrip found %s", item["tradingsymbol"])
+                except Exception as se:
+                    logger.warning("get_option_ltp: searchScrip failed for %s: %s", ts, se)
 
             if match is None:
                 logger.warning("get_option_ltp: no instrument for %s %s %d %s",
