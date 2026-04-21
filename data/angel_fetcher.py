@@ -502,7 +502,12 @@ class AngelFetcher:
 
     @classmethod
     def nearest_weekly_expiry(cls) -> date:
-        """Return nearest tradable NIFTY expiry from Angel One instrument master."""
+        """Return nearest tradable NIFTY expiry from Angel One instrument master.
+
+        Uses the master file as the authoritative source — no weekday filter,
+        so holiday-moved expiries (e.g. Tuesday when Thursday is a market holiday)
+        are handled correctly.
+        """
         from core.utils import now_ist
         now = now_ist()
         today = now.date()
@@ -515,7 +520,6 @@ class AngelFetcher:
                     if i.get("name") == "NIFTY" and i.get("expiry")
                     and _parse_expiry(i["expiry"]) is not None
                     and _parse_expiry(i["expiry"]) >= today
-                    and _parse_expiry(i["expiry"]).weekday() == 3  # Thursday only (weekly expiry)
                 })
                 if expiries:
                     if now.hour > 15 or (now.hour == 15 and now.minute >= 30):
