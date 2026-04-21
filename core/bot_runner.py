@@ -159,6 +159,11 @@ class BotRunner:
             self._paper_monitor, "interval", minutes=5,
             id="paper_monitor", next_run_time=now_ist + timedelta(minutes=3),
         )
+        # Force trade fast-poll — every 30s, no-op unless flag file exists
+        self.scheduler.add_job(
+            self._force_trade_poll, "interval", seconds=30,
+            id="force_trade_poll", next_run_time=now_ist,
+        )
         # EOD square-off at configured intraday cutoff, journal save after exits settle.
         exit_hour, exit_minute = map(int, config.INTRADAY_EXIT_BY.split(":"))
         self.scheduler.add_job(self._eod_squareoff, "cron", hour=exit_hour, minute=exit_minute, id="eod")
@@ -167,7 +172,7 @@ class BotRunner:
         self.scheduler.add_job(self._reset_day_bias, "cron", hour=20, minute=0, id="bias_reset")
 
         self.scheduler.start()
-        logger.info("BotRunner started — ATR(5m) + C-ICT(5m,+2m30s) + Fib-OF(15m) + SMC-Algo(5m,+4m) + Vision-ICT(15m,+7m30s) + VIX(15m,+6m) + PaperMonitor(5m,+3m)")
+        logger.info("BotRunner started — ATR(5m) + C-ICT(5m,+2m30s) + Fib-OF(15m) + SMC-Algo(5m,+4m) + Vision-ICT(15m,+7m30s) + VIX(15m,+6m) + PaperMonitor(5m,+3m) + ForceTradePoll(30s)")
 
     def stop(self):
         self.scheduler.shutdown(wait=False)
@@ -373,6 +378,16 @@ class BotRunner:
 
         except Exception as e:
             logger.error("Vision-ICT cycle: %s", e, exc_info=True)
+
+    # ── Force trade fast poll (every 30s, no-op unless flag exists) ──────────
+
+    async def _force_trade_poll(self):
+        if self.paused or not _is_market_hours() or _is_event_blocked():
+            return
+        if not ipc.flag_exists(ipc.FLAG_FORCE_TRADE):
+            return
+        logger.info("force_trade_poll: flag detected — running ATR cycle immediately")
+        await self._atr_cycle()
 
     # ── Paper seller monitor (every 5 min) ───────────────────────────────────
 
