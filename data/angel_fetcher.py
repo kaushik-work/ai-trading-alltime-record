@@ -564,6 +564,23 @@ class AngelFetcher:
                     logger.warning("get_option_ltp: using fallback expiry for %s %d%s", symbol, strike, option_type)
 
             if match is None:
+                # searchScrip fallback — construct Angel One tradingsymbol directly
+                # Format: INDEX + DDMONYY + STRIKE + TYPE  e.g. NIFTY23APR2624550CE
+                ts = f"{symbol}{expiry.strftime('%d%b%y').upper()}{strike}{option_type}"
+                logger.info("get_option_ltp: master miss, trying searchScrip for %s", ts)
+                try:
+                    sr = self._api.searchScrip(exchange="NFO", searchscrip=ts)
+                    if sr and sr.get("data"):
+                        item = next((x for x in sr["data"] if x.get("tradingsymbol") == ts), sr["data"][0])
+                        match = {
+                            "symbol": item["tradingsymbol"],
+                            "token":  item["symboltoken"],
+                        }
+                        logger.info("get_option_ltp: searchScrip found %s token=%s", ts, item["symboltoken"])
+                except Exception as _se:
+                    logger.warning("get_option_ltp: searchScrip failed for %s: %s", ts, _se)
+
+            if match is None:
                 logger.warning("get_option_ltp: no instrument for %s %s %d %s",
                                symbol, expiry, strike, option_type)
                 return None, None
@@ -623,8 +640,8 @@ class AngelFetcher:
 # ── Expiry date helpers ───────────────────────────────────────────────────────
 
 def _parse_expiry(s: str) -> Optional[date]:
-    """Parse Angel One expiry string '24APR2024' → date. Returns None on error."""
-    if not s or len(s) < 9:
+    """Parse Angel One expiry string. Handles both '24APR2024' (4-digit) and '24APR24' (2-digit) year."""
+    if not s or len(s) < 5:
         return None
     for fmt in ("%d%b%Y", "%d%b%y"):
         try:

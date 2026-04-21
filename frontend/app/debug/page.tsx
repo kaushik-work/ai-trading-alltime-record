@@ -239,13 +239,16 @@ export default function DebugPage() {
         {/* Strategy cards */}
         <div className="space-y-4">
           {[
-            { name: "ATR Intraday", tag: "ATR", color: "#6366f1", bg: "#eef2ff", interval: "5m",  type: "Technical (sections 1–11)", vixEndpoint: "/api/bot/vix-override/atr", vixKey: "vix_override_atr" },
-            { name: "C-ICT",        tag: "ICT", color: "#0891b2", bg: "#e0f2fe", interval: "5m",  type: "Order Blocks + Liquidity (section 12)", vixEndpoint: "/api/bot/vix-override/ict", vixKey: "vix_override_ict" },
-            { name: "Fib-OF",       tag: "FIB", color: "#059669", bg: "#d1fae5", interval: "15m", type: "Fibonacci zones + Order Flow", vixEndpoint: "/api/bot/vix-override/fib", vixKey: "vix_override_fib" },
-          ].map(({ name, tag, color, bg, interval, type, vixEndpoint, vixKey }) => {
+            { name: "ATR Intraday", tag: "ATR",    color: "#6366f1", bg: "#eef2ff", interval: "5m",  type: "Technical (sections 1–11)", vixEndpoint: "/api/bot/vix-override/atr", vixKey: "vix_override_atr",  display: "atr" },
+            { name: "C-ICT",        tag: "ICT",    color: "#0891b2", bg: "#e0f2fe", interval: "5m",  type: "Order Blocks + Liquidity",    vixEndpoint: "/api/bot/vix-override/ict", vixKey: "vix_override_ict",  display: "ict" },
+            { name: "Fib-OF",       tag: "FIB",    color: "#059669", bg: "#d1fae5", interval: "15m", type: "Fibonacci zones + Order Flow", vixEndpoint: "/api/bot/vix-override/fib", vixKey: "vix_override_fib",  display: "atr" },
+            { name: "SMC-Algo",     tag: "SMC",    color: "#7c3aed", bg: "#ede9fe", interval: "5m",  type: "CHOCH · OB · Breaker · FVG · AMD", vixEndpoint: "", vixKey: "", display: "smc" },
+            { name: "Vision-5m",    tag: "VIS·5m", color: "#db2777", bg: "#fce7f3", interval: "5m",  type: "Claude Vision · auto chart",  vixEndpoint: "", vixKey: "", display: "vision" },
+            { name: "Vision-15m",   tag: "VIS·15", color: "#b45309", bg: "#fef3c7", interval: "15m", type: "Claude Vision · auto chart",  vixEndpoint: "", vixKey: "", display: "vision" },
+          ].map(({ name, tag, color, bg, interval, type, vixEndpoint, vixKey, display }) => {
             const s = strategies[name];
-            const vixOn: boolean = data?.[vixKey] ?? false;
-            const vixBusy = vixSaving[vixEndpoint] ?? false;
+            const vixOn: boolean = vixKey ? (data?.[vixKey] ?? false) : false;
+            const vixBusy = vixEndpoint ? (vixSaving[vixEndpoint] ?? false) : false;
             return (
               <div key={name} className="bg-white rounded-xl border border-gray-200 p-5">
                 {/* Header */}
@@ -260,19 +263,20 @@ export default function DebugPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    {/* Per-strategy VIX toggle */}
-                    <button
-                      onClick={() => toggleVix(vixEndpoint, vixOn)}
-                      disabled={vixBusy}
-                      className="text-[10px] font-semibold px-2 py-1 rounded-full border transition-colors disabled:opacity-50"
-                      style={vixOn
-                        ? { background: "#fef3c7", color: "#b45309", borderColor: "#f59e0b" }
-                        : { background: "#f3f4f6", color: "#6b7280", borderColor: "#d1d5db" }
-                      }
-                      title={vixOn ? "VIX gate bypassed for this strategy — click to restore" : "VIX gate active — click to bypass"}
-                    >
-                      {vixOn ? "Override ON" : "Override OFF"}
-                    </button>
+                    {vixEndpoint && (
+                      <button
+                        onClick={() => toggleVix(vixEndpoint, vixOn)}
+                        disabled={vixBusy}
+                        className="text-[10px] font-semibold px-2 py-1 rounded-full border transition-colors disabled:opacity-50"
+                        style={vixOn
+                          ? { background: "#fef3c7", color: "#b45309", borderColor: "#f59e0b" }
+                          : { background: "#f3f4f6", color: "#6b7280", borderColor: "#d1d5db" }
+                        }
+                        title={vixOn ? "VIX gate bypassed — click to restore" : "VIX gate active — click to bypass"}
+                      >
+                        {vixOn ? "Override ON" : "Override OFF"}
+                      </button>
+                    )}
                     {s ? (
                       <ActionBadge action={s.action ?? (s.will_trade ? "TRADE" : "HOLD")} />
                     ) : (
@@ -282,11 +286,15 @@ export default function DebugPage() {
                 </div>
 
                 {!s ? (
-                  <div className="text-sm text-gray-400 italic">No signal data yet. Hit refresh during market hours.</div>
+                  <div className="text-sm text-gray-400 italic">No signal data yet — refreshes during market hours.</div>
                 ) : s.error ? (
                   <div className="text-sm text-red-500">Error: {s.error}</div>
-                ) : name === "C-ICT" ? (
+                ) : display === "ict" ? (
                   <IctScoreDisplay s={s} color={color} />
+                ) : display === "smc" ? (
+                  <SmcScoreDisplay s={s} color={color} />
+                ) : display === "vision" ? (
+                  <VisionScoreDisplay s={s} color={color} />
                 ) : (
                   <AtrScoreDisplay s={s} color={color} />
                 )}
@@ -435,7 +443,6 @@ function IctScoreDisplay({ s, color }: { s: any; color: string }) {
 
 function AtrScoreDisplay({ s, color }: { s: any; color: string }) {
   const score = s.score ?? 0;
-  const pct = ((score + 10) / 20) * 100;
   return (
     <div>
       <div className="mb-3">
@@ -460,6 +467,108 @@ function AtrScoreDisplay({ s, color }: { s: any; color: string }) {
         Direction: <b>{s.direction ?? "—"}</b> · Threshold: <b>±{s.threshold ?? 7}</b> · Will trade: <b>{s.will_trade ? "YES" : "NO"}</b>
       </div>
       {s.note && <div className="text-[10px] text-gray-400 mt-1">{s.note}</div>}
+    </div>
+  );
+}
+
+function SmcScoreDisplay({ s, color }: { s: any; color: string }) {
+  const score = s.score ?? 0;
+  const details: Record<string, number> = s.details ?? s.breakdown ?? {};
+  const patternMap: Record<string, string> = {
+    choch: "CHOCH", ob: "OB", breaker: "Breaker", fvg: "FVG", amd: "AMD", confluence: "Confluence",
+  };
+  return (
+    <div>
+      <div className="mb-3">
+        <div className="flex justify-between text-xs mb-1">
+          <span className="text-gray-500">SMC Score</span>
+          <span className="font-bold text-gray-700">{score > 0 ? "+" : ""}{score} / ±10</span>
+        </div>
+        <div className="h-3 bg-gray-100 rounded-full overflow-hidden relative">
+          <div className="absolute top-0 bottom-0 w-0.5 bg-gray-300" style={{ left: "50%" }} />
+          <div className="h-full rounded-full transition-all"
+               style={{
+                 width: `${Math.abs(score) / 10 * 50}%`,
+                 marginLeft: score >= 0 ? "50%" : `${50 - Math.abs(score) / 10 * 50}%`,
+                 background: score >= 0 ? "#22c55e" : "#ef4444",
+               }} />
+        </div>
+        <div className="flex justify-between text-[9px] text-gray-400 mt-0.5">
+          <span>-10 (SELL)</span><span>0</span><span>+10 (BUY)</span>
+        </div>
+      </div>
+      <div className="text-xs text-gray-500 mb-2">
+        Direction: <b>{s.direction ?? "—"}</b> · Threshold: <b>±{s.threshold ?? 6}</b> · Will trade: <b>{s.will_trade ? "YES" : "NO"}</b>
+      </div>
+      {Object.keys(details).length > 0 && (
+        <div className="flex flex-wrap gap-2">
+          {Object.entries(details).map(([k, v]: any) => (
+            <span key={k} className="text-[10px] px-2 py-0.5 rounded font-medium"
+                  style={{ background: v > 0 ? "#ede9fe" : v < 0 ? "#fee2e2" : "#f3f4f6",
+                           color:      v > 0 ? "#7c3aed" : v < 0 ? "#dc2626" : "#6b7280" }}>
+              {patternMap[k] ?? k}: {v > 0 ? "+" : ""}{v}
+            </span>
+          ))}
+        </div>
+      )}
+      {s.note && <div className="text-[10px] text-gray-400 mt-2">{s.note}</div>}
+    </div>
+  );
+}
+
+function VisionScoreDisplay({ s, color }: { s: any; color: string }) {
+  const score = s.score ?? 0;
+  const confColor: Record<string, string> = { high: "#15803d", medium: "#b45309", low: "#6b7280" };
+  const conf = s.confidence ?? "—";
+  return (
+    <div>
+      <div className="mb-3">
+        <div className="flex justify-between text-xs mb-1">
+          <span className="text-gray-500">Vision Score</span>
+          <span className="font-bold text-gray-700">{score > 0 ? "+" : ""}{score} / ±10</span>
+        </div>
+        <div className="h-3 bg-gray-100 rounded-full overflow-hidden relative">
+          <div className="absolute top-0 bottom-0 w-0.5 bg-gray-300" style={{ left: "50%" }} />
+          <div className="h-full rounded-full transition-all"
+               style={{
+                 width: `${Math.abs(score) / 10 * 50}%`,
+                 marginLeft: score >= 0 ? "50%" : `${50 - Math.abs(score) / 10 * 50}%`,
+                 background: score >= 0 ? "#22c55e" : "#ef4444",
+               }} />
+        </div>
+        <div className="flex justify-between text-[9px] text-gray-400 mt-0.5">
+          <span>-10 (SELL)</span><span>0</span><span>+10 (BUY)</span>
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2 text-[10px] mb-2">
+        {s.structure && (
+          <span className="px-2 py-0.5 rounded font-medium bg-gray-100 text-gray-600">
+            Structure: {s.structure}
+          </span>
+        )}
+        {s.model_detected && s.model_detected !== "none" && (
+          <span className="px-2 py-0.5 rounded font-medium" style={{ background: color + "22", color }}>
+            {s.model_detected}
+          </span>
+        )}
+        {typeof conf === "string" && conf !== "—" && (
+          <span className="px-2 py-0.5 rounded font-medium"
+                style={{ background: "#f3f4f6", color: confColor[conf] ?? "#6b7280" }}>
+            Confidence: {conf}
+          </span>
+        )}
+      </div>
+      {s.observations && s.observations.length > 0 && (
+        <ul className="text-[10px] text-gray-500 space-y-0.5 mb-1">
+          {s.observations.slice(0, 3).map((obs: string, i: number) => (
+            <li key={i} className="truncate">· {obs}</li>
+          ))}
+        </ul>
+      )}
+      {s.invalidation && (
+        <div className="text-[10px] text-red-400 mt-1">Invalidation: {s.invalidation}</div>
+      )}
+      {s.error && <div className="text-[10px] text-red-400 mt-1">{s.error}</div>}
     </div>
   );
 }

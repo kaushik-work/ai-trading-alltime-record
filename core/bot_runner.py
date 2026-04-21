@@ -221,19 +221,18 @@ class BotRunner:
             await loop.run_in_executor(None, self._ict_strategy.run_watchlist)
 
             # Update last_scores for the debug/signal-radar endpoint
-            sc = self._ict_strategy.last_score
-            if sc:
-                entry = {
-                    "score": sc.get("score", 0),
-                    "direction": sc.get("action", "HOLD"),
-                    "action": sc.get("action", "HOLD"),
-                    "threshold": sc.get("threshold", 2),
-                    "will_trade": abs(sc.get("score", 0)) >= sc.get("threshold", 2),
-                    "note": "ICT order blocks + liquidity sweeps only (section 12)",
-                    "order_flow": sc.get("order_flow", {}),
-                }
-                self.last_scores["C-ICT"] = entry
-                self._paper_seller.on_signal("C-ICT", entry)
+            sc = self._ict_strategy.last_score  # {} if strategy hasn't scored yet
+            entry = {
+                "score":      sc.get("score", 0),
+                "direction":  sc.get("action", "HOLD"),
+                "action":     sc.get("action", "HOLD"),
+                "threshold":  sc.get("threshold", 2),
+                "will_trade": abs(sc.get("score", 0)) >= sc.get("threshold", 2),
+                "note":       sc.get("note", "ICT order blocks + liquidity sweeps (section 12)"),
+                "order_flow": sc.get("order_flow", {}),
+            }
+            self.last_scores["C-ICT"] = entry
+            self._paper_seller.on_signal("C-ICT", entry)
         except Exception as e:
             logger.error("C-ICT cycle: %s", e, exc_info=True)
 
@@ -251,18 +250,17 @@ class BotRunner:
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, self._fib_strategy.run_watchlist)
 
-            sc = self._fib_strategy.last_score
-            if sc:
-                entry = {
-                    "score":      sc.get("score", 0),
-                    "direction":  sc.get("action", "HOLD"),
-                    "action":     sc.get("action", "HOLD"),
-                    "threshold":  sc.get("threshold", config.FIB_OF_SIGNAL_SCORE),
-                    "will_trade": abs(sc.get("score", 0)) >= sc.get("threshold", config.FIB_OF_SIGNAL_SCORE),
-                    "note":       f"Fib-OF 15m | R:R 1:{config.FIB_OF_RR_RATIO:.0f}",
-                }
-                self.last_scores["Fib-OF"] = entry
-                self._paper_seller.on_signal("Fib-OF", entry)
+            sc = self._fib_strategy.last_score  # {} if strategy hasn't scored yet
+            entry = {
+                "score":      sc.get("score", 0),
+                "direction":  sc.get("action", "HOLD"),
+                "action":     sc.get("action", "HOLD"),
+                "threshold":  sc.get("threshold", config.FIB_OF_SIGNAL_SCORE),
+                "will_trade": abs(sc.get("score", 0)) >= sc.get("threshold", config.FIB_OF_SIGNAL_SCORE),
+                "note":       sc.get("note", f"Fib-OF 15m | R:R 1:{config.FIB_OF_RR_RATIO:.0f}"),
+            }
+            self.last_scores["Fib-OF"] = entry
+            self._paper_seller.on_signal("Fib-OF", entry)
         except Exception as e:
             logger.error("Fib-OF cycle: %s", e, exc_info=True)
 
