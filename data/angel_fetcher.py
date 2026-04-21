@@ -550,35 +550,55 @@ class AngelFetcher:
             ), None)
 
             if match is None:
+                # Exact strike not found — find nearest available strike for this expiry
+                available = [
+                    int(float(i.get("strike", 0)))
+                    for i in instruments
+                    if i.get("name") == symbol
+                    and i.get("instrumenttype") == "OPTIDX"
+                    and i.get("symbol", "").endswith(option_type)
+                    and _parse_expiry(i.get("expiry", "")) == expiry
+                ]
+                if available:
+                    nearest = min(available, key=lambda s: abs(s - strike))
+                    logger.warning(
+                        "get_option_ltp: strike %d not in master for %s %s — using nearest %d (diff %d pts)",
+                        strike, symbol, expiry, nearest, abs(nearest - strike),
+                    )
+                    match = next((
+                        i for i in instruments
+                        if i.get("name") == symbol
+                        and int(float(i.get("strike", 0))) == nearest
+                        and i.get("instrumenttype") == "OPTIDX"
+                        and i.get("symbol", "").endswith(option_type)
+                        and _parse_expiry(i.get("expiry", "")) == expiry
+                    ), None)
+
+            if match is None:
+                # Last resort: try any upcoming expiry with nearest strike
                 today = date.today()
-                candidates = sorted([
+                all_upcoming = [
                     i for i in instruments
                     if i.get("name") == symbol
-                    and int(float(i.get("strike", 0))) == strike
+                    and i.get("instrumenttype") == "OPTIDX"
                     and i.get("symbol", "").endswith(option_type)
                     and _parse_expiry(i.get("expiry", "")) is not None
                     and _parse_expiry(i.get("expiry", "")) >= today
-                ], key=lambda i: _parse_expiry(i["expiry"]))
-                if candidates:
-                    match = candidates[0]
-                    logger.warning("get_option_ltp: using fallback expiry for %s %d%s", symbol, strike, option_type)
-
-            if match is None:
-                # searchScrip fallback — construct Angel One tradingsymbol directly
-                # Format: INDEX + DDMONYY + STRIKE + TYPE  e.g. NIFTY23APR2624550CE
-                ts = f"{symbol}{expiry.strftime('%d%b%y').upper()}{strike}{option_type}"
-                logger.info("get_option_ltp: master miss, trying searchScrip for %s", ts)
-                try:
-                    sr = self._api.searchScrip(exchange="NFO", searchscrip=ts)
-                    if sr and sr.get("data"):
-                        item = next((x for x in sr["data"] if x.get("tradingsymbol") == ts), sr["data"][0])
-                        match = {
-                            "symbol": item["tradingsymbol"],
-                            "token":  item["symboltoken"],
-                        }
-                        logger.info("get_option_ltp: searchScrip found %s token=%s", ts, item["symboltoken"])
-                except Exception as _se:
-                    logger.warning("get_option_ltp: searchScrip failed for %s: %s", ts, _se)
+                ]
+                if all_upcoming:
+                    match = min(
+                        all_upcoming,
+                        key=lambda i: (
+                            _parse_expiry(i["expiry"]),
+                            abs(int(float(i.get("strike", 0))) - strike),
+                        ),
+                    )
+                    used_strike = int(float(match.get("strike", 0)))
+                    used_expiry = _parse_expiry(match["expiry"])
+                    logger.warning(
+                        "get_option_ltp: fallback to nearest strike %d exp %s for %s %s",
+                        used_strike, used_expiry, symbol, option_type,
+                    )
 
             if match is None:
                 logger.warning("get_option_ltp: no instrument for %s %s %d %s",
