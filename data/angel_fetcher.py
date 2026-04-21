@@ -198,23 +198,11 @@ class AngelFetcher:
             logger.warning("AngelFetcher: could not persist tokens to .env: %s", e)
 
     def is_token_live(self) -> bool:
-        """Verify session is active by calling getProfile (~100 ms)."""
-        if not self._ensure_logged_in():
-            return False
-        try:
-            creds = self._read_env()
-            resp = self._api.getProfile(creds.get("refresh_token", ""))
-            if resp and (resp.get("status") or resp.get("success")):
-                return True
-            with self._lock:
-                self._api = None
-                self._login_date = None
-            return False
-        except Exception:
-            with self._lock:
-                self._api = None
-                self._login_date = None
-            return False
+        """Check session liveness using internal state only.
+        Never calls getProfile() — that hits the rate limit and causes TOKEN EXPIRED false positives."""
+        from core.utils import now_ist
+        today = now_ist().date()
+        return self._api is not None and self._login_date == today
 
     # ── Candle helpers ────────────────────────────────────────────────────────
 

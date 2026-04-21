@@ -662,10 +662,13 @@ def angel_create_session(user: str = Depends(get_current_user)):
     _token_cache["result"] = None
     _token_cache["checked_at"] = 0.0
     inst = AngelFetcher.get()
-    with inst._lock:
-        inst._api = None
-        inst._login_date = None
-        inst._failed_at = None
+    # Only clear the cooldown — don't nuke _api (avoids hanging when rate-limited)
+    inst._failed_at = None
+    # If session genuinely invalid, force re-login
+    if not inst.is_token_live():
+        with inst._lock:
+            inst._api = None
+            inst._login_date = None
     try:
         ok = inst._ensure_logged_in()
         if not ok:
