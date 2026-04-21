@@ -46,7 +46,12 @@
       "Bash(git -C \"c:/Users/rkkau/Desktop/github/ai-trading-alltime-record\" add data/angel_fetcher.py api/server.py core/broker.py)",
       "Bash(git -C c:/Users/rkkau/Desktop/github/ai-trading-alltime-record commit -m 'Fix force trade qty \\(1→lot_size*lots\\), cache get_positions 30s, add searchScrip fallback *)",
       "Bash(git -C \"c:/Users/rkkau/Desktop/github/ai-trading-alltime-record\" log --oneline -5)",
-      "Bash(git -C \"c:/Users/rkkau/Desktop/github/ai-trading-alltime-record\" diff origin/main --stat)"
+      "Bash(git -C \"c:/Users/rkkau/Desktop/github/ai-trading-alltime-record\" diff origin/main --stat)",
+      "Bash(.venv/Scripts/python scripts/backtest_live_atr.py --date 2026-04-21 --no-cache)",
+      "Bash(ls .venv/Scripts/python*)",
+      "Bash(ls .venv/bin/python*)",
+      "Bash(.venv/Scripts/python.exe scripts/backtest_live_atr.py --date 2026-04-21 --no-cache)",
+      "Bash(py -3 --version)"
     ]
   }
 }
