@@ -459,10 +459,14 @@ def set_bias(body: dict, user: str = Depends(get_current_user)):
             parsed["explanation"] = "A trade is already queued — wait for it to execute first."
             parsed["type"] = "unclear"
         else:
+            import config as _cfg
+            _sym = parsed.get("symbol", "NIFTY")
+            _lot_size = _cfg.LOT_SIZES.get(_sym, 65)
+            _lots = max(1, getattr(_cfg, "MIN_LOTS", 1))
             ipc.write_force_trade(
-                symbol      = parsed.get("symbol", "NIFTY"),
+                symbol      = _sym,
                 side        = parsed["direction"],
-                quantity    = 1,
+                quantity    = _lot_size * _lots,
                 reason      = f"Note trade: {note}",
                 option_type = parsed.get("option_type"),
                 strike      = parsed.get("strike"),

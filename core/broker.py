@@ -6,6 +6,8 @@ from core.utils import now_ist
 
 _portfolio_cache: dict = {"result": None, "ts": 0.0}
 _PORTFOLIO_CACHE_TTL = 60  # seconds
+_positions_cache: dict = {"result": {}, "ts": 0.0}
+_POSITIONS_CACHE_TTL = 30  # seconds — avoids hitting Angel One rate limit
 
 logger = logging.getLogger(__name__)
 
@@ -343,6 +345,8 @@ class AngelOneBroker:
             return False
 
     def get_positions(self) -> dict:
+        if _time.time() - _positions_cache["ts"] < _POSITIONS_CACHE_TTL:
+            return _positions_cache["result"]
         try:
             if self._api is None:
                 return {}
@@ -358,6 +362,8 @@ class AngelOneBroker:
                         "quantity": qty,
                         "avg_price": float(p.get("averageprice", 0) or 0),
                     }
+                _positions_cache["result"] = result
+                _positions_cache["ts"] = _time.time()
                 return result
         except Exception as e:
             logger.error("AngelOneBroker.get_positions: %s", e)
