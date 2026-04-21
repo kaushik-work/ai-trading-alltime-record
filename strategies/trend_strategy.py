@@ -429,6 +429,12 @@ class TrendStrategy:
             )
             if option_ltp is None:
                 return {"status": "SKIPPED", "reason": "option LTP unavailable"}
+            if option_ltp < 5.0:
+                logger.warning(
+                    "[%s] %s %s premium ₹%.2f below ₹5 minimum — skipping (likely near-expiry worthless option)",
+                    self.strategy_name, option_symbol, option_type, option_ltp,
+                )
+                return {"status": "SKIPPED", "reason": f"premium ₹{option_ltp:.2f} too low (min ₹5)"}
             if not config.IS_PAPER and hasattr(self.broker, "preflight_order"):
                 preflight = self.broker.preflight_order(
                     symbol=symbol,
