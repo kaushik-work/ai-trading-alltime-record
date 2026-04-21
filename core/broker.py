@@ -1,7 +1,11 @@
 import logging
+import time as _time
 from typing import Optional
 import config
 from core.utils import now_ist
+
+_portfolio_cache: dict = {"result": None, "ts": 0.0}
+_PORTFOLIO_CACHE_TTL = 60  # seconds
 
 logger = logging.getLogger(__name__)
 
@@ -362,6 +366,8 @@ class AngelOneBroker:
         return {}
 
     def get_portfolio_summary(self) -> dict:
+        if _time.time() - _portfolio_cache["ts"] < _PORTFOLIO_CACHE_TTL and _portfolio_cache["result"]:
+            return _portfolio_cache["result"]
         try:
             if self._api is None:
                 return {"balance": 0, "pnl": 0, "open_positions": 0}
@@ -373,7 +379,10 @@ class AngelOneBroker:
                 balance = net if net > 0 else available
                 positions = self.get_positions()
                 pnl = sum(float(p.get("unrealised", 0) or 0) for p in positions.values())
-                return {"balance": round(balance, 2), "pnl": round(pnl, 2), "open_positions": len(positions)}
+                result = {"balance": round(balance, 2), "pnl": round(pnl, 2), "open_positions": len(positions)}
+                _portfolio_cache["result"] = result
+                _portfolio_cache["ts"] = _time.time()
+                return result
         except Exception as e:
             logger.error("AngelOneBroker.get_portfolio_summary: %s", e)
             from core.angel_error_log import log_error as _log_err

@@ -539,7 +539,6 @@ class AngelFetcher:
             return None, None
         try:
             instruments = self._nfo_instruments()
-            target_expiry = _format_expiry(expiry)
 
             match = next((
                 i for i in instruments
@@ -547,7 +546,7 @@ class AngelFetcher:
                 and int(float(i.get("strike", 0))) == strike
                 and i.get("instrumenttype") == "OPTIDX"
                 and i.get("symbol", "").endswith(option_type)
-                and i.get("expiry", "") == target_expiry
+                and _parse_expiry(i.get("expiry", "")) == expiry
             ), None)
 
             if match is None:
@@ -580,8 +579,10 @@ class AngelFetcher:
             return tradingsymbol, (ltp if ltp > 0 else None)
 
         except Exception as e:
-            logger.error("AngelFetcher.get_option_ltp %s %d%s: %s", symbol, strike, option_type, e)
-            self._api = None
+            msg = str(e)
+            logger.error("AngelFetcher.get_option_ltp %s %d%s: %s", symbol, strike, option_type, msg)
+            if "Invalid Token" in msg or "Unauthorized" in msg or "AG8001" in msg:
+                self._api = None
             return None, None
 
     def get_option_token(self, tradingsymbol: str) -> Optional[str]:
