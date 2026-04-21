@@ -6,6 +6,7 @@ No fallbacks — if Angel One fails, the cycle is skipped.
 """
 
 import logging
+import time
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -15,6 +16,12 @@ logger = logging.getLogger(__name__)
 
 _daily_df_cache: dict[str, object] = {}
 _daily_df_cache_day: dict[str, str] = {}
+
+# Shared intraday data cache — keyed by (symbol, interval)
+# Prevents each strategy cycle from independently hitting Angel One
+_intraday_cache: dict[tuple, object] = {}
+_intraday_cache_ts: dict[tuple, float] = {}
+_INTRADAY_CACHE_TTL = 90  # seconds
 
 
 def _build_daily_df_from_intraday(symbol: str):
@@ -86,12 +93,21 @@ def _get_daily_df(symbol: str):
 
 
 def _get_intraday_df(symbol: str, interval: str):
-    """Fetch today's intraday OHLCV DataFrame via Angel One. Returns None on failure."""
+    """Fetch today's intraday OHLCV DataFrame via Angel One. Returns None on failure.
+    Results are cached for _INTRADAY_CACHE_TTL seconds so concurrent strategy cycles
+    share one Angel One request instead of each triggering a rate-limit failure."""
+    key = (symbol, interval)
+    now = time.time()
+    if key in _intraday_cache and (now - _intraday_cache_ts.get(key, 0)) < _INTRADAY_CACHE_TTL:
+        return _intraday_cache[key]
+
     from core.angel_error_log import log_error as _log_err
     try:
         from data.angel_fetcher import AngelFetcher
         df = AngelFetcher.get().fetch_intraday_df(symbol, interval)
         if df is not None and len(df) >= 3:
+            _intraday_cache[key] = df
+            _intraday_cache_ts[key] = now
             return df
         msg = "fetch_intraday_df returned insufficient data"
         logger.error("_get_intraday_df: %s for %s %s", msg, symbol, interval)
