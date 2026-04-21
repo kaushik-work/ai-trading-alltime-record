@@ -243,6 +243,7 @@ def _build_snapshot() -> dict:
         "last_scores": runner.last_scores,
         "token_set_at": _get_token_status(),
         "day_bias": runner.last_day_bias,
+        "option_chain": runner.last_option_chain,
         "mode": "paper" if config.IS_PAPER else "live",
         "pnl": {
             "total": round(total_pnl, 2),

@@ -331,6 +331,40 @@ def score_symbol(indicators: dict, oi_data: dict, patterns: dict,
         breakdown["pcr"] = 0
     score += breakdown.get("pcr", 0)
 
+    # Option chain bias (CE FAVORED / PE FAVORED)
+    oc_bias = oi_data.get("bias", "NEUTRAL")
+    if oc_bias == "CE_FAVORED":
+        pts = 2
+        signals.append(f"OC bias CE FAVORED (PCR {pcr:.2f}, price above max pain) +{pts}")
+        breakdown["oc_bias"] = pts
+        score += pts
+    elif oc_bias == "PE_FAVORED":
+        pts = -2
+        signals.append(f"OC bias PE FAVORED (PCR {pcr:.2f}, price below max pain) {pts}")
+        breakdown["oc_bias"] = pts
+        score += pts
+    else:
+        breakdown["oc_bias"] = 0
+
+    # CE wall / PE wall proximity signals
+    ce_wall = oi_data.get("ce_wall", 0)
+    pe_wall = oi_data.get("pe_wall", 0)
+    if ce_wall > 0 and pe_wall > 0:
+        spot = oi_data.get("spot", price)
+        if spot > 0:
+            to_ce_wall_pct = (ce_wall - spot) / spot * 100
+            to_pe_wall_pct = (spot - pe_wall) / spot * 100
+            if 0 < to_ce_wall_pct < 0.3:
+                pts = -1
+                signals.append(f"Near CE wall {ce_wall} ({to_ce_wall_pct:.1f}% away) — resistance {pts}")
+                breakdown["ce_wall"] = pts
+                score += pts
+            elif 0 < to_pe_wall_pct < 0.3:
+                pts = 1
+                signals.append(f"Near PE wall {pe_wall} ({to_pe_wall_pct:.1f}% away) — support +{pts}")
+                breakdown["pe_wall"] = pts
+                score += pts
+
     # ── 10. ATR volatility filter (AishDoc: don't trade in dead/choppy market) ─
     atr_pct = indicators.get("atr_pct", 0)
     if atr_pct > 0:

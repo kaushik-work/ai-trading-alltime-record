@@ -107,6 +107,7 @@ class BotRunner:
         self.last_vix: Optional[float] = None       # India VIX, updated each cycle
         self.last_vix_regime: str = "UNKNOWN"       # VIX regime string
         self.last_day_bias: dict = ipc.read_day_bias()  # cached; updated by set_bias API
+        self.last_option_chain: dict = {}
         from core.paper_seller import get_paper_seller
         self._paper_seller = get_paper_seller()
 
@@ -298,6 +299,13 @@ class BotRunner:
             logger.info("VIX refresh: regime=%s vix=%.2f", regime, vix or 0)
         except Exception as e:
             logger.error("VIX refresh: %s", e)
+        try:
+            from data.option_chain import OptionChainFetcher
+            oc = OptionChainFetcher.get().fetch("NIFTY")
+            if oc and not oc.get("error"):
+                self.last_option_chain = oc
+        except Exception as e:
+            logger.warning("Option chain refresh: %s", e)
 
     def _has_margin(self, min_required: float = 15_000.0) -> bool:
         """Check Angel One available margin before entering a trade."""

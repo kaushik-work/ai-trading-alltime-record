@@ -80,6 +80,7 @@ export default function Home() {
   const latestOrderIssue  = data?.latest_order_issue ?? null;
   const dayBiasData       = data?.day_bias          ?? { bias: "NEUTRAL", note: "", set_at: null };
   const settingsData      = data?.settings          ?? { min_lots: 1 };
+  const optionChain       = data?.option_chain      ?? null;
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
   const vixOverrideSaving = false;
@@ -379,6 +380,86 @@ export default function Home() {
               </div>
             </div>
           </div>
+
+          {/* Option Chain Bias panel */}
+          {optionChain && !optionChain.error && (
+            <div className="bg-white rounded-xl p-4 shadow-sm mb-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">Option Chain</span>
+                  {/* Bias badge */}
+                  <span className={`text-sm font-bold px-3 py-1 rounded-full ${
+                    optionChain.bias === "CE_FAVORED"
+                      ? "bg-green-100 text-green-700"
+                      : optionChain.bias === "PE_FAVORED"
+                      ? "bg-red-100 text-red-700"
+                      : "bg-gray-100 text-gray-600"
+                  }`}>
+                    {optionChain.bias === "CE_FAVORED" ? "↑ CE FAVORED"
+                     : optionChain.bias === "PE_FAVORED" ? "↓ PE FAVORED"
+                     : "→ NEUTRAL"}
+                  </span>
+                </div>
+                {/* Key metrics row */}
+                <div className="flex flex-wrap gap-4 text-xs text-gray-600">
+                  <span>PCR <strong className={optionChain.pcr > 1.1 ? "text-green-600" : optionChain.pcr < 0.9 ? "text-red-600" : "text-gray-800"}>{optionChain.pcr?.toFixed(2)}</strong></span>
+                  <span>Max Pain <strong>{optionChain.max_pain?.toLocaleString()}</strong></span>
+                  <span>CE Wall <strong className="text-red-600">{optionChain.ce_wall?.toLocaleString()}</strong></span>
+                  <span>PE Wall <strong className="text-green-600">{optionChain.pe_wall?.toLocaleString()}</strong></span>
+                  <span className="text-gray-400">ATM {optionChain.atm?.toLocaleString()}</span>
+                </div>
+              </div>
+
+              {/* Mini option chain table */}
+              {optionChain.strikes && optionChain.strikes.length > 0 && (
+                <div className="mt-3 overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="text-gray-400 border-b border-gray-100">
+                        <th className="text-right py-1 pr-2 font-medium">CE OI</th>
+                        <th className="text-right py-1 pr-2 font-medium">CE LTP</th>
+                        <th className="text-center py-1 px-2 font-semibold text-gray-700">Strike</th>
+                        <th className="text-left py-1 pl-2 font-medium">PE LTP</th>
+                        <th className="text-left py-1 pl-2 font-medium">PE OI</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {optionChain.strikes.map((row: any) => {
+                        const isAtm = row.strike === optionChain.atm;
+                        const isCeWall = row.strike === optionChain.ce_wall;
+                        const isPeWall = row.strike === optionChain.pe_wall;
+                        const isMaxPain = row.strike === optionChain.max_pain;
+                        const maxOi = Math.max(...optionChain.strikes.map((s: any) => Math.max(s.ce_oi || 0, s.pe_oi || 0)));
+                        return (
+                          <tr key={row.strike} className={`border-b border-gray-50 ${isAtm ? "bg-blue-50 font-semibold" : ""}`}>
+                            <td className="text-right py-1 pr-2 text-red-500">
+                              <span style={{opacity: maxOi > 0 ? 0.4 + 0.6 * (row.ce_oi / maxOi) : 1}}>
+                                {row.ce_oi > 0 ? (row.ce_oi / 1e5).toFixed(1) + "L" : "—"}
+                              </span>
+                              {isCeWall && <span className="ml-1 text-[9px] text-red-400 font-bold">WALL</span>}
+                            </td>
+                            <td className="text-right py-1 pr-2 text-red-600">{row.ce_ltp > 0 ? row.ce_ltp.toFixed(1) : "—"}</td>
+                            <td className={`text-center py-1 px-2 font-bold ${isAtm ? "text-blue-700" : "text-gray-700"}`}>
+                              {row.strike.toLocaleString()}
+                              {isMaxPain && <span className="ml-1 text-[9px] text-orange-500">MP</span>}
+                            </td>
+                            <td className="text-left py-1 pl-2 text-green-600">{row.pe_ltp > 0 ? row.pe_ltp.toFixed(1) : "—"}</td>
+                            <td className="text-left py-1 pl-2 text-green-500">
+                              {row.pe_oi > 0 ? (row.pe_oi / 1e5).toFixed(1) + "L" : "—"}
+                              {isPeWall && <span className="ml-1 text-[9px] text-green-400 font-bold">WALL</span>}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                  <p className="text-[10px] text-gray-400 mt-1">
+                    ATM = blue · MP = max pain · WALL = highest OI · OI in Lakhs
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Today's trade journal */}
           {todayJournal.length > 0 && (

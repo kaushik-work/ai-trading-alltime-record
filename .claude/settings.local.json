@@ -52,7 +52,20 @@
       "Bash(ls .venv/bin/python*)",
       "Bash(.venv/Scripts/python.exe scripts/backtest_live_atr.py --date 2026-04-21 --no-cache)",
       "Bash(py -3 --version)",
-      "Bash(python -c \"import smartapi; import inspect; print\\(inspect.getfile\\(smartapi\\)\\)\")"
+      "Bash(python -c \"import smartapi; import inspect; print\\(inspect.getfile\\(smartapi\\)\\)\")",
+      "Bash(python -m py_compile data/option_chain.py)",
+      "Bash(python -m py_compile strategies/signal_scorer.py)",
+      "Bash(python -m py_compile strategies/trend_strategy.py)",
+      "Bash(python -m py_compile core/bot_runner.py)",
+      "Bash(python -m py_compile api/server.py)",
+      "Bash(\"c:/Users/rkkau/Desktop/github/ai-trading-alltime-record/.venv/Scripts/python.exe\" -m py_compile \"c:/Users/rkkau/Desktop/github/ai-trading-alltime-record/data/option_chain.py\")",
+      "Bash(\"c:/Users/rkkau/Desktop/github/ai-trading-alltime-record/.venv/Scripts/python.exe\" -m py_compile \"c:/Users/rkkau/Desktop/github/ai-trading-alltime-record/strategies/signal_scorer.py\")",
+      "Bash(\"c:/Users/rkkau/Desktop/github/ai-trading-alltime-record/.venv/Scripts/python.exe\" -m py_compile \"c:/Users/rkkau/Desktop/github/ai-trading-alltime-record/strategies/trend_strategy.py\")",
+      "Bash(\"c:/Users/rkkau/Desktop/github/ai-trading-alltime-record/.venv/Scripts/python.exe\" -m py_compile \"c:/Users/rkkau/Desktop/github/ai-trading-alltime-record/core/bot_runner.py\")",
+      "Bash(\"c:/Users/rkkau/Desktop/github/ai-trading-alltime-record/.venv/Scripts/python.exe\" -m py_compile \"c:/Users/rkkau/Desktop/github/ai-trading-alltime-record/api/server.py\")",
+      "Bash(cmd /c '\"c:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\.venv\\\\Scripts\\\\python.exe\" -m py_compile \"c:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\data\\\\option_chain.py\" && echo option_chain OK')",
+      "Bash(cmd /c \"c:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\.venv\\\\Scripts\\\\python.exe -m py_compile c:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\data\\\\option_chain.py && echo option_chain OK && c:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\.venv\\\\Scripts\\\\python.exe -m py_compile c:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\strategies\\\\signal_scorer.py && echo signal_scorer OK && c:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\.venv\\\\Scripts\\\\python.exe -m py_compile c:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\strategies\\\\trend_strategy.py && echo trend_strategy OK && c:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\.venv\\\\Scripts\\\\python.exe -m py_compile c:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\core\\\\bot_runner.py && echo bot_runner OK && c:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\.venv\\\\Scripts\\\\python.exe -m py_compile c:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\api\\\\server.py && echo server OK\")",
+      "Bash(cmd /c \"c:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\.venv\\\\Scripts\\\\python.exe -c \\\\\"import ast; ast.parse\\(open\\('c:/Users/rkkau/Desktop/github/ai-trading-alltime-record/data/option_chain.py'\\).read\\(\\)\\); print\\('option_chain OK'\\)\\\\\"\")"
     ]
   }
 }

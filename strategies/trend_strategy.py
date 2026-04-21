@@ -209,7 +209,12 @@ class TrendStrategy:
 
         # Score with intraday signals + order flow included
         df_5m = self.market._get_df(symbol) if isinstance(self.market, RealMarketData) else None
-        scored = score_symbol(indicators, {}, patterns, intraday, df_5m=df_5m, mode=self.score_mode)
+        from data.option_chain import OptionChainFetcher
+        try:
+            oi_data = OptionChainFetcher.get().fetch(symbol)
+        except Exception:
+            oi_data = {}
+        scored = score_symbol(indicators, oi_data, patterns, intraday, df_5m=df_5m, mode=self.score_mode)
         self.last_score = scored  # expose for debug/monitoring
 
         logger.info(
