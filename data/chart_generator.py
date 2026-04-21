@@ -62,7 +62,7 @@ def generate_chart(symbol: str = "NIFTY", interval: str = "5m", bars: int = 100)
             type="candle",
             style=style,
             volume=True,
-            addplot=addplots if addplots else None,
+            addplot=addplots or [],
             figsize=(14, 7),
             title=dict(
                 title=f"\nNIFTY 50  ·  {interval.upper()}  ·  {len(df)} bars  ·  {datetime.now().strftime('%d %b %Y %H:%M')} IST",
