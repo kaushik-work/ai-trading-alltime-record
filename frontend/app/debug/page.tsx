@@ -303,8 +303,8 @@ export default function DebugPage() {
               {Object.entries(data.last_scores).map(([name, sc]: any) => (
                 <div key={name} className="bg-gray-50 rounded-lg p-3 text-xs">
                   <div className="font-bold text-gray-700 mb-1">{name}</div>
-                  <div className="text-gray-500">Buy: <b>{sc.buy}</b> · Sell: <b>{sc.sell}</b> · Threshold: <b>{sc.threshold}</b></div>
-                  <div className="text-gray-500">Action: <b>{sc.action}</b> · now_t: {sc.now_t} · bar_time: {sc.bar_time}</div>
+                  <div className="text-gray-500">Score: <b>{sc.score ?? "—"}</b> · Dir: <b>{sc.direction ?? "—"}</b> · Threshold: <b>{sc.threshold ?? "—"}</b></div>
+                  <div className="text-gray-500">Action: <b>{sc.action}</b> · Will Trade: <b>{sc.will_trade ? "YES" : "NO"}</b></div>
                 </div>
               ))}
             </div>

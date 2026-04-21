@@ -28,7 +28,7 @@ export default function ErrorsPage() {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(`${API_URL}/api/zerodha-errors`, { headers: authHeaders() });
+      const res = await fetch(`${API_URL}/api/angel-errors`, { headers: authHeaders() });
       if (res.status === 401) { router.push("/login"); return; }
       const data = await res.json();
       setErrors(Array.isArray(data) ? data : []);
@@ -48,7 +48,7 @@ export default function ErrorsPage() {
 
   async function clearAll() {
     setClearing(true);
-    await fetch(`${API_URL}/api/zerodha-errors`, { method: "DELETE", headers: authHeaders() });
+    await fetch(`${API_URL}/api/angel-errors`, { method: "DELETE", headers: authHeaders() });
     await load();
     setClearing(false);
   }

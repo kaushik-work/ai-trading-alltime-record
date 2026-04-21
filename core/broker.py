@@ -340,6 +340,8 @@ class AngelOneBroker:
 
     def get_positions(self) -> dict:
         try:
+            if self._api is None:
+                return {}
             resp = self._api.position()
             if resp and resp.get("status") and resp.get("data"):
                 result = {}
@@ -355,10 +357,14 @@ class AngelOneBroker:
                 return result
         except Exception as e:
             logger.error("AngelOneBroker.get_positions: %s", e)
+            from core.angel_error_log import log_error as _log_err
+            _log_err("get_positions", str(e))
         return {}
 
     def get_portfolio_summary(self) -> dict:
         try:
+            if self._api is None:
+                return {"balance": 0, "pnl": 0, "open_positions": 0}
             rms = self._api.rmsLimit()
             if rms and rms.get("status") and rms.get("data"):
                 d = rms["data"]
@@ -370,6 +376,8 @@ class AngelOneBroker:
                 return {"balance": round(balance, 2), "pnl": round(pnl, 2), "open_positions": len(positions)}
         except Exception as e:
             logger.error("AngelOneBroker.get_portfolio_summary: %s", e)
+            from core.angel_error_log import log_error as _log_err
+            _log_err("get_portfolio_summary", str(e))
         return {"balance": 0, "pnl": 0, "open_positions": 0}
 
     def get_unrealized_pnl_pct(self, symbol: str, current_price: float) -> float:
