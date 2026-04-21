@@ -38,7 +38,8 @@
       "Bash(python -c ' *)",
       "Bash(py -3 -c \"print\\('ok'\\)\")",
       "Bash(git -C \"c:/Users/rkkau/Desktop/github/ai-trading-alltime-record\" add data/angel_fetcher.py)",
-      "Bash(git -C c:/Users/rkkau/Desktop/github/ai-trading-alltime-record commit -m 'Fix nearest_weekly_expiry: remove Thursday-only filter *)"
+      "Bash(git -C c:/Users/rkkau/Desktop/github/ai-trading-alltime-record commit -m 'Fix nearest_weekly_expiry: remove Thursday-only filter *)",
+      "Bash(git -C c:/Users/rkkau/Desktop/github/ai-trading-alltime-record commit -m 'Fix get_option_ltp: add 200pt guard, remove cross-expiry last-resort fallback *)"
     ]
   }
 }
