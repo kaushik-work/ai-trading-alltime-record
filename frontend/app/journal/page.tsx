@@ -82,6 +82,18 @@ export default function JournalPage() {
   const summary = journal?.summary ?? {};
   const breakdown = journal?.strategy_breakdown ?? {};
   const trades = journal?.trades ?? [];
+  const aiReview: string | null = journal?.ai_review ?? null;
+
+  function renderAiReview(text: string) {
+    // Split on **heading** markers and render sections
+    const parts = text.split(/(\*\*[^*]+\*\*)/g);
+    return parts.map((part, i) => {
+      if (part.startsWith("**") && part.endsWith("**")) {
+        return <span key={i} className="font-bold text-gray-800">{part.slice(2, -2)}</span>;
+      }
+      return <span key={i}>{part}</span>;
+    });
+  }
 
   return (
     <div className="min-h-screen bg-[#f0f2f5]">
@@ -265,14 +277,37 @@ export default function JournalPage() {
                   </div>
                 )}
 
-                {/* Learning notes */}
+                {/* AI Review */}
+                <div className="bg-white rounded-xl border border-gray-200 overflow-hidden">
+                  <div className="px-5 py-3 border-b border-gray-100 flex items-center justify-between">
+                    <div>
+                      <span className="text-sm font-bold text-gray-800">AI Trading Review</span>
+                      <span className="ml-2 text-[10px] px-2 py-0.5 rounded-full bg-indigo-100 text-indigo-600 font-semibold uppercase tracking-wide">Claude</span>
+                    </div>
+                  </div>
+                  <div className="px-5 py-4">
+                    {aiReview === null && (
+                      <div className="text-sm text-gray-400 italic">
+                        AI review not yet generated for this day.
+                      </div>
+                    )}
+                    {aiReview === "" && (
+                      <div className="text-sm text-gray-400 italic">Generating...</div>
+                    )}
+                    {aiReview && (
+                      <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
+                        {renderAiReview(aiReview)}
+                      </p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Your Notes */}
                 <div className="bg-white rounded-xl border border-gray-200 p-5">
                   <div className="flex items-center justify-between mb-3">
                     <div>
-                      <div className="text-sm font-bold text-gray-800">Learning Notes</div>
-                      <div className="text-xs text-gray-400 mt-0.5">
-                        What did you learn? What to improve? What worked?
-                      </div>
+                      <div className="text-sm font-bold text-gray-800">Your Notes</div>
+                      <div className="text-xs text-gray-400 mt-0.5">Add your own observations on top of the AI review</div>
                     </div>
                     <button onClick={saveNotes} disabled={savingNotes}
                       className="text-sm px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-semibold rounded-lg transition-colors">
@@ -282,8 +317,8 @@ export default function JournalPage() {
                   <textarea
                     value={notes}
                     onChange={e => { setNotes(e.target.value); setNotesSaved(false); }}
-                    rows={6}
-                    placeholder={`e.g.\n- Musashi nailed the trend today — the HA flip confirmation really helps\n- Raijin got stopped out twice near VWAP — need tighter entry filter\n- Would trailing the SL after +1R have made more? Yes on trade 1`}
+                    rows={4}
+                    placeholder="Anything the AI missed, or your gut read on the day..."
                     className="w-full text-sm border border-gray-200 rounded-lg px-4 py-3 outline-none focus:border-indigo-400 resize-y text-gray-700 placeholder-gray-300"
                   />
                 </div>

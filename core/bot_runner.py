@@ -173,6 +173,7 @@ class BotRunner:
         exit_hour, exit_minute = map(int, config.INTRADAY_EXIT_BY.split(":"))
         self.scheduler.add_job(self._eod_squareoff, "cron", hour=exit_hour, minute=exit_minute, id="eod")
         self.scheduler.add_job(self._save_journal,  "cron", hour=15, minute=20, id="journal")
+        self.scheduler.add_job(self._weekly_review, "cron", day_of_week="sat", hour=8, minute=0, id="weekly_review")
         # Reset day bias to NEUTRAL at 20:00 IST each evening
         self.scheduler.add_job(self._reset_day_bias, "cron", hour=20, minute=0, id="bias_reset")
 
@@ -439,6 +440,17 @@ class BotRunner:
             logger.info("Journal saved: %s", path)
         except Exception as e:
             logger.error("Journal save failed: %s", e, exc_info=True)
+
+    async def _weekly_review(self):
+        """Generate Claude-powered weekly review every Saturday at 08:00 IST."""
+        try:
+            from core.journal import save_weekly_review
+            loop = asyncio.get_event_loop()
+            path = await loop.run_in_executor(None, save_weekly_review)
+            if path:
+                logger.info("Weekly review saved: %s", path)
+        except Exception as e:
+            logger.error("Weekly review failed: %s", e, exc_info=True)
 
     async def _reset_day_bias(self):
         """Reset day bias to NEUTRAL at 20:00 IST each evening."""

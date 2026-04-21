@@ -569,6 +569,25 @@ def save_journal_now(user: str = Depends(get_current_user)):
     path = save_daily_journal()
     return {"status": "saved", "path": path}
 
+@app.get("/api/weekly-reviews")
+def list_weekly_reviews(user: str = Depends(get_current_user)):
+    from core.journal import list_weekly_reviews as _list
+    return {"weeks": _list()}
+
+@app.get("/api/weekly-reviews/{key}")
+def get_weekly_review(key: str, user: str = Depends(get_current_user)):
+    from core.journal import load_weekly_review
+    data = load_weekly_review(key)
+    if data is None:
+        raise HTTPException(status_code=404, detail=f"No weekly review found for {key}")
+    return data
+
+@app.post("/api/weekly-reviews/generate-now")
+def generate_weekly_now(user: str = Depends(get_current_user)):
+    from core.journal import save_weekly_review
+    path = save_weekly_review()
+    return {"status": "saved", "path": path}
+
 
 @app.get("/api/settings")
 def get_settings(user: str = Depends(get_current_user)):
