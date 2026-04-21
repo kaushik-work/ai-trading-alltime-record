@@ -554,7 +554,8 @@ class AngelFetcher:
             ), None)
 
             if match is None:
-                # Exact strike not found — find nearest available strike for this expiry
+                # Exact strike not found — find nearest available strike for this expiry.
+                # Hard limit: only accept strikes within 200 pts of requested (prevents deep ITM/OTM accidents).
                 available = [
                     int(float(i.get("strike", 0)))
                     for i in instruments
@@ -563,11 +564,20 @@ class AngelFetcher:
                     and i.get("symbol", "").endswith(option_type)
                     and _parse_expiry(i.get("expiry", "")) == expiry
                 ]
+                logger.info("get_option_ltp: available strikes for %s %s %s: %s",
+                            symbol, expiry, option_type, sorted(available))
                 if available:
                     nearest = min(available, key=lambda s: abs(s - strike))
+                    deviation = abs(nearest - strike)
+                    if deviation > 200:
+                        logger.error(
+                            "get_option_ltp: nearest strike %d is %d pts from %d for %s %s — refusing (max 200)",
+                            nearest, deviation, strike, symbol, expiry,
+                        )
+                        return None, None
                     logger.warning(
                         "get_option_ltp: strike %d not in master for %s %s — using nearest %d (diff %d pts)",
-                        strike, symbol, expiry, nearest, abs(nearest - strike),
+                        strike, symbol, expiry, nearest, deviation,
                     )
                     match = next((
                         i for i in instruments
@@ -577,32 +587,6 @@ class AngelFetcher:
                         and i.get("symbol", "").endswith(option_type)
                         and _parse_expiry(i.get("expiry", "")) == expiry
                     ), None)
-
-            if match is None:
-                # Last resort: try any upcoming expiry with nearest strike
-                today = date.today()
-                all_upcoming = [
-                    i for i in instruments
-                    if i.get("name") == symbol
-                    and i.get("instrumenttype") == "OPTIDX"
-                    and i.get("symbol", "").endswith(option_type)
-                    and _parse_expiry(i.get("expiry", "")) is not None
-                    and _parse_expiry(i.get("expiry", "")) >= today
-                ]
-                if all_upcoming:
-                    match = min(
-                        all_upcoming,
-                        key=lambda i: (
-                            _parse_expiry(i["expiry"]),
-                            abs(int(float(i.get("strike", 0))) - strike),
-                        ),
-                    )
-                    used_strike = int(float(match.get("strike", 0)))
-                    used_expiry = _parse_expiry(match["expiry"])
-                    logger.warning(
-                        "get_option_ltp: fallback to nearest strike %d exp %s for %s %s",
-                        used_strike, used_expiry, symbol, option_type,
-                    )
 
             if match is None:
                 logger.warning("get_option_ltp: no instrument for %s %s %d %s",
