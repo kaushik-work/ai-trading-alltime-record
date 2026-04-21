@@ -232,8 +232,13 @@ class AngelFetcher:
             logger.warning("AngelFetcher._candle_data empty response for %s %s", token, angel_interval)
             return None
         except Exception as e:
-            logger.warning("AngelFetcher._candle_data: %s", e)
-            self._api = None
+            msg = str(e)
+            logger.warning("AngelFetcher._candle_data: %s", msg)
+            # Only invalidate session for genuine auth errors — NOT for rate limiting.
+            # "Access denied because of exceeding access rate" is transient; nuking _api
+            # here caused the TOKEN EXPIRED death spiral.
+            if "Invalid Token" in msg or "Unauthorized" in msg or "AG8001" in msg:
+                self._api = None
             return None
 
     @staticmethod
