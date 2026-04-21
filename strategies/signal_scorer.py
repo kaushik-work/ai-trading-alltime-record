@@ -167,13 +167,30 @@ def score_symbol(indicators: dict, oi_data: dict, patterns: dict,
     macd     = indicators.get("macd", 0)
     macd_sig = indicators.get("macd_signal", 0)
     macd_hist = indicators.get("macd_histogram", 0)
-    sma20    = indicators.get("sma_20", price)
-    sma50    = indicators.get("sma_50", price)
-    ema9     = indicators.get("ema_9", price)
     vol_ratio = indicators.get("volume_ratio", 1.0)
     bb_upper = indicators.get("bollinger_upper", price * 1.02)
     bb_lower = indicators.get("bollinger_lower", price * 0.98)
     chg_pct  = indicators.get("change_pct", 0)
+
+    # ── Intraday MAs for atr_only mode ────────────────────────────────────────
+    # Daily SMA50/SMA20/EMA9 reflect a multi-month trend (NIFTY above daily SMA50
+    # for months = permanent +4 bullish headstart that blocks all PE signals).
+    # In atr_only mode, compute these from 5m bars so they reflect today's trend.
+    if mode == "atr_only" and df_5m is not None and len(df_5m) >= 50:
+        try:
+            import pandas as pd
+            _c = df_5m["Close"].astype(float) if "Close" in df_5m.columns else df_5m.iloc[:, 3].astype(float)
+            sma20 = float(_c.rolling(20).mean().iloc[-1])
+            sma50 = float(_c.rolling(50).mean().iloc[-1])
+            ema9  = float(_c.ewm(span=9, adjust=False).mean().iloc[-1])
+        except Exception:
+            sma20 = indicators.get("sma_20", price)
+            sma50 = indicators.get("sma_50", price)
+            ema9  = indicators.get("ema_9", price)
+    else:
+        sma20 = indicators.get("sma_20", price)
+        sma50 = indicators.get("sma_50", price)
+        ema9  = indicators.get("ema_9", price)
 
     # ── 1. Primary Trend — SMA50 (AishDoc: always trade with the trend) ───────
     if price > sma50:
