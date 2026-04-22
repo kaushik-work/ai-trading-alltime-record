@@ -197,6 +197,17 @@ class TradeMemory:
             """, (underlying, f"{today}T00:00:00")).fetchone()
         return row is not None
 
+    def close_open_underlying_today(self, underlying: str, close_reason: str = "manual") -> int:
+        """Mark all unclosed BUY rows for this underlying today as manually closed. Returns rows updated."""
+        today = today_ist()
+        with get_connection() as conn:
+            cur = conn.execute("""
+                UPDATE trades SET closed_at = ?, exit_remark = ?
+                WHERE underlying = ? AND side = 'BUY' AND closed_at IS NULL
+                  AND timestamp >= ?
+            """, (now_ist().isoformat(), close_reason, underlying, f"{today}T00:00:00"))
+            return cur.rowcount
+
     def get_trades_for_symbol(self, symbol: str, limit: int = 20) -> list:
         """Get recent trades for a symbol — used as context for Claude."""
         with get_connection() as conn:

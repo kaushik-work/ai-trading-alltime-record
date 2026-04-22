@@ -78,7 +78,7 @@ class AngelFetcher:
             "feed_token":    v.get("ANGEL_FEED_TOKEN", ""),
         }
 
-    _LOGIN_RETRY_SECS = 600  # retry failed login after 10 minutes
+    _LOGIN_RETRY_SECS = 120  # retry failed login after 2 minutes
 
     def _ensure_logged_in(self) -> bool:
         """
@@ -234,11 +234,11 @@ class AngelFetcher:
         except Exception as e:
             msg = str(e)
             logger.warning("AngelFetcher._candle_data: %s", msg)
-            # Only invalidate session for genuine auth errors — NOT for rate limiting.
-            # "Access denied because of exceeding access rate" is transient; nuking _api
-            # here caused the TOKEN EXPIRED death spiral.
-            if "Invalid Token" in msg or "Unauthorized" in msg or "AG8001" in msg:
-                self._api = None
+            # Invalidate session on auth errors AND on JSON parse failures
+            # (Angel One returns HTML when session expires — smartapi raises parse error)
+            if ("Invalid Token" in msg or "Unauthorized" in msg or "AG8001" in msg
+                    or "parse" in msg.lower() or "json" in msg.lower()):
+                self._invalidate_token()
             return None
 
     @staticmethod

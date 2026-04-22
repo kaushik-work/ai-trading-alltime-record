@@ -26,10 +26,22 @@ _PRODUCT_MAP = {
 
 # Angel One variety mapping
 _VARIETY_MAP = {
-    "regular": "NORMAL",
-    "amo":     "AMO",
-    "NORMAL":  "NORMAL",
-    "AMO":     "AMO",
+    "regular":  "NORMAL",
+    "amo":      "AMO",
+    "stoploss": "STOPLOSS",
+    "NORMAL":   "NORMAL",
+    "AMO":      "AMO",
+    "STOPLOSS": "STOPLOSS",
+}
+
+# Angel One order type mapping
+_ORDER_TYPE_MAP = {
+    "MARKET":          "MARKET",
+    "LIMIT":           "LIMIT",
+    "SL-M":            "STOPLOSS_MARKET",
+    "SL":              "STOPLOSS_LIMIT",
+    "STOPLOSS_MARKET": "STOPLOSS_MARKET",
+    "STOPLOSS_LIMIT":  "STOPLOSS_LIMIT",
 }
 
 
@@ -159,6 +171,7 @@ class AngelOneBroker:
     def __init__(self):
         from data.angel_fetcher import AngelFetcher
         self._fetcher = AngelFetcher.get()
+        self._last_positions_ok = False  # True after a successful get_positions call
         if not self._fetcher._ensure_logged_in():
             raise RuntimeError(
                 "Angel One login failed. Check ANGEL_API_KEY / ANGEL_CLIENT_ID / "
@@ -175,6 +188,9 @@ class AngelOneBroker:
 
     def _angel_variety(self, variety: str) -> str:
         return _VARIETY_MAP.get(variety, "NORMAL")
+
+    def _angel_order_type(self, order_type: str) -> str:
+        return _ORDER_TYPE_MAP.get(order_type, order_type)
 
     def get_quote(self, symbol: str) -> dict:
         price = self._fetcher.get_index_ltp(symbol)
@@ -298,16 +314,18 @@ class AngelOneBroker:
             if not token and exchange == "NFO":
                 raise RuntimeError(f"Angel One symboltoken not found for {symbol} — is it in the instrument master?")
 
+            angel_order_type = self._angel_order_type(order_type)
+            is_limit_type = angel_order_type in ("LIMIT", "STOPLOSS_LIMIT")
             params = {
                 "variety":         self._angel_variety(variety),
                 "tradingsymbol":   symbol,
                 "symboltoken":     token or "",
                 "transactiontype": side,
                 "exchange":        exchange,
-                "ordertype":       order_type,
+                "ordertype":       angel_order_type,
                 "producttype":     self._angel_product(product),
                 "duration":        validity,
-                "price":           str(price) if order_type == "LIMIT" else "0",
+                "price":           str(price) if is_limit_type else "0",
                 "quantity":        str(quantity),
             }
             if trigger_price:
@@ -349,6 +367,7 @@ class AngelOneBroker:
             return _positions_cache["result"]
         try:
             if self._api is None:
+                self._last_positions_ok = False
                 return {}
             resp = self._api.position()
             if resp and resp.get("status") and resp.get("data"):
@@ -364,11 +383,23 @@ class AngelOneBroker:
                     }
                 _positions_cache["result"] = result
                 _positions_cache["ts"] = _time.time()
+                self._last_positions_ok = True
                 return result
+            # Empty/null data but valid response → no open positions
+            if resp and resp.get("status"):
+                _positions_cache["result"] = {}
+                _positions_cache["ts"] = _time.time()
+                self._last_positions_ok = True
+                return {}
         except Exception as e:
-            logger.error("AngelOneBroker.get_positions: %s", e)
+            msg = str(e)
+            logger.error("AngelOneBroker.get_positions: %s", msg)
             from core.angel_error_log import log_error as _log_err
-            _log_err("get_positions", str(e))
+            _log_err("get_positions", msg)
+            # Angel One returns HTML when session expires — smartapi raises JSON parse error
+            if "parse" in msg.lower() or "json" in msg.lower() or "Unauthorized" in msg or "AG8001" in msg:
+                self._fetcher._invalidate_token()
+        self._last_positions_ok = False
         return {}
 
     def get_portfolio_summary(self) -> dict:

@@ -486,7 +486,7 @@ class TrendStrategy:
                         option_symbol, "SELL", quantity,
                         order_type="SL-M", trigger_price=sl_trigger,
                         exchange="NFO", product="MIS",
-                        variety="regular", validity="DAY",
+                        variety="stoploss", validity="DAY",
                         tag=f"SL-{self.strategy_name[:14]}",
                     )
                     if sl_ord.get("order_id"):
@@ -623,6 +623,19 @@ class TrendStrategy:
             avg_price = raw.get("avg_price", raw.get("average_price", raw.get("buy_price", 0)))
             return {**raw, **self._parse_option_meta(tradingsymbol, underlying),
                     "quantity": qty, "avg_price": avg_price}
+
+        # Reconcile: DB says open but broker has no position and fetch was successful.
+        # This means the position was manually closed on Angel One — update DB so
+        # the bot doesn't block new entries for the rest of the day.
+        positions_ok = getattr(self.broker, "_last_positions_ok", False)
+        if positions_ok and self.memory.has_open_underlying_today(underlying):
+            rows = self.memory.close_open_underlying_today(underlying, close_reason="manual_close_detected")
+            if rows:
+                logger.warning(
+                    "[%s] %s: position gone from broker but open in DB (%d row(s)) — "
+                    "marked as manually closed. Bot is unblocked for new entries.",
+                    self.strategy_name, underlying, rows,
+                )
         return None
 
     def _consume_force_trade(self, symbol: str, indicators: dict) -> Optional[dict]:
