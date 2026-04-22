@@ -33,6 +33,22 @@ def _is_market_hours() -> bool:
     return dtime(9, 15) <= t <= dtime(15, 30)
 
 
+def _calc_vix_lots(vix: float) -> int:
+    """Return recommended lots based on India VIX at market open.
+
+    Per Mu Hat research: VIX spikes (>30) are historically the best entry
+    windows — returns +32.5% avg over next 3M. So we don't block, we scale down.
+    """
+    if vix is None or vix < 20:
+        return 3   # calm / normal vol — full size
+    elif vix < 25:
+        return 2   # elevated
+    elif vix < 40:
+        return 1   # high / spike — trade light, stay in
+    else:
+        return 1   # extreme panic — minimum, don't block
+
+
 def _is_event_blocked() -> bool:
     """Return True if today is blocked (config or runtime) and not explicitly unblocked."""
     today_str = now_ist().date().isoformat()
@@ -162,6 +178,8 @@ class BotRunner:
         self.scheduler.add_job(self._reset_day_bias, "cron", hour=20, minute=0, id="bias_reset")
         # Angel One trade book sync — every 5 minutes during market hours
         self.scheduler.add_job(self._sync_angel_trades, "cron", minute="*/5", second=45, id="angel_sync")
+        # VIX auto-lots — fetch VIX at 9:30 IST and set min_lots for the day
+        self.scheduler.add_job(self._vix_auto_lots_set, "cron", hour=9, minute=30, id="vix_auto_lots")
 
         self.scheduler.start()
         logger.info(
@@ -385,6 +403,29 @@ class BotRunner:
             logger.info("Day bias reset to NEUTRAL for tomorrow.")
         except Exception as e:
             logger.error("Bias reset failed: %s", e)
+
+    async def _vix_auto_lots_set(self):
+        """Fetch India VIX at 9:30 IST and auto-set min_lots for the day.
+
+        Uses _calc_vix_lots() to map VIX level to a recommended position size.
+        Writes to settings.json so the header dropdown reflects it immediately.
+        User can override the dropdown at any time — this just sets the default.
+        """
+        try:
+            from data.angel_fetcher import AngelFetcher
+            loop = asyncio.get_event_loop()
+            vix = await loop.run_in_executor(None, AngelFetcher.get().fetch_vix)
+            if vix is None:
+                logger.warning("VIX auto-lots: could not fetch India VIX at open — skipping")
+                return
+            recommended = _calc_vix_lots(vix)
+            ipc.write_settings({"min_lots": recommended, "vix_at_open": round(vix, 2), "vix_auto_lots": recommended})
+            logger.info(
+                "VIX auto-lots: India VIX=%.2f → %d lot%s set for today",
+                vix, recommended, "s" if recommended != 1 else "",
+            )
+        except Exception as e:
+            logger.error("VIX auto-lots failed: %s", e)
 
     # ── trade helpers ─────────────────────────────────────────────────────────
 

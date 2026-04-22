@@ -145,7 +145,7 @@ export default function Home() {
 
   return (
     <div className="min-h-screen bg-[#f0f2f5] flex flex-col">
-      <Header mode={mode} connected={connected} botStatus={botStatus} onBotToggle={handleBotToggle} errorCount={errorCount} />
+      <Header mode={mode} connected={connected} botStatus={botStatus} onBotToggle={handleBotToggle} errorCount={errorCount} settings={settingsData} />
 
       {/* Main — full width */}
       <div className="flex-1 overflow-y-auto">

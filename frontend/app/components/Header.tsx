@@ -10,22 +10,21 @@ interface Props {
   botStatus: string;
   onBotToggle: () => void;
   errorCount?: number;
+  settings?: { min_lots?: number; vix_at_open?: number | null; vix_auto_lots?: number | null };
 }
 
-export default function Header({ mode, connected, botStatus, onBotToggle, errorCount = 0 }: Props) {
+export default function Header({ mode, connected, botStatus, onBotToggle, errorCount = 0, settings }: Props) {
   const router = useRouter();
   const [menuOpen, setMenuOpen]     = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
   const [lots, setLots]             = useState(1);
 
+  // Sync lots from WebSocket settings (live updates as auto-lots fires at 9:30)
   useEffect(() => {
-    const token = localStorage.getItem("aq_token");
-    if (!token) return;
-    fetch(`${API_URL}/api/settings`, { headers: { Authorization: `Bearer ${token}` } })
-      .then(r => r.ok ? r.json() : null)
-      .then(d => { if (d?.min_lots) setLots(d.min_lots); })
-      .catch(() => {});
-  }, []);
+    if (settings?.min_lots !== undefined) {
+      setLots(settings.min_lots);
+    }
+  }, [settings?.min_lots]);
 
   async function saveLots(n: number) {
     setLots(n);
@@ -117,18 +116,43 @@ export default function Header({ mode, connected, botStatus, onBotToggle, errorC
       {/* Right — actions */}
       <div className="flex items-center gap-2 md:gap-3">
 
-        {/* Lots dropdown */}
+        {/* Lots dropdown + VIX badge */}
         <div className="flex items-center gap-1.5">
-          <span className="text-[10px] font-bold text-gray-400 hidden sm:inline">LOTS</span>
-          <select
-            value={lots}
-            onChange={e => saveLots(Number(e.target.value))}
-            className="text-xs font-bold border border-gray-200 rounded-lg px-2 py-1.5 bg-white text-gray-700 cursor-pointer focus:outline-none focus:border-indigo-400"
-          >
-            {[1, 2, 3, 4, 5].map(n => (
-              <option key={n} value={n}>{n} {n === 1 ? "Lot" : "Lots"}</option>
-            ))}
-          </select>
+          <div className="flex flex-col items-end gap-0.5">
+            <div className="flex items-center gap-1.5">
+              <span className="text-[10px] font-bold text-gray-400 hidden sm:inline">LOTS</span>
+              <select
+                value={lots}
+                onChange={e => saveLots(Number(e.target.value))}
+                className="text-xs font-bold border border-gray-200 rounded-lg px-2 py-1.5 bg-white text-gray-700 cursor-pointer focus:outline-none focus:border-indigo-400"
+              >
+                {[1, 2, 3, 4, 5].map(n => (
+                  <option key={n} value={n}>{n} {n === 1 ? "Lot" : "Lots"}</option>
+                ))}
+              </select>
+            </div>
+            {/* VIX auto-lots indicator */}
+            {settings?.vix_at_open != null && (
+              <div className="flex items-center gap-1 hidden sm:flex">
+                <span
+                  className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
+                  style={
+                    settings.vix_at_open >= 30 ? { background: "#fee2e2", color: "#b91c1c" } :
+                    settings.vix_at_open >= 25 ? { background: "#fef3c7", color: "#b45309" } :
+                    settings.vix_at_open >= 20 ? { background: "#fef9c3", color: "#854d0e" } :
+                                                  { background: "#dcfce7", color: "#15803d" }
+                  }
+                >
+                  VIX {settings.vix_at_open.toFixed(1)}
+                </span>
+                {lots === settings.vix_auto_lots ? (
+                  <span className="text-[9px] font-semibold text-indigo-500">AUTO</span>
+                ) : (
+                  <span className="text-[9px] font-semibold text-orange-500">OVERRIDE</span>
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Session — always visible */}
