@@ -65,7 +65,24 @@
       "Bash(\"c:/Users/rkkau/Desktop/github/ai-trading-alltime-record/.venv/Scripts/python.exe\" -m py_compile \"c:/Users/rkkau/Desktop/github/ai-trading-alltime-record/api/server.py\")",
       "Bash(cmd /c '\"c:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\.venv\\\\Scripts\\\\python.exe\" -m py_compile \"c:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\data\\\\option_chain.py\" && echo option_chain OK')",
       "Bash(cmd /c \"c:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\.venv\\\\Scripts\\\\python.exe -m py_compile c:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\data\\\\option_chain.py && echo option_chain OK && c:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\.venv\\\\Scripts\\\\python.exe -m py_compile c:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\strategies\\\\signal_scorer.py && echo signal_scorer OK && c:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\.venv\\\\Scripts\\\\python.exe -m py_compile c:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\strategies\\\\trend_strategy.py && echo trend_strategy OK && c:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\.venv\\\\Scripts\\\\python.exe -m py_compile c:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\core\\\\bot_runner.py && echo bot_runner OK && c:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\.venv\\\\Scripts\\\\python.exe -m py_compile c:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\api\\\\server.py && echo server OK\")",
-      "Bash(cmd /c \"c:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\.venv\\\\Scripts\\\\python.exe -c \\\\\"import ast; ast.parse\\(open\\('c:/Users/rkkau/Desktop/github/ai-trading-alltime-record/data/option_chain.py'\\).read\\(\\)\\); print\\('option_chain OK'\\)\\\\\"\")"
+      "Bash(cmd /c \"c:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\.venv\\\\Scripts\\\\python.exe -c \\\\\"import ast; ast.parse\\(open\\('c:/Users/rkkau/Desktop/github/ai-trading-alltime-record/data/option_chain.py'\\).read\\(\\)\\); print\\('option_chain OK'\\)\\\\\"\")",
+      "Bash(.venv/Scripts/python scripts/backtest_live_atr.py --months 2026-01,2026-02,2026-03)",
+      "Bash(python scripts/backtest_live_atr.py --months 2026-01,2026-02,2026-03)",
+      "Bash(.venv/Scripts/python.exe scripts/backtest_live_atr.py --months 2026-01,2026-02,2026-03)",
+      "Bash(where python3 *)",
+      "Bash(where py *)",
+      "Bash(ls /c/Python*)",
+      "Read(//c//**)",
+      "Bash(uv run *)",
+      "Bash(uv --version)",
+      "Bash(/c/Users/rkkau/AppData/Local/uv/uv.exe run *)",
+      "Bash(\"/c/Users/rkkau/pipx/shared/Scripts/python.exe\" --version)",
+      "Bash(xargs -I{} sh -c '\"{}\" --version 2>&1 | grep -q \"Python 3\" && echo \"{}\"')",
+      "Bash(/c/Users/rkkau/.local/bin/uv.exe run *)",
+      "Bash(ssh -o StrictHostKeyChecking=no root@thegaintcompany.com 'cd /root/ai-trading-alltime-record && docker compose exec -T api python -c \" *)",
+      "Bash(ssh -o StrictHostKeyChecking=no -o PasswordAuthentication=yes root@143.110.255.107 \"echo connected\")",
+      "WebFetch(domain:muhat.com)",
+      "WebFetch(domain:quantscience.io)"
     ]
   }
 }
