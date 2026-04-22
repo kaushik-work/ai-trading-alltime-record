@@ -43,8 +43,10 @@ parser.add_argument("--sell",       action="store_true",
 parser.add_argument("--trail",      action="store_true",
                     help="Use trailing SL (trails with best premium seen)")
 parser.add_argument("--mode",       type=str, default="atr_only",
-                    choices=["atr_only", "ict_only", "full"],
+                    choices=["atr_only", "full"],
                     help="Scorer mode (default: atr_only)")
+parser.add_argument("--lots",       type=int, default=None,
+                    help="Number of lots per trade (overrides config MIN_LOTS)")
 args = parser.parse_args()
 
 import config
@@ -57,7 +59,7 @@ MIN_OPTION_PREM  = config.MIN_OPTION_PREMIUM      # 150
 MAX_OPTION_PREM  = config.MAX_OPTION_PREMIUM      # 170
 SIGNAL_THRESHOLD = config.MIN_SIGNAL_SCORE        # 6
 LOT_SIZE         = config.LOT_SIZES["NIFTY"]  # 65
-MIN_LOTS         = config.MIN_LOTS            # 3
+MIN_LOTS         = args.lots if args.lots is not None else config.MIN_LOTS
 MAX_DAILY_LOSS   = config.MAX_DAILY_LOSS      # 6250
 TRADE_START      = time(9, 45)
 TRADE_EXIT       = time(15, 10)
@@ -69,7 +71,7 @@ TARGET_MONTHS = (
     if args.months
     else (
         [args.date[:7]] if args.date
-        else ["2026-01", "2026-02", "2026-03"]
+        else ["2026-01", "2026-02", "2026-03", "2026-04"]
     )
 )
 

@@ -10,27 +10,15 @@ const WS_URL  = _API.replace(/^http/, "ws") + "/ws";
 const STRATEGIES = [
   {
     name: "ATR Intraday",
-    tag: "1",
+    tag: "ATR",
     symbols: ["NIFTY"],
     timeframe: "5m",
     status: "active",
-    description: "VWAP + ORB + PDH/PDL + SMA/EMA/RSI/MACD. Score -10 to +10, threshold ≥6. Claude AI confirms entry.",
-    target: "+298%",
+    description: "VWAP + ORB + PDH/PDL + SMA/EMA/RSI/MACD. Score -10 to +10, threshold ≥6. ATR/2 SL, 1:3 R:R, ₹150–170 strikes. +215% Jan–Apr 2026.",
+    target: "+215%",
     rr: "1:3.0",
     risk: "2%",
     color: "indigo",
-  },
-  {
-    name: "ICT — OB + Sweep",
-    tag: "C",
-    symbols: ["NIFTY"],
-    timeframe: "5m",
-    status: "active",
-    description: "Delta direction + Trendline channel (HPS-T) + ICT Order Blocks & Liquidity Sweeps. Best WR 52.8%, lowest DD 6.7% across 90-day backtest.",
-    target: "+365%",
-    rr: "1:2.5",
-    risk: "2%",
-    color: "violet",
   },
 ];
 
@@ -277,8 +265,8 @@ export default function Home() {
             {/* Today's Strategy P&L — always show both cards */}
             <div className="w-full md:flex-1">
               <div className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">Today's Strategy P&L</div>
-              <div className="grid grid-cols-2 gap-3">
-                {(["ATR Intraday", "C-ICT"] as const).map(name => {
+              <div className="grid grid-cols-1 gap-3">
+                {(["ATR Intraday"] as const).map(name => {
                   const s: any = strategySummary[name] ?? { pnl: 0, trades: 0, wins: 0, losses: 0 };
                   return (
                     <div key={name} className="bg-white rounded-xl border border-gray-200 p-3">
@@ -601,7 +589,9 @@ export default function Home() {
 }
 
 function AngelTradesPanel({ trades }: { trades: any[] }) {
-  if (trades.length === 0) return null;
+  // Filter out zero-price / zero-qty entries (stale or rejected orders)
+  const valid = trades.filter((t: any) => Number(t.price) > 0 && Number(t.quantity) > 0);
+  if (valid.length === 0) return null;
   return (
     <div>
       <div className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">
@@ -620,7 +610,7 @@ function AngelTradesPanel({ trades }: { trades: any[] }) {
             </tr>
           </thead>
           <tbody>
-            {trades.map((t: any, i: number) => (
+            {valid.map((t: any, i: number) => (
               <tr key={i} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
                 <td className="px-4 py-2 font-semibold text-indigo-600">{t.symbol}</td>
                 <td className="px-4 py-2">

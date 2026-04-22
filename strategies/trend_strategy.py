@@ -55,7 +55,6 @@ class TrendStrategy:
         self.stop_loss_pct = config.STOP_LOSS_PCT
         _rr_map = {
             "atr_only": getattr(config, "ATR_RR_RATIO", 3.0),
-            "ict_only": getattr(config, "ICT_RR_RATIO", 2.5),
         }
         self.rr_ratio = _rr_map.get(score_mode, getattr(config, "ATR_RR_RATIO", 3.0))
         self.take_profit_pct = config.STOP_LOSS_PCT * self.rr_ratio

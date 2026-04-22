@@ -240,7 +240,6 @@ export default function DebugPage() {
         <div className="space-y-4">
           {[
             { name: "ATR Intraday", tag: "ATR", color: "#6366f1", bg: "#eef2ff", interval: "5m", type: "Technical (sections 1–11)", vixEndpoint: "/api/bot/vix-override/atr", vixKey: "vix_override_atr", display: "atr" },
-            { name: "C-ICT",        tag: "ICT", color: "#0891b2", bg: "#e0f2fe", interval: "5m", type: "Order Blocks + Liquidity",   vixEndpoint: "/api/bot/vix-override/ict", vixKey: "vix_override_ict", display: "ict" },
           ].map(({ name, tag, color, bg, interval, type, vixEndpoint, vixKey, display }) => {
             const s = strategies[name];
             const vixOn: boolean = vixKey ? (data?.[vixKey] ?? false) : false;

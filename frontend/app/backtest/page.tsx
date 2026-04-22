@@ -103,14 +103,12 @@ export default function BacktestPage() {
             <div>
               <label className="text-xs text-gray-500 uppercase tracking-widest font-semibold mb-1.5 block">Strategy</label>
               <select value={strategy} onChange={e => {
-                const s = e.target.value;
-                setStrategy(s);
+                setStrategy(e.target.value);
                 setInterval("5m");
-                setMinScore(s === "C-ICT" ? 2 : 6);
-                setRrRatio(s === "C-ICT" ? 2.5 : 3.0);
+                setMinScore(6);
+                setRrRatio(3.0);
               }} className="aq-input">
                 <option>ATR Intraday</option>
-                <option>C-ICT</option>
               </select>
             </div>
             <div>
@@ -146,11 +144,11 @@ export default function BacktestPage() {
               <label className="text-xs text-gray-500 uppercase tracking-widest font-semibold mb-1.5 block">
                 Min Signal Score: <span className="text-indigo-600">{minScore}</span>
               </label>
-              <input type="range" min={strategy === "C-ICT" ? 1 : 4} max={strategy === "C-ICT" ? 4 : 9}
+              <input type="range" min={4} max={9}
                      value={minScore} onChange={e => setMinScore(Number(e.target.value))}
                      className="w-full accent-indigo-600" />
               <div className="flex justify-between text-xs text-gray-400 mt-0.5">
-                <span>{strategy === "C-ICT" ? 1 : 4}</span><span>{strategy === "C-ICT" ? 4 : 9}</span>
+                <span>4</span><span>9</span>
               </div>
             </div>
             <div>

@@ -35,36 +35,6 @@ const STRATEGIES = [
       { label: "Multiple pattern confluence", pts: "±1.0" },
     ],
   },
-  {
-    id: "of-ict",
-    name: "ICT — Order Blocks + Sweep",
-    tag: "C",
-    color: "#7c3aed",
-    bg: "#f5f3ff",
-    tagline: "Delta + TL + ICT Confluence",
-    timeframe: "5m",
-    rr: "1 : 2.5",
-    maxTrades: 2,
-    window: "9:45–15:10 (no lunch 12:30–13:30)",
-    threshold: 2,
-    description: "The strongest strategy — combines Delta Direction, Trendline Channel (DP Sir HPS-T), and ICT concepts (Order Blocks + Liquidity Sweeps). Backtest: +365% in 90 days, 52.8% WR, 6.7% max DD. All 4 months profitable with ≤11% drawdown.",
-    howItWorks: [
-      { icon: "🏦", title: "Order Block (OB)", desc: "Last bearish candle before a bullish impulse = Bullish OB. When price retests that zone → institutions defending their long position → +1." },
-      { icon: "🎯", title: "Liquidity Sweep (SSL/BSL)", desc: "Price wicks below prior swing low then closes back above it = SSL sweep. Retail stop-losses were hunted, institutions are now buying → +1." },
-      { icon: "📊", title: "Delta Direction (inherited)", desc: "Session delta + dynamic delta both agree direction → ±2 score. Ensures the full session order flow confirms before ICT signals score." },
-      { icon: "📐", title: "Trendline Channel (HPS-T)", desc: "DP Sir's diagonal trendlines through swing pivots. Price at lower TL (HPS) = rising support +2. Price at upper TL (HRS) = falling resistance -2." },
-      { icon: "✅", title: "Triple Confluence Required", desc: "Delta alone won't trigger. ICT alone won't trigger. All three layers pointing the same direction combined with ATR base signals → score ≥6 → entry." },
-      { icon: "🤖", title: "Claude AI Final Gate", desc: "Raw 5m candles, delta values, OB zone, and trendline levels sent to Claude. AI confirms or vetoes — last quality gate before order placement." },
-    ],
-    scoring: [
-      { label: "SSL sweep (stop hunt → bullish reversal)", pts: "+1" },
-      { label: "BSL sweep (stop hunt → bearish reversal)", pts: "-1" },
-      { label: "Bullish Order Block retest", pts: "+1" },
-      { label: "Bearish Order Block retest", pts: "-1" },
-      { label: "Delta direction (session + dynamic agree)", pts: "±2" },
-      { label: "Trendline channel HPS-T (support/resistance)", pts: "±2" },
-    ],
-  },
 ];
 
 export default function StrategiesPage() {
@@ -171,8 +141,7 @@ export default function StrategiesPage() {
             {/* Visual diagram */}
             <div className="bg-white rounded-xl border border-gray-200 p-4">
               <h3 className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-3">Visual Setup</h3>
-              {strat.id === "atr"    && <AtrDiagram />}
-              {strat.id === "of-ict" && <IctDiagram />}
+              {strat.id === "atr" && <AtrDiagram />}
             </div>
 
             {/* Score breakdown */}
@@ -202,66 +171,6 @@ export default function StrategiesPage() {
   );
 }
 
-/* ── Strategy C — ICT Order Block + Liquidity Sweep diagram ─────────────── */
-function IctDiagram() {
-  return (
-    <div>
-      <svg viewBox="0 0 280 160" className="w-full">
-        <rect width="280" height="160" rx="8" fill="#f5f3ff" />
-
-        {/* Swing low level (liquidity pool) */}
-        <line x1="10" y1="120" x2="270" y2="120" stroke="#7c3aed" strokeWidth="1" strokeDasharray="4 2" />
-        <text x="212" y="118" fontSize="7" fill="#7c3aed">Swing Low</text>
-
-        {/* Order Block zone (last red candle before up move) */}
-        <rect x="58" y="90" width="16" height="30" fill="#7c3aed" fillOpacity="0.15" rx="2" />
-        <text x="28" y="88" fontSize="6" fill="#7c3aed">OB zone</text>
-        <line x1="28" y1="90" x2="58" y2="96" stroke="#7c3aed" strokeWidth="0.8" strokeDasharray="2 2" />
-
-        {/* Candles — normal price action */}
-        {[
-          { x: 20,  o: 95, c: 100, h: 92,  l: 103, bull: true  },
-          { x: 40,  o: 99, c: 96,  h: 94,  l: 102, bull: false },
-          { x: 60,  o: 97, c: 92,  h: 90,  l: 100, bull: false }, // OB candle (red)
-          { x: 80,  o: 91, c: 88,  h: 86,  l: 93,  bull: false }, // sweep wick below swing low
-          { x: 100, o: 89, c: 95,  h: 86,  l: 97,  bull: true  }, // close back above → SSL
-          { x: 120, o: 94, c: 100, h: 92,  l: 102, bull: true  },
-          { x: 140, o: 99, c: 105, h: 97,  l: 107, bull: true  },
-          { x: 160, o: 104, c: 110, h: 102, l: 112, bull: true },
-        ].map((c, i) => {
-          const color = c.bull ? "#10b981" : "#ef4444";
-          const top = Math.min(c.o, c.c); const bh = Math.max(Math.abs(c.o - c.c), 2);
-          return (
-            <g key={i}>
-              <line x1={c.x+7} y1={c.h} x2={c.x+7} y2={c.l} stroke={color} strokeWidth="1" />
-              <rect x={c.x+3} y={top} width="8" height={bh} fill={color} rx="1" />
-            </g>
-          );
-        })}
-
-        {/* SSL sweep annotation */}
-        <line x1="84" y1="86" x2="84" y2="80" stroke="#ef4444" strokeWidth="1" />
-        <text x="88" y="79" fontSize="6" fill="#ef4444">SSL sweep ↓</text>
-        <line x1="104" y1="86" x2="104" y2="80" stroke="#10b981" strokeWidth="1.5" />
-        <text x="108" y="79" fontSize="6" fill="#10b981">Close above →</text>
-
-        {/* Entry arrow */}
-        <line x1="122" y1="92" x2="122" y2="75" stroke="#7c3aed" strokeWidth="2" />
-        <polygon points="122,70 118,78 126,78" fill="#7c3aed" />
-        <text x="128" y="75" fontSize="7" fill="#7c3aed" fontWeight="bold">BUY</text>
-
-        {/* Score box */}
-        <rect x="195" y="95" width="78" height="54" rx="4" fill="#fff" stroke="#ede9fe" />
-        <text x="203" y="107" fontSize="6" fill="#6b7280">ICT Score</text>
-        <text x="203" y="118" fontSize="7" fill="#7c3aed">SSL sweep  +1</text>
-        <text x="203" y="128" fontSize="7" fill="#7c3aed">OB retest  +1</text>
-        <text x="203" y="138" fontSize="7" fill="#7c3aed">Delta       +2</text>
-        <text x="203" y="148" fontSize="7" fill="#7c3aed">TL (HPS-T) +2</text>
-      </svg>
-      <p className="text-[10px] text-gray-400 text-center mt-1">SSL sweep + OB retest + delta + trendline → entry signal</p>
-    </div>
-  );
-}
 
 /* ── (removed) Delta diagram — Strategy A retired ────────────────────────── */
 function DeltaDiagram() {

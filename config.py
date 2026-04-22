@@ -61,7 +61,6 @@ STOP_LOSS_PCT   = 1.5    # % of option premium — SL trigger for all strategies
 
 # Per-strategy R:R ratios (TP = STOP_LOSS_PCT × ratio)
 ATR_RR_RATIO    = 3.0    # ATR Intraday  → 1:3  (TP = 4.5%)
-ICT_RR_RATIO    = 2.5    # C-ICT         → 1:2.5 (TP = 3.75%)
 TAKE_PROFIT_PCT = STOP_LOSS_PCT * ATR_RR_RATIO  # 4.5% — alias used by backtest + banner
 
 # ── Option Premium Target Range ───────────────────────────────────────────────

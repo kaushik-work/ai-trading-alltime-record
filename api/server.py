@@ -62,7 +62,7 @@ records = RecordTracker()
 market = RealMarketData()
 
 WATCHLIST = ["NIFTY"]
-STRATEGIES = ["ATR Intraday", "C-ICT"]
+STRATEGIES = ["ATR Intraday"]
 
 # ── Price cache — shared across all WebSocket connections ─────────────────────
 # Without this, 5 open browser tabs × every-5s broadcast = 60 Angel One calls/min
@@ -394,7 +394,7 @@ def token_refresh(user: str = Depends(get_current_user)):
 
 @app.get("/api/bot/debug")
 def bot_debug(user: str = Depends(get_current_user)):
-    """Live signal scores for ATR Intraday + C-ICT strategies — no trades placed."""
+    """Live signal scores for ATR Intraday — no trades placed."""
     from core.bot_runner import _is_market_hours, IST
     runner = get_runner()
     now_ist = datetime.now(IST)
@@ -405,9 +405,9 @@ def bot_debug(user: str = Depends(get_current_user)):
               "latest_order_issue": _latest_order_issue(),
               "strategies": {}}
 
-    # Use last_scores from bot cycles (populated after each ATR/ICT cycle).
+    # Use last_scores from the ATR cycle.
     # Fall back to a live score fetch if the bot hasn't run yet (e.g. first load).
-    for strat_name, score_mode in [("ATR Intraday", "atr_only"), ("C-ICT", "ict_only")]:
+    for strat_name, score_mode in [("ATR Intraday", "atr_only")]:
         if strat_name in runner.last_scores:
             result["strategies"][strat_name] = runner.last_scores[strat_name]
         else:

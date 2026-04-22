@@ -115,7 +115,6 @@ class BotRunner:
         self.memory = TradeMemory()
         self.state = _DailyState()
         self._atr_strategy = None   # lazy-init TrendStrategy (ATR Intraday, atr_only mode)
-        self._ict_strategy = None   # lazy-init TrendStrategy (C-ICT, ict_only mode)
         self.last_heartbeat: Optional[str] = None   # ISO string, IST
         self.last_scores: dict = {}                 # strategy → last signal scores
         self.last_vix: Optional[float] = None       # India VIX, updated each cycle
@@ -149,11 +148,6 @@ class BotRunner:
             self._atr_cycle, "cron", minute="*/5", second=5,
             id="atr_intraday",
         )
-        # C-ICT — 10s after 5m close (Angel One API won't collide with ATR)
-        self.scheduler.add_job(
-            self._ict_cycle, "cron", minute="*/5", second=10,
-            id="ict_intraday",
-        )
         # Paper monitor — 25s after 5m close (after strategies have placed orders)
         self.scheduler.add_job(
             self._paper_monitor, "cron", minute="*/5", second=25,
@@ -183,7 +177,7 @@ class BotRunner:
 
         self.scheduler.start()
         logger.info(
-            "BotRunner started — ATR(5m+5s) C-ICT(5m+10s) "
+            "BotRunner started — ATR(5m+5s) "
             "PaperMon(5m+25s) VIX(15m+20s) ForcePoll(30s)"
         )
 
@@ -224,35 +218,6 @@ class BotRunner:
         except Exception as e:
             logger.error("ATR Intraday cycle: %s", e, exc_info=True)
 
-    # ── C-ICT (Strategy C — ICT Order Blocks + Liquidity) ────────────────────
-
-    async def _ict_cycle(self):
-        self.last_heartbeat = datetime.now(IST).isoformat()
-        if self.paused or not _is_market_hours() or _is_event_blocked():
-            return
-        try:
-            if self._ict_strategy is None:
-                from strategies.trend_strategy import TrendStrategy
-                self._ict_strategy = TrendStrategy(strategy_name="C-ICT", score_mode="ict_only")
-
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, self._ict_strategy.run_watchlist)
-
-            # Update last_scores for the debug/signal-radar endpoint
-            sc = self._ict_strategy.last_score  # {} if strategy hasn't scored yet
-            entry = {
-                "score":      sc.get("score", 0),
-                "direction":  sc.get("action", "HOLD"),
-                "action":     sc.get("action", "HOLD"),
-                "threshold":  sc.get("threshold", 2),
-                "will_trade": abs(sc.get("score", 0)) >= sc.get("threshold", 2),
-                "note":       sc.get("note", "ICT order blocks + liquidity sweeps (section 12)"),
-                "order_flow": sc.get("order_flow", {}),
-            }
-            self.last_scores["C-ICT"] = entry
-            self._paper_seller.on_signal("C-ICT", entry)
-        except Exception as e:
-            logger.error("C-ICT cycle: %s", e, exc_info=True)
 
 
     # ── VIX regime refresh (every 15 min) ────────────────────────────────────
@@ -335,8 +300,6 @@ class BotRunner:
         loop = asyncio.get_event_loop()
         if self._atr_strategy:
             await loop.run_in_executor(None, self._atr_strategy.square_off_all)
-        if self._ict_strategy:
-            await loop.run_in_executor(None, self._ict_strategy.square_off_all)
         # Close all paper comparison positions at EOD
         await loop.run_in_executor(None, self._paper_seller.eod_close)
 
