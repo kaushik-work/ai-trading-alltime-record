@@ -57,13 +57,17 @@ LUNCH_SKIP_START = "12:30"    # NSE choppy window — no new entries
 LUNCH_SKIP_END   = "13:30"
 
 # ── Stop Loss / Take Profit ────────────────────────────────────────────────────
-STOP_LOSS_PCT   = 1.5    # % of underlying price
-TAKE_PROFIT_PCT = 3.75   # 1:2.5 R:R — backtest optimal (+41% A, +151% B vs 1:2.0)
+STOP_LOSS_PCT   = 1.5    # % of option premium — SL trigger for all strategies
+
+# Per-strategy R:R ratios (TP = STOP_LOSS_PCT × ratio)
+ATR_RR_RATIO    = 3.0    # ATR Intraday  → 1:3  (TP = 4.5%)
+ICT_RR_RATIO    = 2.5    # C-ICT         → 1:2.5 (TP = 3.75%)
+FIB_OF_RR_RATIO = 3.0    # Fib-OF        → 1:3  (TP = 4.5%)
+TAKE_PROFIT_PCT = STOP_LOSS_PCT * ATR_RR_RATIO  # 4.5% — alias used by backtest + banner
 
 # ── Signal Score ───────────────────────────────────────────────────────────────
 MIN_SIGNAL_SCORE = 6   # trade only when score ≥ 6 (backtest: 45.2% WR at 6 vs 44.7% at 5)
 FIB_OF_SIGNAL_SCORE = 6
-FIB_OF_RR_RATIO = 3.0
 
 # ── Watchlist ──────────────────────────────────────────────────────────────────
 WATCHLIST = {

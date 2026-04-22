@@ -601,7 +601,54 @@ export default function Home() {
               </div>
             )}
           </div>
+
+          {/* Angel One Trade Book — raw executed fills */}
+          {mode === "live" && (
+            <AngelTradesPanel trades={data?.angel_trades ?? []} />
+          )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+function AngelTradesPanel({ trades }: { trades: any[] }) {
+  if (trades.length === 0) return null;
+  return (
+    <div>
+      <div className="text-xs font-bold text-gray-500 uppercase tracking-widest mb-2">
+        Angel One — Executed Fills
+      </div>
+      <div className="bg-white rounded-xl border border-gray-200 overflow-hidden overflow-x-auto">
+        <table className="w-full text-sm min-w-[600px]">
+          <thead>
+            <tr className="bg-gray-50 border-b border-gray-100">
+              <th className="px-4 py-3 text-left text-xs text-gray-500 font-semibold uppercase">Symbol</th>
+              <th className="px-4 py-3 text-left text-xs text-gray-500 font-semibold uppercase">Side</th>
+              <th className="px-4 py-3 text-right text-xs text-gray-500 font-semibold uppercase">Price</th>
+              <th className="px-4 py-3 text-right text-xs text-gray-500 font-semibold uppercase">Qty</th>
+              <th className="px-4 py-3 text-left text-xs text-gray-500 font-semibold uppercase">Time</th>
+              <th className="px-4 py-3 text-left text-xs text-gray-500 font-semibold uppercase">Order ID</th>
+            </tr>
+          </thead>
+          <tbody>
+            {trades.map((t: any, i: number) => (
+              <tr key={i} className="border-b border-gray-50 hover:bg-gray-50 transition-colors">
+                <td className="px-4 py-2 font-semibold text-indigo-600">{t.symbol}</td>
+                <td className="px-4 py-2">
+                  <span className="text-xs font-bold px-2 py-0.5 rounded-full"
+                    style={{ background: t.side === "BUY" ? "#dcfce7" : "#fee2e2", color: t.side === "BUY" ? "#16a34a" : "#dc2626" }}>
+                    {t.side}
+                  </span>
+                </td>
+                <td className="px-4 py-2 text-right font-medium text-gray-700">₹{Number(t.price).toFixed(2)}</td>
+                <td className="px-4 py-2 text-right text-gray-600">{t.quantity}</td>
+                <td className="px-4 py-2 text-xs text-gray-400">{t.trade_time}</td>
+                <td className="px-4 py-2 text-xs text-gray-400 font-mono">{t.order_id}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
   );

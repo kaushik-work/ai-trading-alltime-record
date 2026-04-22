@@ -310,6 +310,16 @@ class TradeMemory:
                 review,
             ))
 
+    def get_open_trade_for_symbol(self, symbol: str) -> Optional[dict]:
+        """Return the unclosed BUY row for this symbol (any strategy), or None."""
+        with get_connection() as conn:
+            row = conn.execute("""
+                SELECT * FROM trades
+                WHERE symbol = ? AND side = 'BUY' AND closed_at IS NULL
+                ORDER BY timestamp DESC LIMIT 1
+            """, (symbol,)).fetchone()
+        return dict(row) if row else None
+
     def save_market_snapshot(self, symbol: str, data: dict):
         with get_connection() as conn:
             conn.execute("""

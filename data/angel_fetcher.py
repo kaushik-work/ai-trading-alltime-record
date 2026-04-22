@@ -635,6 +635,38 @@ class AngelFetcher:
         match = next((i for i in self._nfo_instruments() if i.get("symbol") == tradingsymbol), None)
         return match["token"] if match else None
 
+    def get_trade_book(self) -> list:
+        """Fetch today's executed trades from Angel One tradeBook API.
+
+        Returns list of dicts with keys: symbol, side, quantity, price, order_id, trade_time, exchange, product.
+        Returns [] on error (never raises).
+        """
+        if not self._ensure_logged_in():
+            return []
+        try:
+            resp = self._api.tradeBook()
+            if not resp or not resp.get("status") or not resp.get("data"):
+                return []
+            trades = []
+            for t in resp["data"]:
+                trades.append({
+                    "symbol":     t.get("tradingsymbol", ""),
+                    "side":       "BUY" if t.get("transactiontype", "").upper() == "BUY" else "SELL",
+                    "quantity":   int(t.get("quantity") or 0),
+                    "price":      float(t.get("tradeprice") or 0),
+                    "order_id":   t.get("orderid", ""),
+                    "trade_time": t.get("tradetime", ""),
+                    "exchange":   t.get("exchange", ""),
+                    "product":    t.get("producttype", ""),
+                })
+            return trades
+        except Exception as e:
+            msg = str(e)
+            logger.error("AngelFetcher.get_trade_book: %s", msg)
+            if "Invalid Token" in msg or "Unauthorized" in msg or "AG8001" in msg or "parse" in msg.lower():
+                self._invalidate_token()
+            return []
+
     # ── NSE equity support (kept for API compat) ──────────────────────────────
 
     def fetch_equity_daily(self, symbol: str, days: int = 365):

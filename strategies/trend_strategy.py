@@ -53,10 +53,13 @@ class TrendStrategy:
         self.records = RecordTracker()
         self.market = get_market_data(self.broker if not config.IS_PAPER else None)
         self.stop_loss_pct = config.STOP_LOSS_PCT
-        self.take_profit_pct = (
-            config.STOP_LOSS_PCT * getattr(config, "FIB_OF_RR_RATIO", 3.0)
-            if score_mode == "fib_of_only" else config.TAKE_PROFIT_PCT
-        )
+        _rr_map = {
+            "atr_only":    getattr(config, "ATR_RR_RATIO",    3.0),
+            "ict_only":    getattr(config, "ICT_RR_RATIO",    2.5),
+            "fib_of_only": getattr(config, "FIB_OF_RR_RATIO", 3.0),
+        }
+        self.rr_ratio = _rr_map.get(score_mode, getattr(config, "ATR_RR_RATIO", 3.0))
+        self.take_profit_pct = config.STOP_LOSS_PCT * self.rr_ratio
         self.paused = False
         self._sl_orders: dict[str, str] = self._load_sl_orders()  # option_symbol → Angel One SL-M order_id
         logger.info(
@@ -289,18 +292,20 @@ class TrendStrategy:
                                     f"Mandatory intraday square-off at {config.INTRADAY_EXIT_BY}",
                                     position=position)
 
-        # ② ATR-based stop-loss — dynamic, adapts to volatility
-        # Use intraday ATR SL level if available, else fall back to fixed %
-        atr_sl_price = None  # Option premium positions must not compare against underlying ATR levels.
-        if atr_sl_price and current_price <= atr_sl_price:
-            logger.warning("ATR STOP-LOSS: %s price ₹%.2f ≤ ATR-SL ₹%.2f — exiting",
-                           symbol, current_price, atr_sl_price)
+        # ② Stop-loss — absolute price from entry (ATR/2 distance stored at trade open)
+        db_trade = self.memory.get_open_trade_for_symbol(position.get("symbol") or position.get("tradingsymbol") or symbol)
+        sl_price = (db_trade or {}).get("sl_price") or position.get("sl_price")
+        tp_price = (db_trade or {}).get("tp_price") or position.get("tp_price")
+
+        if sl_price and option_price <= sl_price:
+            logger.warning("STOP-LOSS: %s option ₹%.2f ≤ SL ₹%.2f — exiting", symbol, option_price, sl_price)
             return self._force_exit(symbol, quantity, indicators,
-                                    f"ATR stop-loss hit: price ₹{current_price:.2f} ≤ ATR-SL ₹{atr_sl_price:.2f}")
-        elif pnl_pct <= -self.stop_loss_pct:
-            logger.warning("STOP-LOSS: %s %.2f%% — exiting", symbol, pnl_pct)
+                                    f"SL hit: ₹{option_price:.2f} ≤ ₹{sl_price:.2f}",
+                                    position=position)
+        elif not sl_price and pnl_pct <= -self.stop_loss_pct:
+            logger.warning("STOP-LOSS (%%): %s %.2f%% — exiting", symbol, pnl_pct)
             return self._force_exit(symbol, quantity, indicators,
-                                    f"Stop-loss hit at {pnl_pct:.2f}% (threshold -{self.stop_loss_pct}%)",
+                                    f"SL hit at {pnl_pct:.2f}%",
                                     position=position)
 
         # ③ VWAP flip — AishDoc: if price crosses below VWAP, exit long
@@ -317,12 +322,20 @@ class TrendStrategy:
                 position=position,
             )
 
-        if pnl_pct >= self.take_profit_pct:
+        if tp_price and option_price >= tp_price:
             return self._force_exit(
                 symbol,
                 quantity,
                 indicators,
-                f"Take-profit hit at {pnl_pct:.2f}% (target {self.take_profit_pct:.2f}%)",
+                f"TP hit: ₹{option_price:.2f} ≥ ₹{tp_price:.2f} (1:{self.rr_ratio:.1f})",
+                position=position,
+            )
+        elif not tp_price and pnl_pct >= self.take_profit_pct:
+            return self._force_exit(
+                symbol,
+                quantity,
+                indicators,
+                f"TP hit at {pnl_pct:.2f}% (target {self.take_profit_pct:.2f}%)",
                 position=position,
             )
 
@@ -352,6 +365,7 @@ class TrendStrategy:
             "signals": scored["signals"],
             "entry_direction": entry_direction,
             "option_type": "CE" if entry_direction == "BUY" else "PE",
+            "atr": atr,
         }
         return self._execute(decision, indicators)
 
@@ -479,8 +493,19 @@ class TrendStrategy:
 
             # Place exchange-level SL-M order immediately after entry (live only).
             # This protects the position even if the bot process dies.
+            # SL distance = ATR/2 (absolute points); TP = entry + SL_dist × RR ratio.
+            _atr = decision.get("atr") or indicators.get("atr_5m") or indicators.get("atr_14") or 0
+            _sl_dist = round(_atr / 2, 1) if _atr else round(option_ltp * (self.stop_loss_pct / 100), 1)
+            _sl_dist = max(_sl_dist, 1.0)  # never less than ₹1
+            order["sl_price"] = round(option_ltp - _sl_dist, 1)
+            order["tp_price"] = round(option_ltp + _sl_dist * self.rr_ratio, 1)
+            logger.info(
+                "[%s] SL/TP: entry=₹%.2f ATR=%.1f SL_dist=%.1f → SL=₹%.1f TP=₹%.1f (1:%.1f)",
+                self.strategy_name, option_ltp, _atr, _sl_dist,
+                order["sl_price"], order["tp_price"], self.rr_ratio,
+            )
             if order.get("status") in ("COMPLETE", "PLACED") and not config.IS_PAPER:
-                sl_trigger = round(option_ltp * (1 - self.stop_loss_pct / 100), 1)
+                sl_trigger = order["sl_price"]
                 try:
                     sl_ord = self.broker.place_order(
                         option_symbol, "SELL", quantity,

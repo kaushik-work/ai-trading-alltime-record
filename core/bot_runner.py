@@ -108,6 +108,7 @@ class BotRunner:
         self.last_vix_regime: str = "UNKNOWN"       # VIX regime string
         self.last_day_bias: dict = ipc.read_day_bias()  # cached; updated by set_bias API
         self.last_option_chain: dict = {}
+        self.last_angel_trades: list = []               # Angel One tradeBook, synced every 5m
         from core.paper_seller import get_paper_seller
         self._paper_seller = get_paper_seller()
 
@@ -176,6 +177,8 @@ class BotRunner:
         self.scheduler.add_job(self._weekly_review, "cron", day_of_week="sat", hour=8, minute=0, id="weekly_review")
         # Reset day bias to NEUTRAL at 20:00 IST each evening
         self.scheduler.add_job(self._reset_day_bias, "cron", hour=20, minute=0, id="bias_reset")
+        # Angel One trade book sync — every 5 minutes during market hours
+        self.scheduler.add_job(self._sync_angel_trades, "cron", minute="*/5", second=45, id="angel_sync")
 
         self.scheduler.start()
         logger.info(
@@ -451,6 +454,40 @@ class BotRunner:
                 logger.info("Weekly review saved: %s", path)
         except Exception as e:
             logger.error("Weekly review failed: %s", e, exc_info=True)
+
+    async def _sync_angel_trades(self):
+        """Pull Angel One tradeBook and reconcile against SQLite open trades.
+
+        For each SELL in today's Angel One book: if our DB still shows that symbol
+        open (BUY, closed_at IS NULL), compute real PnL and close the DB record.
+        This handles manual closes and SL-M fills that the bot never saw.
+        """
+        if config.IS_PAPER:
+            return
+        try:
+            from data.angel_fetcher import AngelFetcher
+            loop = asyncio.get_event_loop()
+            angel_trades = await loop.run_in_executor(None, AngelFetcher.get().get_trade_book)
+            self.last_angel_trades = angel_trades
+
+            sells = [t for t in angel_trades if t["side"] == "SELL"]
+            for sell in sells:
+                symbol = sell["symbol"]
+                open_trade = self.memory.get_open_trade_for_symbol(symbol)
+                if not open_trade:
+                    continue
+                buy_price = float(open_trade.get("price") or 0)
+                sell_price = sell["price"]
+                qty = int(open_trade.get("quantity") or sell["quantity"])
+                pnl = round((sell_price - buy_price) * qty, 2)
+                order_id = open_trade.get("order_id", "")
+                self.memory.close_trade(order_id, pnl)
+                logger.info(
+                    "angel_sync: closed %s (order %s) pnl=%.2f buy=%.2f sell=%.2f",
+                    symbol, order_id, pnl, buy_price, sell_price,
+                )
+        except Exception as e:
+            logger.error("_sync_angel_trades: %s", e, exc_info=True)
 
     async def _reset_day_bias(self):
         """Reset day bias to NEUTRAL at 20:00 IST each evening."""
