@@ -73,6 +73,13 @@ _PRICE_TTL = 30  # seconds — refresh live price at most once every 30s
 
 def _get_prices() -> dict:
     global _price_cache, _price_cache_ts
+    from zoneinfo import ZoneInfo as _ZI
+    from datetime import datetime as _dt, time as _dtime
+    _now = _dt.now(_ZI("Asia/Kolkata"))
+    _t = _now.time()
+    _market_open = _dtime(9, 15) <= _t <= _dtime(15, 30) and _now.weekday() < 5
+    if not _market_open:
+        return _price_cache  # return last known prices, don't hit Angel One API
     if _time.time() - _price_cache_ts < _PRICE_TTL:
         return _price_cache
     prices = {}
