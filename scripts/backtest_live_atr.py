@@ -27,8 +27,7 @@ import logging
 logging.basicConfig(level=logging.WARNING)
 
 import pandas as pd
-import numpy as np
-from datetime import time, date as date_t
+from datetime import time
 
 # ── Args ──────────────────────────────────────────────────────────────────────
 
@@ -39,13 +38,24 @@ parser.add_argument("--months",     type=str, default=None,
                     help="Comma-separated e.g. 2026-04 or 2026-01,2026-02,2026-03")
 parser.add_argument("--date",       type=str, default=None,
                     help="Single date YYYY-MM-DD — show only that day")
+parser.add_argument("--sell",       action="store_true",
+                    help="Simulate option SELLING instead of buying")
+parser.add_argument("--trail",      action="store_true",
+                    help="Use trailing SL (trails with best premium seen)")
+parser.add_argument("--mode",       type=str, default="atr_only",
+                    choices=["atr_only", "ict_only", "full"],
+                    help="Scorer mode (default: atr_only)")
 args = parser.parse_args()
 
 import config
 INITIAL_CAPITAL  = args.capital
-STOP_LOSS_PCT    = config.STOP_LOSS_PCT       # 1.5 %
-TAKE_PROFIT_PCT  = config.TAKE_PROFIT_PCT     # 3.75 %
-SIGNAL_THRESHOLD = config.MIN_SIGNAL_SCORE    # 6
+SELL_MODE        = args.sell                      # True = option selling, False = buying
+TRAIL_MODE       = args.trail                     # True = trailing SL
+STOP_LOSS_PCT    = config.STOP_LOSS_PCT           # 1.5 % — fallback when ATR unavailable
+ATR_RR_RATIO     = config.ATR_RR_RATIO            # 3.0 → TP = SL_dist × 3
+MIN_OPTION_PREM  = config.MIN_OPTION_PREMIUM      # 150
+MAX_OPTION_PREM  = config.MAX_OPTION_PREMIUM      # 170
+SIGNAL_THRESHOLD = config.MIN_SIGNAL_SCORE        # 6
 LOT_SIZE         = config.LOT_SIZES["NIFTY"]  # 65
 MIN_LOTS         = config.MIN_LOTS            # 3
 MAX_DAILY_LOSS   = config.MAX_DAILY_LOSS      # 6250
@@ -278,7 +288,6 @@ def _run_day(df5: pd.DataFrame, day, day_df: pd.DataFrame,
     position     = None
     day_start_eq = equity
 
-    day_idxs = list(range(len(day_df)))
 
     for local_pos, (ts, row) in enumerate(day_df.iterrows()):
         bar_time = ts.time() if hasattr(ts, "time") else time(12, 0)
@@ -287,7 +296,10 @@ def _run_day(df5: pd.DataFrame, day, day_df: pd.DataFrame,
         # ── EOD square-off ───────────────────────────────────────────────────
         if bar_time >= TRADE_EXIT and position:
             exit_prem = _option_premium(price, position["strike"], position["option_type"])
-            pnl = (exit_prem - position["entry_prem"]) * position["qty"]
+            if not SELL_MODE:
+                pnl = (exit_prem - position["entry_prem"]) * position["qty"]
+            else:
+                pnl = (position["entry_prem"] - exit_prem) * position["qty"]
             trades.append(_make_trade(day, position, exit_prem, round(pnl, 2), price, "EOD"))
             equity  += pnl
             position = None
@@ -299,17 +311,39 @@ def _run_day(df5: pd.DataFrame, day, day_df: pd.DataFrame,
         # ── Manage open position ─────────────────────────────────────────────
         if position:
             curr_prem = _option_premium(price, position["strike"], position["option_type"])
-            pnl_pct   = (curr_prem - position["entry_prem"]) / position["entry_prem"] * 100
+            sl_dist   = position["sl_dist"]
 
-            if pnl_pct <= -STOP_LOSS_PCT:
-                exit_p = round(position["entry_prem"] * (1 - STOP_LOSS_PCT / 100), 2)
-                pnl    = (exit_p - position["entry_prem"]) * position["qty"]
+            # ── Trailing SL: update best premium seen and move SL accordingly ──
+            if TRAIL_MODE:
+                if not SELL_MODE:
+                    # Buying: best = highest prem seen; trail SL up
+                    if curr_prem > position["best_prem"]:
+                        position["best_prem"] = curr_prem
+                        position["sl_price"]  = round(curr_prem - sl_dist, 1)
+                else:
+                    # Selling: best = lowest prem seen; trail SL down
+                    if curr_prem < position["best_prem"]:
+                        position["best_prem"] = curr_prem
+                        position["sl_price"]  = round(curr_prem + sl_dist, 1)
+
+            if not SELL_MODE:
+                sl_hit = curr_prem <= position["sl_price"]
+                tp_hit = curr_prem >= position["tp_price"]
+                pnl_fn = lambda ep: (ep - position["entry_prem"]) * position["qty"]
+            else:
+                sl_hit = curr_prem >= position["sl_price"]
+                tp_hit = curr_prem <= position["tp_price"]
+                pnl_fn = lambda ep: (position["entry_prem"] - ep) * position["qty"]
+
+            if sl_hit:
+                exit_p = position["sl_price"]
+                pnl    = pnl_fn(exit_p)
                 trades.append(_make_trade(day, position, exit_p, round(pnl, 2), price, "SL"))
                 equity  += pnl
                 position = None
-            elif pnl_pct >= TAKE_PROFIT_PCT:
-                exit_p = round(position["entry_prem"] * (1 + TAKE_PROFIT_PCT / 100), 2)
-                pnl    = (exit_p - position["entry_prem"]) * position["qty"]
+            elif tp_hit:
+                exit_p = position["tp_price"]
+                pnl    = pnl_fn(exit_p)
                 trades.append(_make_trade(day, position, exit_p, round(pnl, 2), price, "TP"))
                 equity  += pnl
                 position = None
@@ -339,7 +373,7 @@ def _run_day(df5: pd.DataFrame, day, day_df: pd.DataFrame,
         df_5m_slice = df5.iloc[: df5.index.get_loc(ts) + 1].tail(120)
 
         # ── Score using the real scorer ──────────────────────────────────────
-        scored = score_symbol(indic, {}, {}, intra, df_5m=df_5m_slice, mode="atr_only")
+        scored = score_symbol(indic, {}, {}, intra, df_5m=df_5m_slice, mode=args.mode)
         action = scored["action"]
         score  = scored["score"]
 
@@ -348,9 +382,44 @@ def _run_day(df5: pd.DataFrame, day, day_df: pd.DataFrame,
 
         # ── Enter ─────────────────────────────────────────────────────────────
         option_type = "CE" if action == "BUY" else "PE"
-        strike      = int(round(price / 50) * 50)
-        prem        = _option_premium(price, strike, option_type)
-        qty         = LOT_SIZE * MIN_LOTS
+        atm         = int(round(price / 50) * 50)
+
+        # Search nearby strikes for one whose premium is in [MIN_OPTION_PREM, MAX_OPTION_PREM]
+        strike, prem = atm, _option_premium(price, atm, option_type)
+        mid_target   = (MIN_OPTION_PREM + MAX_OPTION_PREM) / 2
+        for i in range(1, 11):
+            for direction in [-1, 1]:
+                candidate = atm + direction * i * 50
+                candidate_prem = _option_premium(price, candidate, option_type)
+                if MIN_OPTION_PREM <= candidate_prem <= MAX_OPTION_PREM:
+                    strike, prem = candidate, candidate_prem
+                    break
+                if abs(candidate_prem - mid_target) < abs(prem - mid_target):
+                    strike, prem = candidate, candidate_prem
+            if MIN_OPTION_PREM <= prem <= MAX_OPTION_PREM:
+                break
+
+        qty = LOT_SIZE * MIN_LOTS
+
+        # ATR/2 as absolute SL distance; TP = entry + SL_dist × RR ratio
+        atr_5m = intra.get("atr_5m") or 0
+        if not atr_5m and len(hist_5m) >= 3:
+            h = hist_5m["High"].astype(float)
+            l = hist_5m["Low"].astype(float)
+            c = hist_5m["Close"].astype(float)
+            tr = pd.concat([(h - l), (h - c.shift(1)).abs(), (l - c.shift(1)).abs()], axis=1).max(axis=1)
+            atr_5m = float(tr.ewm(span=14, adjust=False).mean().iloc[-1])
+        sl_dist = round(atr_5m / 2, 1) if atr_5m else round(prem * STOP_LOSS_PCT / 100, 1)
+        sl_dist = max(sl_dist, 1.0)
+
+        if not SELL_MODE:
+            # Buying: SL below entry, TP above entry
+            sl_price = round(prem - sl_dist, 1)
+            tp_price = round(prem + sl_dist * ATR_RR_RATIO, 1)
+        else:
+            # Selling: SL above entry (prem rises = loss), TP below entry (prem decays = profit)
+            sl_price = round(prem + sl_dist * ATR_RR_RATIO, 1)
+            tp_price = max(round(prem - sl_dist, 1), 1.0)
 
         position = {
             "option_type": option_type,
@@ -360,6 +429,11 @@ def _run_day(df5: pd.DataFrame, day, day_df: pd.DataFrame,
             "qty":         qty,
             "score":       score,
             "entry_time":  ts,
+            "sl_price":    sl_price,
+            "tp_price":    tp_price,
+            "sl_dist":     sl_dist,
+            "best_prem":   prem,       # tracks highest (buying) or lowest (selling) prem seen
+            "atr_5m":      round(atr_5m, 1),
         }
 
     return trades, equity
@@ -431,9 +505,13 @@ def _print_month_table(rows: list, final_eq: float):
     total = round((final_eq - INITIAL_CAPITAL) / INITIAL_CAPITAL * 100, 1)
     w = 90
     print(f"\n{'='*w}")
-    print(f"  Live ATR Strategy Backtest  (score_symbol mode=atr_only)")
-    print(f"  SL={STOP_LOSS_PCT}% TP={TAKE_PROFIT_PCT}% | Threshold={SIGNAL_THRESHOLD} | "
-          f"Lots={MIN_LOTS}×{LOT_SIZE}={MIN_LOTS*LOT_SIZE} qty | Capital=₹{INITIAL_CAPITAL:,.0f}")
+    mode_label = ("OPTION SELLING + TRAIL SL" if (SELL_MODE and TRAIL_MODE)
+                  else "OPTION SELLING" if SELL_MODE
+                  else "OPTION BUYING + TRAIL SL" if TRAIL_MODE
+                  else "OPTION BUYING")
+    print(f"  Live ATR Strategy Backtest  ({mode_label}  |  score_symbol mode={args.mode})")
+    print(f"  SL=ATR/2 pts  TP=ATR/2×{ATR_RR_RATIO:.0f} pts (1:{ATR_RR_RATIO:.0f}) | Threshold={SIGNAL_THRESHOLD} | "
+          f"Strike ₹{MIN_OPTION_PREM}–₹{MAX_OPTION_PREM} | Lots={MIN_LOTS}×{LOT_SIZE} | Capital=₹{INITIAL_CAPITAL:,.0f}")
     print(f"{'='*w}")
     print(f"{'Month':>8}  {'#Tr':>4}  {'Win%':>6}  {'PF':>5}  {'Net%':>7}  "
           f"{'Exp₹/tr':>9}  {'StartEq':>10}  {'EndEq':>10}")

@@ -54,9 +54,8 @@ class TrendStrategy:
         self.market = get_market_data(self.broker if not config.IS_PAPER else None)
         self.stop_loss_pct = config.STOP_LOSS_PCT
         _rr_map = {
-            "atr_only":    getattr(config, "ATR_RR_RATIO",    3.0),
-            "ict_only":    getattr(config, "ICT_RR_RATIO",    2.5),
-            "fib_of_only": getattr(config, "FIB_OF_RR_RATIO", 3.0),
+            "atr_only": getattr(config, "ATR_RR_RATIO", 3.0),
+            "ict_only": getattr(config, "ICT_RR_RATIO", 2.5),
         }
         self.rr_ratio = _rr_map.get(score_mode, getattr(config, "ATR_RR_RATIO", 3.0))
         self.take_profit_pct = config.STOP_LOSS_PCT * self.rr_ratio
@@ -399,39 +398,79 @@ class TrendStrategy:
 
     def _get_option_ltp(self, symbol: str, option_type: str, current_price: float,
                         strike: int = None) -> tuple[str | None, int, float | None, date | None]:
-        """Fetch real ATM option LTP from Angel One. Returns (atm_strike, ltp) or (atm_strike, None) on failure.
-        Caller must abort the trade if ltp is None — never use a made-up fallback price.
+        """Find the strike whose live premium is in [MIN_OPTION_PREMIUM, MAX_OPTION_PREMIUM].
+
+        Starts at ATM, then walks ITM (to raise premium) or OTM (to lower it) in ₹50 steps,
+        up to 10 strikes either side. If no strike hits the range, returns the closest one found.
+        Returns (tradingsymbol, strike, ltp, expiry) — ltp=None only on total fetch failure.
         """
         atm_strike = int(strike or round(current_price / 50) * 50)
+        min_prem = getattr(config, "MIN_OPTION_PREMIUM", 150)
+        max_prem = getattr(config, "MAX_OPTION_PREMIUM", 170)
         expiry = None
+
         try:
             from data.angel_fetcher import AngelFetcher
             expiry = AngelFetcher.nearest_weekly_expiry()
-            tradingsymbol, ltp = AngelFetcher.get().get_option_ltp(symbol, atm_strike, option_type, expiry)
-            if ltp and ltp > 0:
-                logger.info("Option LTP: %s %d%s @ ₹%.2f (expiry %s)",
-                            symbol, atm_strike, option_type, ltp, expiry)
-                return tradingsymbol, atm_strike, ltp, expiry
+
+            # Walk strikes: ITM raises premium, OTM lowers it
+            # CE: ITM = lower strike, OTM = higher strike
+            # PE: ITM = higher strike, OTM = lower strike
+            step = 50
+            best_sym, best_strike, best_ltp = None, atm_strike, None
+
+            for i in range(11):  # ATM + up to 10 strikes either direction
+                for direction in ([0] if i == 0 else [-1, 1]):
+                    candidate = atm_strike + direction * i * step
+                    tsym, ltp = AngelFetcher.get().get_option_ltp(symbol, candidate, option_type, expiry)
+                    if not ltp or ltp <= 0:
+                        continue
+                    logger.info("Strike search: %s %d%s @ ₹%.2f", symbol, candidate, option_type, ltp)
+                    if min_prem <= ltp <= max_prem:
+                        logger.info("Strike found in range: %s %d%s @ ₹%.2f", symbol, candidate, option_type, ltp)
+                        return tsym, candidate, ltp, expiry
+                    # track best seen so far (closest to range)
+                    if best_ltp is None or abs(ltp - (min_prem + max_prem) / 2) < abs(best_ltp - (min_prem + max_prem) / 2):
+                        best_sym, best_strike, best_ltp = tsym, candidate, ltp
+
+            if best_ltp:
+                logger.warning(
+                    "No strike in ₹%d–₹%d range for %s %s — using closest: %d @ ₹%.2f",
+                    min_prem, max_prem, symbol, option_type, best_strike, best_ltp,
+                )
+                return best_sym, best_strike, best_ltp, expiry
+
         except Exception as e:
-            logger.warning("Option LTP fetch failed for %s %d%s: %s", symbol, atm_strike, option_type, e)
+            logger.warning("Option LTP fetch failed for %s %s: %s", symbol, option_type, e)
+
         if config.IS_PAPER:
-            paper_symbol, paper_ltp = self._estimate_paper_option_ltp(symbol, option_type, current_price, atm_strike)
+            # Paper mode: find the strike whose model premium is in range
+            best_strike, best_prem = atm_strike, None
+            for i in range(11):
+                for direction in ([0] if i == 0 else [-1, 1]):
+                    candidate = atm_strike + direction * i * step
+                    _, prem = self._estimate_paper_option_ltp(symbol, option_type, current_price, candidate)
+                    if min_prem <= prem <= max_prem:
+                        best_strike, best_prem = candidate, prem
+                        break
+                    if best_prem is None or abs(prem - (min_prem + max_prem) / 2) < abs(best_prem - (min_prem + max_prem) / 2):
+                        best_strike, best_prem = candidate, prem
+                if best_prem and min_prem <= best_prem <= max_prem:
+                    break
             if expiry is None:
                 try:
                     from data.angel_fetcher import AngelFetcher
                     expiry = AngelFetcher.nearest_weekly_expiry()
                 except Exception:
                     expiry = today_ist()
-            paper_symbol = self._paper_option_symbol(symbol, expiry, atm_strike, option_type)
-            logger.warning(
-                "Paper fallback option LTP for %s %d%s -> %s @ %.2f",
-                symbol, atm_strike, option_type, paper_symbol, paper_ltp,
-            )
-            return paper_symbol, atm_strike, paper_ltp, expiry
-        msg = f"Option LTP unavailable for {symbol} {atm_strike}{option_type}"
+            paper_symbol = self._paper_option_symbol(symbol, expiry, best_strike, option_type)
+            logger.info("Paper strike in range: %s @ ₹%.2f", paper_symbol, best_prem)
+            return paper_symbol, best_strike, best_prem, expiry
+
+        msg = f"Option LTP unavailable for {symbol} {option_type}"
         logger.error(msg + " — skipping trade")
         from core.angel_error_log import log_error as _log_err
-        _log_err("get_option_ltp", msg, symbol=symbol, detail=f"{atm_strike}{option_type}")
+        _log_err("get_option_ltp", msg, symbol=symbol, detail=option_type)
         return None, atm_strike, None, expiry
 
     def _execute(self, decision: dict, indicators: dict) -> dict:

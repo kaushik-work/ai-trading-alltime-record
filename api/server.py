@@ -62,7 +62,7 @@ records = RecordTracker()
 market = RealMarketData()
 
 WATCHLIST = ["NIFTY"]
-STRATEGIES = ["ATR Intraday", "C-ICT", "Fib-OF"]
+STRATEGIES = ["ATR Intraday", "C-ICT"]
 
 # ── Price cache — shared across all WebSocket connections ─────────────────────
 # Without this, 5 open browser tabs × every-5s broadcast = 60 Angel One calls/min
@@ -400,7 +400,7 @@ def bot_debug(user: str = Depends(get_current_user)):
 
     # Use last_scores from bot cycles (populated after each ATR/ICT cycle).
     # Fall back to a live score fetch if the bot hasn't run yet (e.g. first load).
-    for strat_name, score_mode in [("ATR Intraday", "atr_only"), ("C-ICT", "ict_only"), ("Fib-OF", "fib_of_only")]:
+    for strat_name, score_mode in [("ATR Intraday", "atr_only"), ("C-ICT", "ict_only")]:
         if strat_name in runner.last_scores:
             result["strategies"][strat_name] = runner.last_scores[strat_name]
         else:

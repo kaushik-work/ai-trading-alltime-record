@@ -239,12 +239,8 @@ export default function DebugPage() {
         {/* Strategy cards */}
         <div className="space-y-4">
           {[
-            { name: "ATR Intraday", tag: "ATR",    color: "#6366f1", bg: "#eef2ff", interval: "5m",  type: "Technical (sections 1–11)", vixEndpoint: "/api/bot/vix-override/atr", vixKey: "vix_override_atr",  display: "atr" },
-            { name: "C-ICT",        tag: "ICT",    color: "#0891b2", bg: "#e0f2fe", interval: "5m",  type: "Order Blocks + Liquidity",    vixEndpoint: "/api/bot/vix-override/ict", vixKey: "vix_override_ict",  display: "ict" },
-            { name: "Fib-OF",       tag: "FIB",    color: "#059669", bg: "#d1fae5", interval: "15m", type: "Fibonacci zones + Order Flow", vixEndpoint: "/api/bot/vix-override/fib", vixKey: "vix_override_fib",  display: "atr" },
-            { name: "SMC-Algo",     tag: "SMC",    color: "#7c3aed", bg: "#ede9fe", interval: "5m",  type: "CHOCH · OB · Breaker · FVG · AMD", vixEndpoint: "", vixKey: "", display: "smc" },
-            { name: "Vision-5m",    tag: "VIS·5m", color: "#db2777", bg: "#fce7f3", interval: "5m",  type: "Claude Vision · auto chart",  vixEndpoint: "", vixKey: "", display: "vision" },
-            { name: "Vision-15m",   tag: "VIS·15", color: "#b45309", bg: "#fef3c7", interval: "15m", type: "Claude Vision · auto chart",  vixEndpoint: "", vixKey: "", display: "vision" },
+            { name: "ATR Intraday", tag: "ATR", color: "#6366f1", bg: "#eef2ff", interval: "5m", type: "Technical (sections 1–11)", vixEndpoint: "/api/bot/vix-override/atr", vixKey: "vix_override_atr", display: "atr" },
+            { name: "C-ICT",        tag: "ICT", color: "#0891b2", bg: "#e0f2fe", interval: "5m", type: "Order Blocks + Liquidity",   vixEndpoint: "/api/bot/vix-override/ict", vixKey: "vix_override_ict", display: "ict" },
           ].map(({ name, tag, color, bg, interval, type, vixEndpoint, vixKey, display }) => {
             const s = strategies[name];
             const vixOn: boolean = vixKey ? (data?.[vixKey] ?? false) : false;

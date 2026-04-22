@@ -52,7 +52,7 @@ from core.memory import TradeMemory
 
 logger = logging.getLogger(__name__)
 
-STRATEGIES = ["ATR Intraday", "C-ICT", "Fib-OF"]
+STRATEGIES = ["ATR Intraday", "C-ICT"]
 
 
 def _ensure_dir():
@@ -219,7 +219,6 @@ def _collect_vix_context() -> dict:
     vix_override_global = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE)
     vix_override_atr    = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE_ATR)
     vix_override_ict    = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE_ICT)
-    vix_override_fib    = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE_FIB)
     threshold           = config.VIX_THRESHOLD
 
     blocked = (vix is not None) and (vix > threshold) and not vix_override_global
@@ -231,12 +230,11 @@ def _collect_vix_context() -> dict:
         "override_global":   vix_override_global,
         "override_atr":      vix_override_atr,
         "override_ict":      vix_override_ict,
-        "override_fib":      vix_override_fib,
-        "learning": _analyse_vix_decision(vix, threshold, vix_override_global, vix_override_atr, vix_override_ict, vix_override_fib),
+        "learning": _analyse_vix_decision(vix, threshold, vix_override_global, vix_override_atr, vix_override_ict),
     }
 
 
-def _analyse_vix_decision(vix, threshold, override_global, override_atr, override_ict, override_fib) -> str:
+def _analyse_vix_decision(vix, threshold, override_global, override_atr, override_ict) -> str:
     """Generate a human-readable analysis of today's VIX-related decisions."""
     if vix is None:
         return "VIX data unavailable today — no VIX gate decision recorded."
@@ -250,8 +248,7 @@ def _analyse_vix_decision(vix, threshold, override_global, override_atr, overrid
         else:
             atr_status = "bypassed (override ON)" if override_atr else "blocked"
             ict_status = "bypassed (override ON)" if override_ict else "blocked"
-            fib_status = "bypassed (override ON)" if override_fib else "blocked"
-            lines.append(f"ATR Intraday: {atr_status}. C-ICT: {ict_status}. Fib-OF: {fib_status}.")
+            lines.append(f"ATR Intraday: {atr_status}. C-ICT: {ict_status}.")
     return " ".join(lines)
 
 

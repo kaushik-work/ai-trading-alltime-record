@@ -62,8 +62,11 @@ STOP_LOSS_PCT   = 1.5    # % of option premium — SL trigger for all strategies
 # Per-strategy R:R ratios (TP = STOP_LOSS_PCT × ratio)
 ATR_RR_RATIO    = 3.0    # ATR Intraday  → 1:3  (TP = 4.5%)
 ICT_RR_RATIO    = 2.5    # C-ICT         → 1:2.5 (TP = 3.75%)
-FIB_OF_RR_RATIO = 3.0    # Fib-OF        → 1:3  (TP = 4.5%)
 TAKE_PROFIT_PCT = STOP_LOSS_PCT * ATR_RR_RATIO  # 4.5% — alias used by backtest + banner
+
+# ── Option Premium Target Range ───────────────────────────────────────────────
+MIN_OPTION_PREMIUM = 150   # search strikes until premium ≥ ₹150
+MAX_OPTION_PREMIUM = 170   # search strikes until premium ≤ ₹170
 
 # ── Signal Score ───────────────────────────────────────────────────────────────
 MIN_SIGNAL_SCORE = 6   # trade only when score ≥ 6 (backtest: 45.2% WR at 6 vs 44.7% at 5)

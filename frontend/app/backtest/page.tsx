@@ -105,13 +105,12 @@ export default function BacktestPage() {
               <select value={strategy} onChange={e => {
                 const s = e.target.value;
                 setStrategy(s);
-                setInterval(s === "Fib-OF" ? "15m" : "5m");
+                setInterval("5m");
                 setMinScore(s === "C-ICT" ? 2 : 6);
-                setRrRatio(s === "Fib-OF" ? 3.0 : 2.5);
+                setRrRatio(s === "C-ICT" ? 2.5 : 3.0);
               }} className="aq-input">
                 <option>ATR Intraday</option>
                 <option>C-ICT</option>
-                <option>Fib-OF</option>
               </select>
             </div>
             <div>
