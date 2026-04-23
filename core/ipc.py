@@ -216,6 +216,29 @@ def clear_tp_orders(strategy: str) -> None:
         pass
 
 
+_ZONES_FILE = FLAGS_DIR / "watch_zones.json"
+
+
+def write_watch_zones(zones: list) -> None:
+    """Persist today's pre-market watch zones so strategy can read them."""
+    import json
+    try:
+        _ZONES_FILE.write_text(json.dumps(zones, indent=2))
+    except Exception:
+        pass
+
+
+def read_watch_zones() -> list:
+    """Return today's watch zones computed by zone_briefing at 9 AM."""
+    import json
+    if not _ZONES_FILE.exists():
+        return []
+    try:
+        return json.loads(_ZONES_FILE.read_text())
+    except Exception:
+        return []
+
+
 def read_sl_orders(strategy: str) -> dict:
     """Return persisted SL-M order dict for a strategy {option_symbol: order_id}."""
     import json

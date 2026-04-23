@@ -497,6 +497,7 @@ class BotRunner:
                 return
             zones = compute_daily_zones(df)
             self.last_zones = zones
+            ipc.write_watch_zones(zones)   # persist so strategy can read without runner ref
             logger.info("Zone briefing complete:\n%s", today_zones_summary(zones))
         except Exception as e:
             logger.error("Zone briefing failed: %s", e)

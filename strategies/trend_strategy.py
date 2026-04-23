@@ -371,6 +371,31 @@ class TrendStrategy:
             return None
 
         entry_direction = scored["action"]
+        option_type_intended = "CE" if entry_direction == "BUY" else "PE"
+
+        # Zone alignment check — block trades that fight a pre-market watch zone.
+        # If chart shows CE zone (demand) but signal says PE → reject.
+        # If chart shows PE zone (supply) but signal says CE → reject.
+        try:
+            from core.ipc import read_watch_zones as _rwz
+            from core.zone_briefing import get_active_zone as _gaz
+            _zones = _rwz()
+            if _zones:
+                _zone = _gaz(current_price, _zones, proximity_pts=30)
+                if _zone and _zone["direction"] != option_type_intended:
+                    logger.warning(
+                        "[%s] Zone mismatch: chart shows %s zone at ₹%.0f but signal is %s — BLOCKED",
+                        self.strategy_name, _zone["direction"], _zone["mid"], option_type_intended,
+                    )
+                    return None
+                if _zone:
+                    logger.info(
+                        "[%s] Zone aligned: %s zone ₹%.0f confirms %s entry",
+                        self.strategy_name, _zone["direction"], _zone["mid"], option_type_intended,
+                    )
+        except Exception as _ze:
+            logger.debug("Zone alignment check failed: %s", _ze)
+
         atr = intraday.get("atr_5m") or indicators.get("atr_14", 0)
         decision = {
             "action": "BUY",
