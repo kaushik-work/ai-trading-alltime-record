@@ -334,8 +334,13 @@ class AngelOneBroker:
             resp = self._api.placeOrder(params)
             _data = (resp.get("data") or {}) if isinstance(resp, dict) else {}
             order_id = _data.get("orderid") if isinstance(_data, dict) else None
-            if not order_id and isinstance(resp, dict) and not resp.get("status"):
-                raise RuntimeError(resp.get("message") or resp.get("errorcode") or "Angel One rejected order")
+            if not order_id:
+                # Covers both explicit rejections (status:False) and silent rejections
+                # (status:True but data:None — Angel One silently rejects bad SL params)
+                msg = ""
+                if isinstance(resp, dict):
+                    msg = resp.get("message") or resp.get("errorcode") or ""
+                raise RuntimeError(msg or "order placed but no orderid returned (silent rejection)")
             logger.info("[LIVE/ANGEL] %s %d %s@%s | Order ID: %s", side, quantity, symbol, exchange, order_id)
             return {
                 "order_id": order_id, "symbol": symbol, "side": side, "quantity": quantity,

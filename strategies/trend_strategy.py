@@ -575,7 +575,8 @@ class TrendStrategy:
                         option_symbol, "SELL", quantity,
                         order_type="SL-M", trigger_price=sl_trigger,
                         exchange="NFO", product="MIS",
-                        variety="stoploss", validity="DAY",
+                        variety="regular",   # "regular"→NORMAL works for SL-M; "stoploss"→STOPLOSS is for bracket legs
+                        validity="DAY",
                         tag=f"SL-{self.strategy_name[:14]}",
                     )
                     if sl_ord.get("order_id"):
