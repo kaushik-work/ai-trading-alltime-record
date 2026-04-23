@@ -761,6 +761,68 @@ def paper_comparison(user: str = Depends(get_current_user)):
     }
 
 
+_chart_cache: dict = {"data": None, "ts": 0.0}
+_CHART_CACHE_TTL = 300   # 5 minutes
+
+@app.get("/api/chart-data")
+def chart_data(user: str = Depends(get_current_user)):
+    """Returns NIFTY 5m OHLCV candles + S/R levels for the live chart."""
+    import time as _time
+    now = _time.time()
+    if _chart_cache["data"] and now - _chart_cache["ts"] < _CHART_CACHE_TTL:
+        return Response(content=_safe_json(_chart_cache["data"]), media_type="application/json")
+    try:
+        from data.angel_fetcher import AngelFetcher
+        from core.sr_levels import compute_sr_levels
+        import pandas as pd
+
+        df = AngelFetcher.get().fetch_historical_df("NIFTY", "5m", days=3)
+        if df is None or len(df) < 10:
+            return {"candles": [], "levels": [], "supply_zones": [], "demand_zones": [],
+                    "structure": "ranging", "position": "open_air", "error": "no data"}
+
+        # Normalise columns
+        df = df.copy()
+        for col in ["Open", "High", "Low", "Close"]:
+            if col not in df.columns and col.lower() in df.columns:
+                df[col] = df[col.lower()]
+        df.index = pd.to_datetime(df.index, utc=True)
+
+        # Build candles for TradingView Lightweight Charts (Unix seconds)
+        candles = []
+        for ts, row in df.iterrows():
+            candles.append({
+                "time":  int(ts.timestamp()),
+                "open":  round(float(row["Open"]),  2),
+                "high":  round(float(row["High"]),  2),
+                "low":   round(float(row["Low"]),   2),
+                "close": round(float(row["Close"]), 2),
+            })
+
+        # S/R levels from last 200 bars
+        sr = compute_sr_levels(df.tail(200))
+
+        result = {
+            "candles":          candles,
+            "levels":           sr["levels"],
+            "support":          sr["support"],
+            "resistance":       sr["resistance"],
+            "supply_zones":     sr["supply_zones"],
+            "demand_zones":     sr["demand_zones"],
+            "structure":        sr["structure"],
+            "position":         sr["position"],
+            "current_price":    sr["current_price"],
+            "nearest_support":  sr["nearest_support"],
+            "nearest_resistance": sr["nearest_resistance"],
+        }
+        _chart_cache["data"] = result
+        _chart_cache["ts"]   = now
+        return Response(content=_safe_json(result), media_type="application/json")
+    except Exception as e:
+        return {"candles": [], "levels": [], "supply_zones": [], "demand_zones": [],
+                "structure": "ranging", "position": "open_air", "error": str(e)}
+
+
 # ── Safe JSON serializer (handles numpy floats, NaN, Inf) ─────────────────────
 
 def _safe_json(obj) -> str:
