@@ -14,7 +14,7 @@ _ERROR_DICT = {
 }
 
 
-_OI_CACHE_TTL = 15   # seconds — fast enough to catch OI shifts before entry
+_OI_CACHE_TTL = 60   # seconds — Angel One rate limit safe; OI deltas computed on each fetch
 
 class OptionChainFetcher:
     _instance: Optional["OptionChainFetcher"] = None
@@ -181,19 +181,21 @@ class OptionChainFetcher:
             atm_pe_oi_delta = 0
             total_ce_oi_delta = 0
             total_pe_oi_delta = 0
-            for row in strike_rows:
-                prev = self._prev_oi.get(row["strike"], {})
-                d_ce = row["ce_oi"] - prev.get("ce_oi", row["ce_oi"])
-                d_pe = row["pe_oi"] - prev.get("pe_oi", row["pe_oi"])
-                row["ce_oi_delta"] = d_ce
-                row["pe_oi_delta"] = d_pe
-                total_ce_oi_delta += d_ce
-                total_pe_oi_delta += d_pe
-                if row["strike"] == atm:
-                    atm_ce_oi_delta = d_ce
-                    atm_pe_oi_delta = d_pe
-            # Persist current OI as next snapshot's baseline
-            self._prev_oi = {r["strike"]: {"ce_oi": r["ce_oi"], "pe_oi": r["pe_oi"]} for r in strike_rows}
+            try:
+                for row in strike_rows:
+                    prev = self._prev_oi.get(row["strike"], {})
+                    d_ce = row["ce_oi"] - prev.get("ce_oi", row["ce_oi"])
+                    d_pe = row["pe_oi"] - prev.get("pe_oi", row["pe_oi"])
+                    row["ce_oi_delta"] = d_ce
+                    row["pe_oi_delta"] = d_pe
+                    total_ce_oi_delta += d_ce
+                    total_pe_oi_delta += d_pe
+                    if row["strike"] == atm:
+                        atm_ce_oi_delta = d_ce
+                        atm_pe_oi_delta = d_pe
+                self._prev_oi = {r["strike"]: {"ce_oi": r["ce_oi"], "pe_oi": r["pe_oi"]} for r in strike_rows}
+            except Exception as _oi_err:
+                logger.debug("OI delta computation skipped: %s", _oi_err)
 
             result = {
                 "pcr": round(pcr, 4),
