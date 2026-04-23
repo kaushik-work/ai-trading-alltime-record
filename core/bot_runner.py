@@ -122,6 +122,7 @@ class BotRunner:
         self.last_day_bias: dict = ipc.read_day_bias()  # cached; updated by set_bias API
         self.last_option_chain: dict = {}
         self.last_angel_trades: list = []               # Angel One tradeBook, synced every 5m
+        self.last_zones: list = []                      # today's watch zones (pre-market briefing)
         from core.paper_seller import get_paper_seller
         self._paper_seller = get_paper_seller()
 
@@ -183,6 +184,8 @@ class BotRunner:
         self.scheduler.add_job(self._sync_angel_trades, "cron", minute="*/5", second=45, id="angel_sync")
         # VIX auto-lots — fetch VIX at 9:30 IST and set min_lots for the day
         self.scheduler.add_job(self._vix_auto_lots_set, "cron", hour=9, minute=30, id="vix_auto_lots")
+        # Pre-market zone briefing — 9:00 AM, before session starts
+        self.scheduler.add_job(self._zone_briefing, "cron", hour=9, minute=0, id="zone_briefing")
         # Position guardian — every 60s during market hours: checks SL/TP on open positions
         # independent of strategy cycle. Catches fast moves between 5m candle ticks.
         self.scheduler.add_job(self._position_guardian, "interval", seconds=60, id="position_guardian")
@@ -474,6 +477,29 @@ class BotRunner:
             )
         except Exception as e:
             logger.error("VIX auto-lots failed: %s", e)
+
+    async def _zone_briefing(self):
+        """Pre-market zone briefing at 9:00 AM IST.
+        Computes today's watch zones from weekly + daily NIFTY bars.
+        Zones are used by the strategy to enter at key price levels
+        instead of chasing indicator signals mid-move.
+        """
+        try:
+            from data.angel_fetcher import AngelFetcher
+            from core.zone_briefing import compute_daily_zones, today_zones_summary
+            loop = asyncio.get_event_loop()
+            df = await loop.run_in_executor(
+                None,
+                lambda: AngelFetcher.get().fetch_historical_df("NIFTY", "5m", days=5),
+            )
+            if df is None or len(df) < 20:
+                logger.warning("Zone briefing: insufficient data — zones not computed")
+                return
+            zones = compute_daily_zones(df)
+            self.last_zones = zones
+            logger.info("Zone briefing complete:\n%s", today_zones_summary(zones))
+        except Exception as e:
+            logger.error("Zone briefing failed: %s", e)
 
     # ── trade helpers ─────────────────────────────────────────────────────────
 
