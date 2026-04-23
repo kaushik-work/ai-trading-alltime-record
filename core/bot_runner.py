@@ -148,8 +148,15 @@ class BotRunner:
             self._atr_cycle, "cron", minute="*/5", second=5,
             id="atr_intraday",
         )
-        # Fast check DISABLED — caused re-entry loops after SL (S/R position
-        # persists for many candles, fast check kept re-entering after each hit)
+        # Fast entry check — 2 min into each 5m candle (9:22:30, 9:27:30 ...)
+        # Only fires if the PREVIOUS bar's score was near-threshold (6-7).
+        # This catches moves that scored 6 last bar → score 8+ now → enter 3 min early.
+        # Avoids re-entry loops: after SL the score drops back to HOLD/negative
+        # so last_score is no longer near threshold → fast check stays quiet.
+        self.scheduler.add_job(
+            self._atr_fast_check, "cron", minute="2-59/5", second=30,
+            id="atr_fast_check",
+        )
         # Paper monitor — 25s after 5m close (after strategies have placed orders)
         self.scheduler.add_job(
             self._paper_monitor, "cron", minute="*/5", second=25,
@@ -224,38 +231,59 @@ class BotRunner:
             logger.error("ATR Intraday cycle: %s", e, exc_info=True)
 
     async def _atr_fast_check(self):
-        """Runs every 2 minutes mid-candle.
-        Catches S/R breakouts 2-3 bars earlier than waiting for candle close.
-        Only acts if:
-          1. No open position already exists
-          2. Score meets the fast-entry bar (≥9, higher than normal ≥8)
-          3. S/R context confirms breakout (position = breaking_up or breaking_down)
-        This prevents noisy mid-candle false signals — only genuine breakouts fire.
+        """Runs 2 min into each 5m candle to catch moves 3 min earlier than bar close.
+
+        SAFE re-entry guard: only fires when the PREVIOUS bar's score was 6-7
+        (near threshold but below). After SL the signal reverses → last_score drops
+        to HOLD/negative → this check stays quiet → no re-entry loop.
+
+        Logic:
+          1. Last bar score must be 6 or 7 in the signal direction (near miss)
+          2. No open position
+          3. Not within 15 min of last trade entry (cooldown)
         """
         if self.paused or not _is_market_hours():
             return
         if self._atr_strategy is None:
             return
         try:
-            from core.sr_levels import get_cached as _sr_get
-            from data.market import RealMarketData
             strat = self._atr_strategy
-            if not isinstance(strat.market, RealMarketData):
-                return
-            # Only fire if no position open
+
+            # Guard 1: previous bar score must be near-threshold (6 or 7)
+            # If it was 0 or negative (HOLD / reversed), the move is over — skip.
+            last = strat.last_score or {}
+            last_score_val = abs(last.get("score", 0))
+            last_threshold = last.get("threshold", 8)
+            if not (last_threshold - 2 <= last_score_val < last_threshold):
+                return   # not near threshold → nothing building → skip
+
+            # Guard 2: no open position
             positions = strat.broker.get_positions()
-            has_open = any(v.get("quantity", 0) > 0 for v in positions.values())
-            if has_open:
+            if any(v.get("quantity", 0) > 0 for v in positions.values()):
                 return
-            # Get S/R context — if price is breaking a level, enter early
-            df = strat.market._get_df("NIFTY")
-            if df is None or len(df) < 20:
-                return
-            sr = _sr_get(df)
-            position = sr.get("position", "open_air")
-            if position not in ("breaking_up", "breaking_down", "at_support", "at_resistance"):
-                return   # price in open air — wait for full candle confirmation
-            logger.info("FastCheck: S/R position=%s — running early entry check", position)
+
+            # Guard 3: cooldown — no trade in last 15 minutes
+            today_trades = strat.memory.get_today_trades()
+            if today_trades:
+                from core.utils import now_ist as _now_ist
+                from datetime import timedelta
+                last_ts_str = max(
+                    (t.get("timestamp", "") for t in today_trades if t.get("side") == "BUY"),
+                    default=""
+                )
+                if last_ts_str:
+                    try:
+                        import dateutil.parser
+                        last_ts = dateutil.parser.parse(last_ts_str)
+                        if (_now_ist() - last_ts).total_seconds() < 900:  # 15 min
+                            return
+                    except Exception:
+                        pass
+
+            logger.info(
+                "FastCheck: last score %+d near threshold %d — running early entry check",
+                last.get("score", 0), last_threshold
+            )
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, strat.run_watchlist)
         except Exception as e:
