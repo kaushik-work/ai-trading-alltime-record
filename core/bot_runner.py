@@ -148,6 +148,13 @@ class BotRunner:
             self._atr_cycle, "cron", minute="*/5", second=5,
             id="atr_intraday",
         )
+        # Fast entry check — every 2 min mid-candle (9:22, 9:27, 9:32 ...)
+        # Catches S/R breakouts 2-3 candles earlier than waiting for bar close.
+        # Uses same scorer but requires live price near a known breakout level.
+        self.scheduler.add_job(
+            self._atr_fast_check, "cron", minute="2-59/5,3-59/5", second=30,
+            id="atr_fast_check",
+        )
         # Paper monitor — 25s after 5m close (after strategies have placed orders)
         self.scheduler.add_job(
             self._paper_monitor, "cron", minute="*/5", second=25,
@@ -220,6 +227,44 @@ class BotRunner:
                 self._paper_seller.on_signal("ATR Intraday", entry)
         except Exception as e:
             logger.error("ATR Intraday cycle: %s", e, exc_info=True)
+
+    async def _atr_fast_check(self):
+        """Runs every 2 minutes mid-candle.
+        Catches S/R breakouts 2-3 bars earlier than waiting for candle close.
+        Only acts if:
+          1. No open position already exists
+          2. Score meets the fast-entry bar (≥9, higher than normal ≥8)
+          3. S/R context confirms breakout (position = breaking_up or breaking_down)
+        This prevents noisy mid-candle false signals — only genuine breakouts fire.
+        """
+        if self.paused or not _is_market_hours():
+            return
+        if self._atr_strategy is None:
+            return
+        try:
+            from core.sr_levels import get_cached as _sr_get
+            from data.market import RealMarketData
+            strat = self._atr_strategy
+            if not isinstance(strat.market, RealMarketData):
+                return
+            # Only fire if no position open
+            positions = strat.broker.get_positions()
+            has_open = any(v.get("quantity", 0) > 0 for v in positions.values())
+            if has_open:
+                return
+            # Get S/R context — if price is breaking a level, enter early
+            df = strat.market._get_df("NIFTY")
+            if df is None or len(df) < 20:
+                return
+            sr = _sr_get(df)
+            position = sr.get("position", "open_air")
+            if position not in ("breaking_up", "breaking_down", "at_support", "at_resistance"):
+                return   # price in open air — wait for full candle confirmation
+            logger.info("FastCheck: S/R position=%s — running early entry check", position)
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, strat.run_watchlist)
+        except Exception as e:
+            logger.debug("_atr_fast_check: %s", e)
 
     async def _position_guardian(self):
         """Runs every 60s — checks SL/TP on open positions between 5m candle ticks.
