@@ -218,6 +218,20 @@ class OptionChainFetcher:
                 "OptionChainFetcher: %s spot=%.0f ATM=%d PCR=%.2f bias=%s max_pain=%d ce_wall=%d pe_wall=%d",
                 symbol, spot, atm, pcr, bias, max_pain, ce_wall, pe_wall,
             )
+            # Append PCR snapshot to CSV — builds historical dataset for future backtesting
+            try:
+                import csv
+                from pathlib import Path
+                _pcr_log = Path(__file__).parent.parent / "db" / "pcr_log.csv"
+                _pcr_log.parent.mkdir(parents=True, exist_ok=True)
+                with open(_pcr_log, "a", newline="") as _f:
+                    csv.writer(_f).writerow([
+                        datetime.now().isoformat(), symbol,
+                        round(pcr, 4), total_ce_oi, total_pe_oi,
+                        ce_wall, pe_wall, max_pain, spot,
+                    ])
+            except Exception:
+                pass
             return result
 
         except Exception as e:

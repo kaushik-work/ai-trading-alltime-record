@@ -61,6 +61,8 @@ parser.add_argument("--vwap-max",   type=float, default=9999.0,
                     help="Max NIFTY-spot distance from VWAP to enter (default 9999 = off)")
 parser.add_argument("--max-hold",   type=int, default=0,
                     help="Exit if position still open after N bars with no TP progress (0 = off)")
+parser.add_argument("--slippage",   type=float, default=3.0,
+                    help="One-way slippage in premium points (applied on entry AND exit, default 3)")
 args = parser.parse_args()
 
 import config
@@ -80,6 +82,7 @@ TRADE_START      = time(9, 15) if args.no_lunch else time(9, 45)
 TRADE_EXIT       = time(15, 10)
 LUNCH_START      = time(23, 59) if args.no_lunch else time(12, 30)
 LUNCH_END        = time(23, 59) if args.no_lunch else time(13, 30)
+SLIPPAGE         = args.slippage   # pts per side (entry + exit = 2×SLIPPAGE per round trip)
 
 TARGET_MONTHS = (
     [m.strip() for m in args.months.split(",") if m.strip()]
@@ -312,7 +315,8 @@ def _run_day(df5: pd.DataFrame, day, day_df: pd.DataFrame,
 
         # ── EOD square-off ───────────────────────────────────────────────────
         if bar_time >= TRADE_EXIT and position:
-            exit_prem = _option_premium(price, position["strike"], position["option_type"])
+            model_prem = _option_premium(price, position["strike"], position["option_type"])
+            exit_prem  = max(model_prem - SLIPPAGE, 0.5)   # market sell slips
             if not SELL_MODE:
                 pnl = (exit_prem - position["entry_prem"]) * position["qty"]
             else:
@@ -327,48 +331,67 @@ def _run_day(df5: pd.DataFrame, day, day_df: pd.DataFrame,
 
         # ── Manage open position ─────────────────────────────────────────────
         if position:
-            curr_prem = _option_premium(price, position["strike"], position["option_type"])
+            bar_high  = float(row["High"])
+            bar_low   = float(row["Low"])
+            opt_type  = position["option_type"]
+            strike_p  = position["strike"]
+            curr_prem = _option_premium(price,    strike_p, opt_type)
             sl_dist   = position["sl_dist"]
 
-            # ── Trailing SL: update best premium seen and move SL accordingly ──
-            if TRAIL_MODE:
-                if not SELL_MODE:
-                    # Buying: best = highest prem seen; trail SL up
-                    if curr_prem > position["best_prem"]:
-                        position["best_prem"] = curr_prem
-                        position["sl_price"]  = round(curr_prem - sl_dist, 1)
+            # Intrabar worst premium — SL-M on exchange fires the moment price
+            # touches SL level, not just at bar close.
+            # CE: premium drops when spot drops → bar Low is worst case.
+            # PE: premium drops when spot rises → bar High is worst case.
+            if not SELL_MODE:
+                if opt_type == "CE":
+                    worst_prem = _option_premium(bar_low,  strike_p, "CE")
                 else:
-                    # Selling: best = lowest prem seen; trail SL down
-                    if curr_prem < position["best_prem"]:
-                        position["best_prem"] = curr_prem
-                        position["sl_price"]  = round(curr_prem + sl_dist, 1)
+                    worst_prem = _option_premium(bar_high, strike_p, "PE")
+            else:
+                worst_prem = curr_prem   # sell mode: simplified
 
             if not SELL_MODE:
-                sl_hit = curr_prem <= position["sl_price"]
-                tp_hit = curr_prem >= position["tp_price"]
+                # SL: check intrabar worst against the SL level set at END OF PRIOR BAR.
+                # Trail update happens AFTER this check (correct temporal order).
+                sl_hit = worst_prem <= position["sl_price"]
+                tp_hit = curr_prem  >= position["tp_price"]
                 pnl_fn = lambda ep: (ep - position["entry_prem"]) * position["qty"]
             else:
                 sl_hit = curr_prem >= position["sl_price"]
                 tp_hit = curr_prem <= position["tp_price"]
                 pnl_fn = lambda ep: (position["entry_prem"] - ep) * position["qty"]
 
+            # ── Trailing SL: update on BAR CLOSE, AFTER the SL check ────────
+            # Only update if not already stopped. Trail mirrors live bot's 60s
+            # guardian — it sees bar-close prices, not intrabar extremes.
+            if not sl_hit and TRAIL_MODE:
+                if not SELL_MODE:
+                    if curr_prem > position["best_prem"]:
+                        position["best_prem"] = curr_prem
+                        position["sl_price"]  = round(curr_prem - sl_dist, 1)
+                else:
+                    if curr_prem < position["best_prem"]:
+                        position["best_prem"] = curr_prem
+                        position["sl_price"]  = round(curr_prem + sl_dist, 1)
+
             position["bars_held"] += 1
 
             if sl_hit:
-                exit_p = position["sl_price"]
+                # SL-M fills at SL price minus exit slippage (fast market, worst side)
+                exit_p = max(position["sl_price"] - SLIPPAGE, 0.5)
                 pnl    = pnl_fn(exit_p)
                 trades.append(_make_trade(day, position, exit_p, round(pnl, 2), price, "SL"))
                 equity  += pnl
                 position = None
             elif tp_hit:
-                exit_p = position["tp_price"]
+                # Limit TP: slippage is minimal but still apply for consistency
+                exit_p = max(position["tp_price"] - SLIPPAGE, 0.5)
                 pnl    = pnl_fn(exit_p)
                 trades.append(_make_trade(day, position, exit_p, round(pnl, 2), price, "TP"))
                 equity  += pnl
                 position = None
             elif args.max_hold > 0 and position["bars_held"] >= args.max_hold:
-                # Signal Decay: position not moving — cut it at market
-                exit_p = curr_prem
+                exit_p = max(curr_prem - SLIPPAGE, 0.5)
                 pnl    = pnl_fn(exit_p)
                 trades.append(_make_trade(day, position, exit_p, round(pnl, 2), price, "DECAY"))
                 equity  += pnl
@@ -431,6 +454,8 @@ def _run_day(df5: pd.DataFrame, day, day_df: pd.DataFrame,
                     strike, prem = candidate, candidate_prem
             if MIN_OPTION_PREM <= prem <= MAX_OPTION_PREM:
                 break
+        # Apply entry slippage: market order fills worse than model price
+        prem_actual = round(prem + SLIPPAGE, 1)
 
         # Dynamic lot sizing: scale lots as equity grows (compounding lever)
         if args.dynamic_lots:
@@ -449,22 +474,22 @@ def _run_day(df5: pd.DataFrame, day, day_df: pd.DataFrame,
             c = hist_5m["Close"].astype(float)
             tr = pd.concat([(h - l), (h - c.shift(1)).abs(), (l - c.shift(1)).abs()], axis=1).max(axis=1)
             atr_5m = float(tr.ewm(span=14, adjust=False).mean().iloc[-1])
-        sl_dist = round(atr_5m / 2, 1) if atr_5m else round(prem * STOP_LOSS_PCT / 100, 1)
+        sl_dist = round(atr_5m / 2, 1) if atr_5m else round(prem_actual * STOP_LOSS_PCT / 100, 1)
         sl_dist = max(sl_dist, 1.0)
 
         if not SELL_MODE:
-            # Buying: SL below entry, TP above entry
-            sl_price = round(prem - sl_dist, 1)
-            tp_price = round(prem + sl_dist * ATR_RR_RATIO, 1)
+            # Buying: SL/TP relative to actual slippage-adjusted fill
+            sl_price = round(prem_actual - sl_dist, 1)
+            tp_price = round(prem_actual + sl_dist * ATR_RR_RATIO, 1)
         else:
             # Selling: SL above entry (prem rises = loss), TP below entry (prem decays = profit)
-            sl_price = round(prem + sl_dist * ATR_RR_RATIO, 1)
-            tp_price = max(round(prem - sl_dist, 1), 1.0)
+            sl_price = round(prem_actual + sl_dist * ATR_RR_RATIO, 1)
+            tp_price = max(round(prem_actual - sl_dist, 1), 1.0)
 
         position = {
             "option_type": option_type,
             "strike":      strike,
-            "entry_prem":  prem,
+            "entry_prem":  prem_actual,   # actual fill including slippage
             "entry_spot":  price,
             "qty":         qty,
             "score":       score,
@@ -472,7 +497,7 @@ def _run_day(df5: pd.DataFrame, day, day_df: pd.DataFrame,
             "sl_price":    sl_price,
             "tp_price":    tp_price,
             "sl_dist":     sl_dist,
-            "best_prem":   prem,
+            "best_prem":   prem_actual,
             "atr_5m":      round(atr_5m, 1),
             "bars_held":   0,
         }
