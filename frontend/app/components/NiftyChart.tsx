@@ -61,21 +61,32 @@ export default function NiftyChart({ livePrice }: Props) {
 
   // Fetch chart data — on mount then every 30s (live candle updates)
   useEffect(() => {
-    const load = () => {
+    const load = (initial = false) => {
       const token = localStorage.getItem("aq_token");
       fetch(`${API_URL}/api/chart-data`, {
         headers: { Authorization: `Bearer ${token}` },
       })
-        .then(r => r.json())
+        .then(r => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.json(); })
         .then((d: ChartData) => {
-          if (d.error && !d.candles?.length) { setError(d.error); setLoading(false); return; }
+          if (d.error && !d.candles?.length) {
+            if (initial) setError(d.error);   // only show error on first load
+            setLoading(false);
+            return;
+          }
+          setError(null);
           setData(d);
           setLoading(false);
+
+          // Live update: update only the last candle instead of full rebuild
+          if (!initial && candleRef.current && d.candles?.length) {
+            const last = d.candles[d.candles.length - 1];
+            candleRef.current.update({ ...last, time: last.time as any });
+          }
         })
-        .catch(e => { setError(String(e)); setLoading(false); });
+        .catch(() => { /* silent on refresh — keep showing old data */ setLoading(false); });
     };
-    load();
-    const iv = setInterval(load, 30_000);   // refresh every 30s
+    load(true);
+    const iv = setInterval(() => load(false), 30_000);
     return () => clearInterval(iv);
   }, []);
 
