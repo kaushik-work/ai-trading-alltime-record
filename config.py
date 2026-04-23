@@ -40,6 +40,7 @@ MAX_OPEN_POSITIONS = 2         # max concurrent positions (Phase A)
 MAX_TRADE_AMOUNT   = 40_000    # max capital per trade — covers 3 NIFTY lots at ₹180 ATM
 MAX_DAILY_LOSS              = 6_250   # ₹6,250 combined hard stop (5% of ₹1.25L) — all strategies pause when hit
 PER_STRATEGY_DAILY_LOSS_PCT = 3.0    # each strategy pauses independently at 3% loss (₹3,750) — doesn't stop others
+MAX_DAILY_TRADES            = 2      # hard cap: max entries per strategy per day (prevents re-entry loops)
 
 # ── Lot Sizes (NSE) ────────────────────────────────────────────────────────────
 # Verify current lot sizes at NSE or Angel One contract specs

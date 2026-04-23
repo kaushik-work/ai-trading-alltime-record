@@ -148,13 +148,8 @@ class BotRunner:
             self._atr_cycle, "cron", minute="*/5", second=5,
             id="atr_intraday",
         )
-        # Fast entry check — every 2 min mid-candle (9:22, 9:27, 9:32 ...)
-        # Catches S/R breakouts 2-3 candles earlier than waiting for bar close.
-        # Uses same scorer but requires live price near a known breakout level.
-        self.scheduler.add_job(
-            self._atr_fast_check, "cron", minute="2-59/5,3-59/5", second=30,
-            id="atr_fast_check",
-        )
+        # Fast check DISABLED — caused re-entry loops after SL (S/R position
+        # persists for many candles, fast check kept re-entering after each hit)
         # Paper monitor — 25s after 5m close (after strategies have placed orders)
         self.scheduler.add_job(
             self._paper_monitor, "cron", minute="*/5", second=25,

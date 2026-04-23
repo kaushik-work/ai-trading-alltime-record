@@ -252,17 +252,28 @@ class TrendStrategy:
             return None
 
         # Duplicate guard — DB-backed so it survives container restarts.
-        # If ANY strategy has an unclosed BUY for this underlying today, skip.
-        # This prevents: (a) cross-strategy double-entries and (b) re-entry
-        # after a restart when broker.positions is empty but the DB is not.
         if self.memory.has_open_underlying_today(symbol):
             logger.info(
-                "[%s] %s already has an unclosed BUY in DB today (another strategy or restart). Skipping.",
+                "[%s] %s already has an unclosed BUY in DB today. Skipping.",
                 self.strategy_name, symbol,
             )
             return None
 
-        # Always send to Claude — it reads raw candles and decides autonomously
+        # Daily trade cap — hard stop after MAX_DAILY_TRADES round trips.
+        # Prevents re-entry loops: SL hit → re-enter → SL hit → re-enter → ...
+        max_trades = getattr(config, "MAX_DAILY_TRADES", 2)
+        today_trades = self.memory.get_today_trades()
+        today_buys = sum(
+            1 for t in today_trades
+            if t.get("strategy") == self.strategy_name and t.get("side") == "BUY"
+        )
+        if today_buys >= max_trades:
+            logger.info(
+                "[%s] Daily trade cap reached (%d/%d entries today). No more entries.",
+                self.strategy_name, today_buys, max_trades,
+            )
+            return None
+
         return self._confirm_and_execute(symbol, current_price, indicators, intraday, scored, portfolio)
 
     # ── Position management ────────────────────────────────────────────────────
