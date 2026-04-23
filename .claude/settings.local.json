@@ -82,7 +82,16 @@
       "Bash(ssh -o StrictHostKeyChecking=no root@thegaintcompany.com 'cd /root/ai-trading-alltime-record && docker compose exec -T api python -c \" *)",
       "Bash(ssh -o StrictHostKeyChecking=no -o PasswordAuthentication=yes root@143.110.255.107 \"echo connected\")",
       "WebFetch(domain:muhat.com)",
-      "WebFetch(domain:quantscience.io)"
+      "WebFetch(domain:quantscience.io)",
+      "Bash(.venv/Scripts/python scripts/backtest_live_atr.py --lots 3)",
+      "Bash(.venv/Scripts/python.exe scripts/backtest_live_atr.py --lots 3)",
+      "PowerShell(ls \"$env:LOCALAPPDATA\\\\Python\\\\\" -ErrorAction SilentlyContinue; ls \"$env:LOCALAPPDATA\\\\Programs\\\\Python\\\\\" -ErrorAction SilentlyContinue; Get-Command python -ErrorAction SilentlyContinue | Select-Object Source)",
+      "PowerShell(Get-ChildItem -Path \"$env:LOCALAPPDATA\" -Recurse -Filter \"python.exe\" -ErrorAction SilentlyContinue | Select-Object FullName | head 10)",
+      "PowerShell(Get-ChildItem -Path \"$env:LOCALAPPDATA\" -Recurse -Filter \"python.exe\" -ErrorAction SilentlyContinue | Select-Object -First 10 FullName)",
+      "PowerShell(& \"$env:USERPROFILE\\\\.cargo\\\\bin\\\\uv.exe\" --version 2>$null; & \"$env:LOCALAPPDATA\\\\uv\\\\uv.exe\" --version 2>$null; Get-Command uv -ErrorAction SilentlyContinue | Select-Object Source)",
+      "PowerShell(& \"C:\\\\Users\\\\rkkau\\\\.local\\\\bin\\\\uv.exe\" --version)",
+      "PowerShell($p = \"C:\\\\Users\\\\rkkau\\\\AppData\\\\Roaming\\\\uv\\\\python\\\\cpython-3.14-windows-x86_64-none\\\\python.exe\"; & $p --version 2>&1; Write-Host \"Path: $p\")",
+      "PowerShell(& \"C:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\.venv\\\\Scripts\\\\python.exe\" --version 2>&1)"
     ]
   }
 }
