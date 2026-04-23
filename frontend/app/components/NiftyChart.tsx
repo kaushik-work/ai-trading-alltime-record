@@ -103,7 +103,9 @@ export default function NiftyChart({ livePrice }: Props) {
         borderUpColor: "#22c55e", borderDownColor: "#ef4444",
         wickUpColor:   "#22c55e", wickDownColor:   "#ef4444",
       });
-      candles.setData(data.candles);
+      // Cast time to UTCTimestamp as required by lightweight-charts v4 strict types
+      const typedCandles = data.candles.map(c => ({ ...c, time: c.time as any }));
+      candles.setData(typedCandles);
       candleRef.current = candles;
 
       // S/R horizontal lines
