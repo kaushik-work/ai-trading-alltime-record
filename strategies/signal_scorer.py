@@ -539,6 +539,74 @@ def score_symbol(indicators: dict, oi_data: dict, patterns: dict,
         except Exception as e:
             logger.debug("Order flow analysis failed: %s", e)
 
+    # ── 12. S/R Level + Market Structure gate ────────────────────────────────
+    # Read the chart: if price is at resistance on a BUY signal → trap.
+    # If market is in downtrend and bot wants to BUY CE → counter-trend penalty.
+    if df_5m is not None and len(df_5m) >= 20:
+        try:
+            from core.sr_levels import get_cached as _sr_cached
+            sr = _sr_cached(df_5m)
+            _pos    = sr.get("position", "open_air")
+            _struct = sr.get("structure", "ranging")
+            _n_res  = sr.get("nearest_resistance")
+            _n_sup  = sr.get("nearest_support")
+
+            if score > 0:   # BUY (CE) signal
+                if _pos == "at_resistance":
+                    pts = -3
+                    signals.append(f"SR: price AT RESISTANCE ₹{_n_res:.0f} — buying into wall {pts}")
+                    breakdown["sr_resistance"] = pts
+                    score += pts
+                elif _pos == "breaking_down":
+                    pts = -3
+                    signals.append(f"SR: BREAKING DOWN through support — CE contra-trend {pts}")
+                    breakdown["sr_breakdown"] = pts
+                    score += pts
+                elif _struct == "downtrend":
+                    pts = -2
+                    signals.append(f"SR: market DOWNTREND — CE counter-trend penalty {pts}")
+                    breakdown["sr_downtrend"] = pts
+                    score += pts
+                elif _pos == "at_support":
+                    pts = +2
+                    signals.append(f"SR: price AT SUPPORT ₹{_n_sup:.0f} — bounce zone +{pts}")
+                    breakdown["sr_support"] = pts
+                    score += pts
+                elif _pos == "breaking_up":
+                    pts = +2
+                    signals.append(f"SR: BREAKING UP through resistance — momentum confirmed +{pts}")
+                    breakdown["sr_breakup"] = pts
+                    score += pts
+
+            elif score < 0:   # SELL (PE) signal
+                if _pos == "at_support":
+                    pts = 3   # reduces negative score → weaker SELL signal
+                    signals.append(f"SR: price AT SUPPORT ₹{_n_sup:.0f} — PE contra-zone +{pts}")
+                    breakdown["sr_at_support_sell"] = pts
+                    score += pts
+                elif _pos == "breaking_up":
+                    pts = 3
+                    signals.append(f"SR: BREAKING UP — PE contra-trend +{pts}")
+                    breakdown["sr_breakup_sell"] = pts
+                    score += pts
+                elif _struct == "uptrend":
+                    pts = 2
+                    signals.append(f"SR: market UPTREND — PE counter-trend penalty +{pts}")
+                    breakdown["sr_uptrend_sell"] = pts
+                    score += pts
+                elif _pos == "at_resistance":
+                    pts = -2
+                    signals.append(f"SR: price AT RESISTANCE — PE at rejection zone {pts}")
+                    breakdown["sr_resistance_sell"] = pts
+                    score += pts
+                elif _pos == "breaking_down":
+                    pts = -2
+                    signals.append(f"SR: BREAKING DOWN — PE momentum confirmed {pts}")
+                    breakdown["sr_breakdown_sell"] = pts
+                    score += pts
+        except Exception as _sr_e:
+            logger.debug("SR scoring failed: %s", _sr_e)
+
     # ── Trap / wick rejection filter ──────────────────────────────────────────
     # If the last 5m bar closed in the wrong portion of its range, it's a
     # stop-hunt / fake breakout. Penalise before threshold check.
