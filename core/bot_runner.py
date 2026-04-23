@@ -273,8 +273,10 @@ class BotRunner:
                 )
                 if last_ts_str:
                     try:
-                        import dateutil.parser
-                        last_ts = dateutil.parser.parse(last_ts_str)
+                        from datetime import datetime as _dt
+                        last_ts = _dt.fromisoformat(last_ts_str)
+                        if last_ts.tzinfo is None:
+                            last_ts = last_ts.replace(tzinfo=_now_ist().tzinfo)
                         if (_now_ist() - last_ts).total_seconds() < 900:  # 15 min
                             return
                     except Exception:
