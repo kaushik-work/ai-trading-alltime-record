@@ -390,6 +390,26 @@ def score_symbol(indicators: dict, oi_data: dict, patterns: dict,
             breakdown["oi_delta_hedge"] = pts
             score += pts
 
+    # ── 9c. Herd Behavior Detector (Ising Model / Phase Transition) ─────────────
+    # When PCR is extreme, ALL participants are aligned one way → spontaneous
+    # alignment = phase transition risk = "the crash begins."
+    # Signal aligning WITH the herd = chasing exhaustion → penalise hard.
+    # PCR < 0.55 = extreme CE buying (bullish herd); PCR > 2.0 = extreme PE buying (bearish herd)
+    HERD_BULL = 0.55
+    HERD_BEAR = 2.00
+    if pcr < HERD_BULL and score > 0:
+        # Everyone is already long CE; we want to BUY too → chasing the herd
+        pts = -3
+        signals.append(f"HERD DANGER: PCR {pcr:.2f} extreme bullish crowd (everyone CE) {pts}")
+        breakdown["herd_danger"] = pts
+        score += pts
+    elif pcr > HERD_BEAR and score < 0:
+        # Everyone is already long PE; we want to SELL too → chasing the herd
+        pts = 3
+        signals.append(f"HERD DANGER: PCR {pcr:.2f} extreme bearish crowd (everyone PE) — contrarian +{abs(pts)}")
+        breakdown["herd_danger"] = pts
+        score += pts
+
     # ── 10. ATR volatility filter (AishDoc: don't trade in dead/choppy market) ─
     atr_pct = indicators.get("atr_pct", 0)
     if atr_pct > 0:

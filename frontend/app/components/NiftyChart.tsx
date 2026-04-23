@@ -29,6 +29,9 @@ interface ChartData {
   ema20:  EmaPoint[];
   ema50:  EmaPoint[];
   ema200: EmaPoint[];
+  poc: number | null;
+  vah: number | null;
+  val: number | null;
   error?: string;
 }
 
@@ -129,18 +132,18 @@ export default function NiftyChart({ livePrice }: Props) {
       candles.setData(typedCandles);
       candleRef.current = candles;
 
-      // S/R horizontal lines
-      data.levels.forEach(lvl => {
+      // S/R horizontal lines — all thin (1px), color by type
+      const lw1 = 1 as 1 | 2 | 3 | 4;
+      data.levels.forEach((lvl, idx) => {
         const isResist = lvl.type === "resistance";
-        const width    = (Math.min(lvl.strength, 4) as 1 | 2 | 3 | 4);
-        const color    = isResist ? "#ef444480" : "#22c55e80";
+        const color    = isResist ? "#ef444460" : "#22c55e60";
         candles.createPriceLine({
-          price:        lvl.price,
-          color:        color,
-          lineWidth:    width,
-          lineStyle:    LineStyle.Dashed,
+          price:            lvl.price,
+          color:            color,
+          lineWidth:        lw1,
+          lineStyle:        LineStyle.Dashed,
           axisLabelVisible: true,
-          title:        `${isResist ? "R" : "S"}${lvl.strength}`,
+          title:            `${isResist ? "R" : "S"}${idx + 1}`,
         });
       });
 
@@ -156,16 +159,36 @@ export default function NiftyChart({ livePrice }: Props) {
         });
       }
 
-      const lw1 = 1 as 1 | 2 | 3 | 4;
       data.supply_zones.forEach(z => {
-        candles.createPriceLine({ price: z.top,    color: "#ef4444aa", lineWidth: lw1, lineStyle: LineStyle.Dotted, axisLabelVisible: false, title: "" });
-        candles.createPriceLine({ price: z.bottom, color: "#ef4444aa", lineWidth: lw1, lineStyle: LineStyle.Dotted, axisLabelVisible: false, title: "Supply" });
+        candles.createPriceLine({ price: z.top,    color: "#ef444450", lineWidth: lw1, lineStyle: LineStyle.Dotted, axisLabelVisible: false, title: "" });
+        candles.createPriceLine({ price: z.bottom, color: "#ef444450", lineWidth: lw1, lineStyle: LineStyle.Dotted, axisLabelVisible: false, title: "Supply" });
       });
 
       data.demand_zones.forEach(z => {
-        candles.createPriceLine({ price: z.top,    color: "#22c55eaa", lineWidth: lw1, lineStyle: LineStyle.Dotted, axisLabelVisible: false, title: "Demand" });
-        candles.createPriceLine({ price: z.bottom, color: "#22c55eaa", lineWidth: lw1, lineStyle: LineStyle.Dotted, axisLabelVisible: false, title: "" });
+        candles.createPriceLine({ price: z.top,    color: "#22c55e50", lineWidth: lw1, lineStyle: LineStyle.Dotted, axisLabelVisible: false, title: "Demand" });
+        candles.createPriceLine({ price: z.bottom, color: "#22c55e50", lineWidth: lw1, lineStyle: LineStyle.Dotted, axisLabelVisible: false, title: "" });
       });
+
+      // POC / VAH / VAL — neon blue concentration lines (10-day price density)
+      const neon = "#00f5ff";
+      if (data.poc) {
+        candles.createPriceLine({
+          price: data.poc, color: neon, lineWidth: lw1,
+          lineStyle: LineStyle.Solid, axisLabelVisible: true, title: "POC",
+        });
+      }
+      if (data.vah) {
+        candles.createPriceLine({
+          price: data.vah, color: neon, lineWidth: lw1,
+          lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: "VAH",
+        });
+      }
+      if (data.val) {
+        candles.createPriceLine({
+          price: data.val, color: neon, lineWidth: lw1,
+          lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: "VAL",
+        });
+      }
 
       // EMA lines — 20 (orange), 50 (blue), 200 (purple)
       const addEma = (pts: EmaPoint[], color: string, w: 1|2|3|4, label: string) => {
@@ -206,9 +229,9 @@ export default function NiftyChart({ livePrice }: Props) {
   const struct = data ? STRUCTURE_COLORS[data.structure] : "#94a3b8";
 
   return (
-    <div className="bg-[#0f172a] rounded-xl border border-[#1e293b] overflow-hidden">
+    <div className="bg-[#0f172a] overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-2.5 border-b border-[#1e293b]">
+      <div className="flex items-center justify-between px-4 py-2.5 border-b border-[#1e293b]/40">
         <div className="flex items-center gap-3">
           <span className="text-white font-semibold text-sm">NIFTY 5m</span>
           {data && (
@@ -246,7 +269,7 @@ export default function NiftyChart({ livePrice }: Props) {
 
       {/* Legend */}
       {data && !loading && (
-        <div className="flex gap-4 px-4 py-2 border-t border-[#1e293b] text-xs text-slate-500">
+        <div className="flex gap-4 px-4 py-2 border-t border-[#1e293b]/40 text-xs text-slate-500">
           <span className="flex items-center gap-1.5">
             <span className="inline-block w-6 border-t-2 border-dashed border-red-400/60" />
             Resistance
@@ -274,6 +297,10 @@ export default function NiftyChart({ livePrice }: Props) {
           <span className="flex items-center gap-1.5">
             <span className="inline-block w-6 border-t-[3px] border-purple-500" />
             EMA200
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block w-6 border-t border-[#00f5ff]" />
+            POC / VAH / VAL
           </span>
           <span className="ml-auto text-slate-600">{data.levels.length} levels detected</span>
         </div>

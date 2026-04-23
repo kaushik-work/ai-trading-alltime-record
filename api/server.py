@@ -765,9 +765,70 @@ def paper_comparison(user: str = Depends(get_current_user)):
 _chart_cache: dict = {"data": None, "ts": 0.0}
 _CHART_CACHE_TTL = 300   # 5 minutes
 
+
+def _compute_poc(df, bucket_size: float = 25.0):
+    """
+    Price-based Point of Control (POC) using candle body overlap — Time At Price.
+    Returns (poc, vah, val) or (None, None, None) if insufficient data.
+      poc = price with most candle body overlap (highest concentration)
+      vah = Value Area High (top of 70% activity band)
+      val = Value Area Low  (bottom of 70% activity band)
+    """
+    try:
+        import numpy as np
+        opens  = df["Open"].astype(float).values
+        closes = df["Close"].astype(float).values
+        if len(opens) < 10:
+            return None, None, None
+
+        p_min = float(min(min(opens), min(closes))) - bucket_size
+        p_max = float(max(max(opens), max(closes))) + bucket_size
+
+        # Build price buckets
+        buckets: dict = {}
+        p = p_min
+        while p <= p_max:
+            buckets[round(p)] = 0
+            p += bucket_size
+        bkeys = sorted(buckets.keys())
+
+        # Count candle body overlaps per bucket
+        for i in range(len(opens)):
+            b_top = max(opens[i], closes[i])
+            b_bot = min(opens[i], closes[i])
+            if b_top == b_bot:   # doji — skip
+                continue
+            for bk in bkeys:
+                if bk < b_top and bk + bucket_size > b_bot:
+                    buckets[bk] += 1
+
+        if not any(buckets.values()):
+            return None, None, None
+
+        poc_key = max(buckets, key=buckets.get)
+        poc = round(poc_key + bucket_size / 2, 2)
+
+        # Value Area: buckets representing 70% of total bar activity
+        total  = sum(buckets.values())
+        target = total * 0.70
+        accum  = 0
+        included = set()
+        for bk in sorted(buckets, key=buckets.get, reverse=True):
+            included.add(bk)
+            accum += buckets[bk]
+            if accum >= target:
+                break
+
+        vah = round(max(included) + bucket_size, 2)
+        val = round(min(included), 2)
+        return poc, vah, val
+    except Exception:
+        return None, None, None
+
+
 @app.get("/api/chart-data")
 def chart_data(user: str = Depends(get_current_user)):
-    """Returns NIFTY 5m OHLCV candles + S/R levels for the live chart."""
+    """Returns NIFTY 5m OHLCV candles + S/R levels + POC for the live chart."""
     import time as _time
     now = _time.time()
     if _chart_cache["data"] and now - _chart_cache["ts"] < _CHART_CACHE_TTL:
@@ -777,17 +838,21 @@ def chart_data(user: str = Depends(get_current_user)):
         from core.sr_levels import compute_sr_levels
         import pandas as pd
 
-        df = AngelFetcher.get().fetch_historical_df("NIFTY", "5m", days=3)
-        if df is None or len(df) < 10:
+        # 10 days for POC (concentration line), display only last 3 days as candles
+        df_full = AngelFetcher.get().fetch_historical_df("NIFTY", "5m", days=10)
+        if df_full is None or len(df_full) < 10:
             return {"candles": [], "levels": [], "supply_zones": [], "demand_zones": [],
                     "structure": "ranging", "position": "open_air", "error": "no data"}
 
         # Normalise columns
-        df = df.copy()
+        df_full = df_full.copy()
         for col in ["Open", "High", "Low", "Close"]:
-            if col not in df.columns and col.lower() in df.columns:
-                df[col] = df[col.lower()]
-        df.index = pd.to_datetime(df.index, utc=True)
+            if col not in df_full.columns and col.lower() in df_full.columns:
+                df_full[col] = df_full[col.lower()]
+        df_full.index = pd.to_datetime(df_full.index, utc=True)
+
+        # Last 3 days for display (~225 bars)
+        df = df_full.tail(3 * 75)
 
         # Build candles for TradingView Lightweight Charts (Unix seconds)
         candles = []
@@ -803,6 +868,9 @@ def chart_data(user: str = Depends(get_current_user)):
         # S/R levels from last 200 bars
         sr = compute_sr_levels(df.tail(200))
 
+        # POC/VAH/VAL from full 10-day window
+        poc, vah, val = _compute_poc(df_full)
+
         # EMA 20, 50, 200 on close prices
         closes = df["Close"].astype(float)
         times  = [int(ts.timestamp()) for ts in df.index]
@@ -815,7 +883,7 @@ def chart_data(user: str = Depends(get_current_user)):
         result = {
             "candles":          candles,
             "levels":           sr["levels"],
-            "support":          sr["support"],
+            "supply":           sr["support"],
             "resistance":       sr["resistance"],
             "supply_zones":     sr["supply_zones"],
             "demand_zones":     sr["demand_zones"],
@@ -827,6 +895,9 @@ def chart_data(user: str = Depends(get_current_user)):
             "ema20":  _ema_series(20),
             "ema50":  _ema_series(50),
             "ema200": _ema_series(200),
+            "poc":    poc,
+            "vah":    vah,
+            "val":    val,
         }
         _chart_cache["data"] = result
         _chart_cache["ts"]   = now
