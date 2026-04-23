@@ -538,17 +538,34 @@ class TrendStrategy:
             order["timestamp"] = order.get("timestamp") or _now_ist().isoformat()
             order["expiry"] = expiry.isoformat() if expiry else None
 
-            # Place exchange-level SL-M order immediately after entry (live only).
-            # This protects the position even if the bot process dies.
-            # SL distance = ATR/2 (absolute points); TP = entry + SL_dist × RR ratio.
+            # Fetch actual fill price from Angel One — MARKET orders fill at ask,
+            # which can be ₹5-15 above LTP. Using LTP for SL/TP makes SL too tight.
+            _entry_price = option_ltp  # fallback if fill price unavailable
+            if order.get("status") in ("COMPLETE", "PLACED") and not config.IS_PAPER:
+                order_id_for_fill = order.get("order_id")
+                if order_id_for_fill and hasattr(self.broker, "get_fill_price"):
+                    actual_fill = self.broker.get_fill_price(order_id_for_fill)
+                    if actual_fill and actual_fill > 0:
+                        if actual_fill > option_ltp * 1.15:
+                            logger.warning(
+                                "[%s] Fill ₹%.2f is >15%% above LTP ₹%.2f — capping at LTP×1.15 to avoid bad data",
+                                self.strategy_name, actual_fill, option_ltp
+                            )
+                        else:
+                            _entry_price = actual_fill
+                            order["price"] = actual_fill
+                            logger.info("[%s] Using actual fill ₹%.2f (LTP was ₹%.2f, slip=₹%.2f)",
+                                        self.strategy_name, actual_fill, option_ltp, actual_fill - option_ltp)
+
+            # SL/TP calculated from ACTUAL FILL PRICE, not stale LTP
             _atr = decision.get("atr") or indicators.get("atr_5m") or indicators.get("atr_14") or 0
-            _sl_dist = round(_atr / 2, 1) if _atr else round(option_ltp * (self.stop_loss_pct / 100), 1)
-            _sl_dist = max(_sl_dist, 1.0)  # never less than ₹1
-            order["sl_price"] = round(option_ltp - _sl_dist, 1)
-            order["tp_price"] = round(option_ltp + _sl_dist * self.rr_ratio, 1)
+            _sl_dist = round(_atr / 2, 1) if _atr else round(_entry_price * (self.stop_loss_pct / 100), 1)
+            _sl_dist = max(_sl_dist, 1.0)
+            order["sl_price"] = round(_entry_price - _sl_dist, 1)
+            order["tp_price"] = round(_entry_price + _sl_dist * self.rr_ratio, 1)
             logger.info(
-                "[%s] SL/TP: entry=₹%.2f ATR=%.1f SL_dist=%.1f → SL=₹%.1f TP=₹%.1f (1:%.1f)",
-                self.strategy_name, option_ltp, _atr, _sl_dist,
+                "[%s] SL/TP: fill=₹%.2f ATR=%.1f SL_dist=%.1f → SL=₹%.1f TP=₹%.1f (1:%.1f)",
+                self.strategy_name, _entry_price, _atr, _sl_dist,
                 order["sl_price"], order["tp_price"], self.rr_ratio,
             )
             if order.get("status") in ("COMPLETE", "PLACED") and not config.IS_PAPER:

@@ -354,6 +354,26 @@ class AngelOneBroker:
                 "trigger_price": trigger_price, "tag": tag, "reason": reason,
             }
 
+    def get_fill_price(self, order_id: str, retries: int = 3, delay: float = 1.5) -> float | None:
+        """Fetch actual average fill price from Angel One order book after a MARKET fill."""
+        import time as _t
+        for attempt in range(retries):
+            try:
+                resp = self._api.orderBook()
+                if resp and resp.get("data"):
+                    for o in resp["data"]:
+                        if str(o.get("orderid")) == str(order_id):
+                            status = (o.get("status") or "").upper()
+                            avg = float(o.get("averageprice") or 0)
+                            if status == "COMPLETE" and avg > 0:
+                                logger.info("[LIVE/ANGEL] Fill price order %s: ₹%.2f", order_id, avg)
+                                return avg
+            except Exception as e:
+                logger.debug("get_fill_price attempt %d: %s", attempt + 1, e)
+            if attempt < retries - 1:
+                _t.sleep(delay)
+        return None
+
     def cancel_order(self, order_id: str, variety: str = "regular") -> bool:
         from core.angel_error_log import log_error as _log_err
         try:
