@@ -91,7 +91,8 @@
       "PowerShell(& \"$env:USERPROFILE\\\\.cargo\\\\bin\\\\uv.exe\" --version 2>$null; & \"$env:LOCALAPPDATA\\\\uv\\\\uv.exe\" --version 2>$null; Get-Command uv -ErrorAction SilentlyContinue | Select-Object Source)",
       "PowerShell(& \"C:\\\\Users\\\\rkkau\\\\.local\\\\bin\\\\uv.exe\" --version)",
       "PowerShell($p = \"C:\\\\Users\\\\rkkau\\\\AppData\\\\Roaming\\\\uv\\\\python\\\\cpython-3.14-windows-x86_64-none\\\\python.exe\"; & $p --version 2>&1; Write-Host \"Path: $p\")",
-      "PowerShell(& \"C:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\.venv\\\\Scripts\\\\python.exe\" --version 2>&1)"
+      "PowerShell(& \"C:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\.venv\\\\Scripts\\\\python.exe\" --version 2>&1)",
+      "PowerShell(Set-Location \"C:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\frontend\"; & \"C:\\\\Users\\\\rkkau\\\\.local\\\\bin\\\\uv.exe\" run --no-project -- npx --yes npm install lightweight-charts 2>&1 | Select-Object -Last 5)"
     ]
   }
 }
