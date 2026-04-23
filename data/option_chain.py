@@ -14,6 +14,8 @@ _ERROR_DICT = {
 }
 
 
+_OI_CACHE_TTL = 15   # seconds — fast enough to catch OI shifts before entry
+
 class OptionChainFetcher:
     _instance: Optional["OptionChainFetcher"] = None
     _singleton_lock = threading.Lock()
@@ -21,6 +23,7 @@ class OptionChainFetcher:
     def __init__(self):
         self._cache: Optional[dict] = None
         self._cache_time: Optional[datetime] = None
+        self._prev_oi: dict = {}   # strike -> {"ce_oi": int, "pe_oi": int}
         self._lock = threading.Lock()
 
     @classmethod
@@ -35,7 +38,7 @@ class OptionChainFetcher:
         with self._lock:
             now = datetime.now()
             if (self._cache is not None and self._cache_time is not None
-                    and (now - self._cache_time).total_seconds() < 60):
+                    and (now - self._cache_time).total_seconds() < _OI_CACHE_TTL):
                 return self._cache
             result = self._fetch_live(symbol)
             self._cache = result
@@ -173,6 +176,25 @@ class OptionChainFetcher:
             else:
                 bias = "NEUTRAL"
 
+            # OI delta vs previous snapshot (buyer/seller shift detection)
+            atm_ce_oi_delta = 0
+            atm_pe_oi_delta = 0
+            total_ce_oi_delta = 0
+            total_pe_oi_delta = 0
+            for row in strike_rows:
+                prev = self._prev_oi.get(row["strike"], {})
+                d_ce = row["ce_oi"] - prev.get("ce_oi", row["ce_oi"])
+                d_pe = row["pe_oi"] - prev.get("pe_oi", row["pe_oi"])
+                row["ce_oi_delta"] = d_ce
+                row["pe_oi_delta"] = d_pe
+                total_ce_oi_delta += d_ce
+                total_pe_oi_delta += d_pe
+                if row["strike"] == atm:
+                    atm_ce_oi_delta = d_ce
+                    atm_pe_oi_delta = d_pe
+            # Persist current OI as next snapshot's baseline
+            self._prev_oi = {r["strike"]: {"ce_oi": r["ce_oi"], "pe_oi": r["pe_oi"]} for r in strike_rows}
+
             result = {
                 "pcr": round(pcr, 4),
                 "sentiment": sentiment,
@@ -183,6 +205,10 @@ class OptionChainFetcher:
                 "spot": spot,
                 "atm": atm,
                 "strikes": strike_rows,
+                "atm_ce_oi_delta": atm_ce_oi_delta,
+                "atm_pe_oi_delta": atm_pe_oi_delta,
+                "total_ce_oi_delta": total_ce_oi_delta,
+                "total_pe_oi_delta": total_pe_oi_delta,
                 "fetched_at": datetime.now().isoformat(),
                 "error": None,
             }

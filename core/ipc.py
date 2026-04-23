@@ -176,6 +176,44 @@ def write_settings(settings: dict) -> dict:
 
 
 SL_ORDERS_FILE = FLAGS_DIR / "sl_orders.json"
+TP_ORDERS_FILE = FLAGS_DIR / "tp_orders.json"
+
+
+def read_tp_orders(strategy: str) -> dict:
+    import json
+    if not TP_ORDERS_FILE.exists():
+        return {}
+    try:
+        return json.loads(TP_ORDERS_FILE.read_text()).get(strategy, {})
+    except Exception:
+        return {}
+
+
+def write_tp_orders(strategy: str, tp_orders: dict) -> None:
+    import json
+    try:
+        all_data = {}
+        if TP_ORDERS_FILE.exists():
+            try:
+                all_data = json.loads(TP_ORDERS_FILE.read_text())
+            except Exception:
+                pass
+        all_data[strategy] = tp_orders
+        TP_ORDERS_FILE.write_text(json.dumps(all_data, indent=2))
+    except Exception:
+        pass
+
+
+def clear_tp_orders(strategy: str) -> None:
+    import json
+    if not TP_ORDERS_FILE.exists():
+        return
+    try:
+        all_data = json.loads(TP_ORDERS_FILE.read_text())
+        all_data.pop(strategy, None)
+        TP_ORDERS_FILE.write_text(json.dumps(all_data, indent=2))
+    except Exception:
+        pass
 
 
 def read_sl_orders(strategy: str) -> dict:

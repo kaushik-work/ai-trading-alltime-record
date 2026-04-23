@@ -59,7 +59,8 @@ class TrendStrategy:
         self.rr_ratio = _rr_map.get(score_mode, getattr(config, "ATR_RR_RATIO", 3.0))
         self.take_profit_pct = config.STOP_LOSS_PCT * self.rr_ratio
         self.paused = False
-        self._sl_orders: dict[str, str] = self._load_sl_orders()  # option_symbol → Angel One SL-M order_id
+        self._sl_orders: dict[str, str] = self._load_sl_orders()
+        self._tp_orders: dict[str, str] = self._load_tp_orders()
         logger.info(
             "TrendStrategy[%s] initialized | score_mode=%s | Trading: %s | Phase: %s | Budget: ₹%s",
             strategy_name, score_mode,
@@ -583,6 +584,36 @@ class TrendStrategy:
                              f"SL-M exception: {e} — in-process SL active at ₹{sl_trigger:.2f}",
                              symbol=option_symbol, detail=f"trigger=₹{sl_trigger:.2f}")
 
+            # Place exchange TP LIMIT SELL order immediately after entry.
+            # If SL fires first → cancel this TP order to avoid naked short.
+            # If TP fires first → cancel SL-M order.
+            if order.get("status") in ("COMPLETE", "PLACED") and not config.IS_PAPER:
+                tp_price_val = order.get("tp_price")
+                if tp_price_val:
+                    try:
+                        tp_ord = self.broker.place_order(
+                            option_symbol, "SELL", quantity,
+                            order_type="LIMIT", price=float(tp_price_val),
+                            exchange="NFO", product="MIS",
+                            variety="regular", validity="DAY",
+                            tag=f"TP-{self.strategy_name[:14]}",
+                        )
+                        if tp_ord.get("order_id"):
+                            self._tp_orders[option_symbol] = tp_ord["order_id"]
+                            ipc.write_tp_orders(self.strategy_name, self._tp_orders)
+                            order["tp_order_id"] = tp_ord["order_id"]
+                            logger.info("[%s] TP LIMIT placed: %s at ₹%.2f order_id=%s",
+                                        self.strategy_name, option_symbol, tp_price_val, tp_ord["order_id"])
+                        else:
+                            logger.warning("[%s] TP LIMIT rejected for %s: %s — software TP active",
+                                           self.strategy_name, option_symbol, tp_ord.get("reason"))
+                            from core.angel_error_log import log_error as _log_err
+                            _log_err("tp_order_rejected",
+                                     f"TP LIMIT rejected: {tp_ord.get('reason')} — software TP at ₹{tp_price_val}",
+                                     symbol=option_symbol, detail=f"tp=₹{tp_price_val}")
+                    except Exception as e:
+                        logger.error("[%s] Failed to place TP LIMIT for %s: %s", self.strategy_name, option_symbol, e)
+
             # Persist option metadata in broker position for accurate exit pricing
             if hasattr(self.broker, "positions") and option_symbol in self.broker.positions:
                 self.broker.positions[option_symbol]["symbol"] = option_symbol
@@ -596,19 +627,11 @@ class TrendStrategy:
             atm_strike  = pos.get("atm_strike") or pos.get("strike") or atm_strike
             option_symbol = pos.get("symbol") or symbol
 
-            # Cancel the exchange SL-M order before placing the normal exit,
-            # so we don't end up with a double sell.
+            # Cancel both SL-M and TP LIMIT before placing normal exit
+            # to avoid double-sell / naked short on exchange.
             if not config.IS_PAPER:
-                sl_order_id = self._sl_orders.pop(option_symbol, None)
-                if sl_order_id:
-                    ipc.write_sl_orders(self.strategy_name, self._sl_orders)
-                    try:
-                        self.broker.cancel_order(sl_order_id)
-                        logger.info("[%s] Cancelled SL-M %s before normal exit of %s",
-                                    self.strategy_name, sl_order_id, option_symbol)
-                    except Exception as e:
-                        logger.warning("[%s] Could not cancel SL-M %s: %s",
-                                       self.strategy_name, sl_order_id, e)
+                self._cancel_sl_order(option_symbol)
+                self._cancel_tp_order(option_symbol)
 
             _, _, exit_ltp, expiry = self._get_option_ltp(
                 pos.get("underlying", symbol), option_type, current_price, strike=int(atm_strike)
@@ -762,11 +785,38 @@ class TrendStrategy:
         return {"patterns": [], "bias": "neutral", "strength": 0}
 
     def _load_sl_orders(self) -> dict:
-        """Restore persisted SL-M orders from IPC on startup/restart."""
         try:
             return ipc.read_sl_orders(self.strategy_name)
         except Exception:
             return {}
+
+    def _load_tp_orders(self) -> dict:
+        try:
+            return ipc.read_tp_orders(self.strategy_name)
+        except Exception:
+            return {}
+
+    def _cancel_tp_order(self, option_symbol: str):
+        """Cancel the exchange TP LIMIT order for a symbol (call when SL hits or position closed)."""
+        tp_order_id = self._tp_orders.pop(option_symbol, None)
+        if tp_order_id:
+            ipc.write_tp_orders(self.strategy_name, self._tp_orders)
+            try:
+                self.broker.cancel_order(tp_order_id)
+                logger.info("[%s] Cancelled TP LIMIT %s for %s", self.strategy_name, tp_order_id, option_symbol)
+            except Exception as e:
+                logger.warning("[%s] Could not cancel TP order %s: %s", self.strategy_name, tp_order_id, e)
+
+    def _cancel_sl_order(self, option_symbol: str):
+        """Cancel the exchange SL-M order for a symbol (call when TP hits)."""
+        sl_order_id = self._sl_orders.pop(option_symbol, None)
+        if sl_order_id:
+            ipc.write_sl_orders(self.strategy_name, self._sl_orders)
+            try:
+                self.broker.cancel_order(sl_order_id)
+                logger.info("[%s] Cancelled SL-M %s for %s", self.strategy_name, sl_order_id, option_symbol)
+            except Exception as e:
+                logger.warning("[%s] Could not cancel SL order %s: %s", self.strategy_name, sl_order_id, e)
 
     # ── Square-off all open positions ─────────────────────────────────────────
 
@@ -793,7 +843,9 @@ class TrendStrategy:
                 except Exception as e:
                     logger.error("Square-off failed for %s: %s", symbol, e)
         ipc.clear_sl_orders(self.strategy_name)
+        ipc.clear_tp_orders(self.strategy_name)
         self._sl_orders.clear()
+        self._tp_orders.clear()
         return results
 
     # ── Watchlist loop ─────────────────────────────────────────────────────────

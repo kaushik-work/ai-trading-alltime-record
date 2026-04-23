@@ -365,6 +365,31 @@ def score_symbol(indicators: dict, oi_data: dict, patterns: dict,
                 breakdown["pe_wall"] = pts
                 score += pts
 
+    # ── 9b. OI delta — buyer/seller shift (bull-trap / bear-trap detection) ─────
+    # atm_ce_oi_delta < 0 while score > 0 → CE OI shedding on a BUY signal → writers
+    # are CLOSING longs / buyers leaving → potential bull trap. Penalise.
+    atm_ce_delta = oi_data.get("atm_ce_oi_delta", 0)
+    atm_pe_delta = oi_data.get("atm_pe_oi_delta", 0)
+    if atm_ce_delta != 0 or atm_pe_delta != 0:
+        if score > 0 and atm_ce_delta < -500:
+            # BUY signal but ATM CE OI shedding → smart money leaving the CE side → trap
+            pts = -2
+            signals.append(f"OI SHIFT: CE OI -{abs(atm_ce_delta):,} (buyers leaving) {pts}")
+            breakdown["oi_delta"] = pts
+            score += pts
+        elif score < 0 and atm_pe_delta < -500:
+            # SELL signal but ATM PE OI shedding → smart money leaving PE side → trap
+            pts = 2
+            signals.append(f"OI SHIFT: PE OI -{abs(atm_pe_delta):,} (put buyers leaving) +{abs(pts)}")
+            breakdown["oi_delta"] = pts
+            score += pts
+        elif score > 0 and atm_pe_delta > 500:
+            # BUY signal + PE OI building → hedgers adding puts → caution
+            pts = -1
+            signals.append(f"OI SHIFT: PE OI +{atm_pe_delta:,} (hedging against rally) {pts}")
+            breakdown["oi_delta_hedge"] = pts
+            score += pts
+
     # ── 10. ATR volatility filter (AishDoc: don't trade in dead/choppy market) ─
     atr_pct = indicators.get("atr_pct", 0)
     if atr_pct > 0:
