@@ -514,6 +514,29 @@ def score_symbol(indicators: dict, oi_data: dict, patterns: dict,
         except Exception as e:
             logger.debug("Order flow analysis failed: %s", e)
 
+    # ── Trap / wick rejection filter ──────────────────────────────────────────
+    # If the last 5m bar closed in the wrong portion of its range, it's a
+    # stop-hunt / fake breakout. Penalise before threshold check.
+    if df_5m is not None and len(df_5m) >= 1:
+        try:
+            last = df_5m.iloc[-1]
+            hi = float(last.get("High", last.get("high", 0)))
+            lo = float(last.get("Low",  last.get("low",  0)))
+            cl = float(last.get("Close", last.get("close", 0)))
+            rng = hi - lo
+            if rng > 0:
+                close_pos = (cl - lo) / rng   # 0 = closed at low, 1 = closed at high
+                if score > 0 and close_pos < 0.35:
+                    # BUY signal but bar closed near the LOW → bearish trap candle
+                    score -= 2
+                    signals.append(f"TRAP: wick rejection (close_pos={close_pos:.2f}) -2")
+                elif score < 0 and close_pos > 0.65:
+                    # SELL signal but bar closed near the HIGH → bullish trap candle
+                    score += 2
+                    signals.append(f"TRAP: wick rejection (close_pos={close_pos:.2f}) -2")
+        except Exception:
+            pass
+
     # ── Clamp and resolve ─────────────────────────────────────────────────────
     if mode == "fib_of_only":
         score, signals, breakdown, order_flow = _score_fib_of(indicators, intraday, df_5m)

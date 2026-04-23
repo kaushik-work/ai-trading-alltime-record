@@ -347,7 +347,15 @@ class TrendStrategy:
         if scored["action"] not in ("BUY", "SELL"):
             return None
 
-        if abs(scored["score"]) < scored["threshold"]:
+        # Live threshold = 8 minimum regardless of scorer default.
+        # Backtest uses its own threshold via --threshold flag.
+        # Score 6-7 in live hits too many traps / fake breakouts.
+        live_threshold = max(scored["threshold"], 8)
+        if abs(scored["score"]) < live_threshold:
+            logger.info(
+                "[%s] Score %+d below live threshold %d — skipping (would pass backtest at %d)",
+                self.strategy_name, scored["score"], live_threshold, scored["threshold"]
+            )
             return None
 
         entry_direction = scored["action"]
