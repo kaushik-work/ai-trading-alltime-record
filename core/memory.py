@@ -96,6 +96,25 @@ def init_db():
     logger.info("Database initialized at %s", config.DB_PATH)
 
 
+def _compute_pnl(sell_trade: dict, buy_trade: dict | None) -> float:
+    """
+    Compute round-trip P&L.
+    Prefer the stored pnl on the SELL row (set by _execute after our fix).
+    Fall back to computing from prices if stored value is 0 or missing —
+    handles trades logged before the fix was deployed.
+    """
+    stored = sell_trade.get("pnl")
+    if stored and float(stored) != 0.0:
+        return round(float(stored), 2)
+    # Fallback: compute from prices
+    exit_px  = float(sell_trade.get("price") or 0)
+    entry_px = float((buy_trade or {}).get("price") or 0)
+    qty      = int(sell_trade.get("quantity") or (buy_trade or {}).get("quantity") or 0)
+    if entry_px > 0 and exit_px > 0 and qty > 0:
+        return round((exit_px - entry_px) * qty, 2)
+    return 0.0
+
+
 class TradeMemory:
     def log_trade(self, order: dict, decision: dict) -> int:
         """Save a trade to memory."""
@@ -273,7 +292,7 @@ class TradeMemory:
                 "entry_price": (buy or {}).get("price"),
                 "exit_price": trade.get("price"),
                 "avg_buy_price": trade.get("avg_buy_price") or (buy or {}).get("price"),
-                "pnl": round(float(trade.get("pnl") or 0), 2),
+                "pnl": _compute_pnl(trade, buy),
                 "close_reason": trade.get("close_reason") or (buy or {}).get("close_reason"),
                 "score": (buy or {}).get("score", trade.get("score")),
                 "entry_time": (buy or {}).get("timestamp"),

@@ -692,6 +692,15 @@ class TrendStrategy:
             order["timestamp"] = order.get("timestamp") or _now_ist().isoformat()
             order["expiry"] = pos.get("expiry") or (expiry.isoformat() if expiry else None)
 
+            # Compute P&L from actual entry vs exit price so it's stored correctly.
+            # Without this, order["pnl"] stays None → stored as 0 → dashboard shows ₹0.
+            entry_px = float(pos.get("avg_price") or pos.get("average_price") or
+                             pos.get("price") or pos.get("buy_price") or 0)
+            if entry_px > 0 and exit_ltp and exit_ltp > 0:
+                order["pnl"] = round((exit_ltp - entry_px) * quantity, 2)
+                logger.info("[%s] P&L: entry=₹%.2f exit=₹%.2f qty=%d → ₹%.2f",
+                            self.strategy_name, entry_px, exit_ltp, quantity, order["pnl"])
+
         if order.get("status") in ("COMPLETE", "PLACED"):
             order["underlying"]  = symbol if side == "BUY" else pos.get("underlying", symbol)
             order["option_type"] = option_type
