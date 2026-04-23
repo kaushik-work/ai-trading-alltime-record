@@ -47,6 +47,20 @@ parser.add_argument("--mode",       type=str, default="atr_only",
                     help="Scorer mode (default: atr_only)")
 parser.add_argument("--lots",       type=int, default=None,
                     help="Number of lots per trade (overrides config MIN_LOTS)")
+parser.add_argument("--dynamic-lots", action="store_true",
+                    help="Scale lots with equity: 1 lot per ₹13K → compounds hard as capital grows")
+parser.add_argument("--threshold",  type=int, default=None,
+                    help="Signal score threshold (overrides config MIN_SIGNAL_SCORE, default 6)")
+parser.add_argument("--rr",         type=float, default=None,
+                    help="R:R ratio — TP = SL_dist × rr (overrides config ATR_RR_RATIO, default 3.0)")
+parser.add_argument("--no-lunch",   action="store_true",
+                    help="Disable lunch-hour skip (12:30–13:30) — trade all hours")
+parser.add_argument("--vwap-min",   type=float, default=0.0,
+                    help="Min NIFTY-spot distance from VWAP to enter (default 0 = off)")
+parser.add_argument("--vwap-max",   type=float, default=9999.0,
+                    help="Max NIFTY-spot distance from VWAP to enter (default 9999 = off)")
+parser.add_argument("--max-hold",   type=int, default=0,
+                    help="Exit if position still open after N bars with no TP progress (0 = off)")
 args = parser.parse_args()
 
 import config
@@ -54,17 +68,18 @@ INITIAL_CAPITAL  = args.capital
 SELL_MODE        = args.sell                      # True = option selling, False = buying
 TRAIL_MODE       = args.trail                     # True = trailing SL
 STOP_LOSS_PCT    = config.STOP_LOSS_PCT           # 1.5 % — fallback when ATR unavailable
-ATR_RR_RATIO     = config.ATR_RR_RATIO            # 3.0 → TP = SL_dist × 3
+ATR_RR_RATIO     = args.rr if args.rr is not None else config.ATR_RR_RATIO
 MIN_OPTION_PREM  = config.MIN_OPTION_PREMIUM      # 150
 MAX_OPTION_PREM  = config.MAX_OPTION_PREMIUM      # 170
-SIGNAL_THRESHOLD = config.MIN_SIGNAL_SCORE        # 6
+SIGNAL_THRESHOLD = args.threshold if args.threshold is not None else config.MIN_SIGNAL_SCORE
+config.MIN_SIGNAL_SCORE = SIGNAL_THRESHOLD   # patch so score_symbol() sees the override
 LOT_SIZE         = config.LOT_SIZES["NIFTY"]  # 65
 MIN_LOTS         = args.lots if args.lots is not None else config.MIN_LOTS
 MAX_DAILY_LOSS   = config.MAX_DAILY_LOSS      # 6250
-TRADE_START      = time(9, 45)
+TRADE_START      = time(9, 15) if args.no_lunch else time(9, 45)
 TRADE_EXIT       = time(15, 10)
-LUNCH_START      = time(12, 30)
-LUNCH_END        = time(13, 30)
+LUNCH_START      = time(23, 59) if args.no_lunch else time(12, 30)
+LUNCH_END        = time(23, 59) if args.no_lunch else time(13, 30)
 
 TARGET_MONTHS = (
     [m.strip() for m in args.months.split(",") if m.strip()]
@@ -337,6 +352,8 @@ def _run_day(df5: pd.DataFrame, day, day_df: pd.DataFrame,
                 tp_hit = curr_prem <= position["tp_price"]
                 pnl_fn = lambda ep: (position["entry_prem"] - ep) * position["qty"]
 
+            position["bars_held"] += 1
+
             if sl_hit:
                 exit_p = position["sl_price"]
                 pnl    = pnl_fn(exit_p)
@@ -347,6 +364,13 @@ def _run_day(df5: pd.DataFrame, day, day_df: pd.DataFrame,
                 exit_p = position["tp_price"]
                 pnl    = pnl_fn(exit_p)
                 trades.append(_make_trade(day, position, exit_p, round(pnl, 2), price, "TP"))
+                equity  += pnl
+                position = None
+            elif args.max_hold > 0 and position["bars_held"] >= args.max_hold:
+                # Signal Decay: position not moving — cut it at market
+                exit_p = curr_prem
+                pnl    = pnl_fn(exit_p)
+                trades.append(_make_trade(day, position, exit_p, round(pnl, 2), price, "DECAY"))
                 equity  += pnl
                 position = None
             continue
@@ -382,6 +406,13 @@ def _run_day(df5: pd.DataFrame, day, day_df: pd.DataFrame,
         if action not in ("BUY", "SELL"):
             continue
 
+        # ── VWAP Distance Filter (Market Impact curve concept) ────────────────
+        if args.vwap_min > 0 or args.vwap_max < 9999:
+            vwap = intra.get("vwap", price)
+            vwap_dist = abs(price - vwap)
+            if not (args.vwap_min <= vwap_dist <= args.vwap_max):
+                continue
+
         # ── Enter ─────────────────────────────────────────────────────────────
         option_type = "CE" if action == "BUY" else "PE"
         atm         = int(round(price / 50) * 50)
@@ -401,7 +432,14 @@ def _run_day(df5: pd.DataFrame, day, day_df: pd.DataFrame,
             if MIN_OPTION_PREM <= prem <= MAX_OPTION_PREM:
                 break
 
-        qty = LOT_SIZE * MIN_LOTS
+        # Dynamic lot sizing: scale lots as equity grows (compounding lever)
+        if args.dynamic_lots:
+            # 1 lot per ₹13,000 of equity, minimum MIN_LOTS, maximum 30
+            dynamic = max(MIN_LOTS, min(30, int(equity / 13_000)))
+            lots_now = dynamic
+        else:
+            lots_now = MIN_LOTS
+        qty = LOT_SIZE * lots_now
 
         # ATR/2 as absolute SL distance; TP = entry + SL_dist × RR ratio
         atr_5m = intra.get("atr_5m") or 0
@@ -434,8 +472,9 @@ def _run_day(df5: pd.DataFrame, day, day_df: pd.DataFrame,
             "sl_price":    sl_price,
             "tp_price":    tp_price,
             "sl_dist":     sl_dist,
-            "best_prem":   prem,       # tracks highest (buying) or lowest (selling) prem seen
+            "best_prem":   prem,
             "atr_5m":      round(atr_5m, 1),
+            "bars_held":   0,
         }
 
     return trades, equity

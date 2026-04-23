@@ -174,11 +174,14 @@ class BotRunner:
         self.scheduler.add_job(self._sync_angel_trades, "cron", minute="*/5", second=45, id="angel_sync")
         # VIX auto-lots — fetch VIX at 9:30 IST and set min_lots for the day
         self.scheduler.add_job(self._vix_auto_lots_set, "cron", hour=9, minute=30, id="vix_auto_lots")
+        # Position guardian — every 60s during market hours: checks SL/TP on open positions
+        # independent of strategy cycle. Catches fast moves between 5m candle ticks.
+        self.scheduler.add_job(self._position_guardian, "interval", seconds=60, id="position_guardian")
 
         self.scheduler.start()
         logger.info(
             "BotRunner started — ATR(5m+5s) "
-            "PaperMon(5m+25s) VIX(15m+20s) ForcePoll(30s)"
+            "PaperMon(5m+25s) VIX(15m+20s) ForcePoll(30s) PosGuard(60s)"
         )
 
     def stop(self):
@@ -218,6 +221,18 @@ class BotRunner:
         except Exception as e:
             logger.error("ATR Intraday cycle: %s", e, exc_info=True)
 
+    async def _position_guardian(self):
+        """Runs every 60s — checks SL/TP on open positions between 5m candle ticks.
+        Only activates when the exchange SL-M order was not placed (fallback in-process SL)."""
+        if self.paused or not _is_market_hours():
+            return
+        if self._atr_strategy is None:
+            return
+        try:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, self._atr_strategy.run_watchlist)
+        except Exception as e:
+            logger.debug("position_guardian: %s", e)
 
 
     # ── VIX regime refresh (every 15 min) ────────────────────────────────────

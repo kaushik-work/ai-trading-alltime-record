@@ -332,7 +332,10 @@ class AngelOneBroker:
                 params["triggerprice"] = str(trigger_price)
 
             resp = self._api.placeOrder(params)
-            order_id = resp.get("data", {}).get("orderid") if isinstance(resp, dict) else None
+            _data = (resp.get("data") or {}) if isinstance(resp, dict) else {}
+            order_id = _data.get("orderid") if isinstance(_data, dict) else None
+            if not order_id and isinstance(resp, dict) and not resp.get("status"):
+                raise RuntimeError(resp.get("message") or resp.get("errorcode") or "Angel One rejected order")
             logger.info("[LIVE/ANGEL] %s %d %s@%s | Order ID: %s", side, quantity, symbol, exchange, order_id)
             return {
                 "order_id": order_id, "symbol": symbol, "side": side, "quantity": quantity,

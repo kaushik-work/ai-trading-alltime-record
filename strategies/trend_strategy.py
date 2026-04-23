@@ -560,11 +560,20 @@ class TrendStrategy:
                         logger.info("[%s] SL-M placed: %s trigger ₹%.2f order_id=%s",
                                     self.strategy_name, option_symbol, sl_trigger, sl_ord["order_id"])
                     else:
-                        logger.error("[%s] SL-M order rejected for %s — bot will manage in-process",
-                                     self.strategy_name, option_symbol)
+                        _reason = sl_ord.get("reason", "unknown rejection")
+                        logger.error("[%s] SL-M order rejected for %s: %s — bot managing SL in-process at ₹%.2f",
+                                     self.strategy_name, option_symbol, _reason, sl_trigger)
+                        from core.angel_error_log import log_error as _log_err
+                        _log_err("sl_order_rejected",
+                                 f"SL-M rejected: {_reason} — in-process SL active at ₹{sl_trigger:.2f}",
+                                 symbol=option_symbol, detail=f"trigger=₹{sl_trigger:.2f}")
                 except Exception as e:
-                    logger.error("[%s] Failed to place SL-M for %s: %s — bot will manage in-process",
-                                 self.strategy_name, option_symbol, e)
+                    logger.error("[%s] Failed to place SL-M for %s: %s — bot managing SL in-process at ₹%.2f",
+                                 self.strategy_name, option_symbol, e, sl_trigger)
+                    from core.angel_error_log import log_error as _log_err
+                    _log_err("sl_order_failed",
+                             f"SL-M exception: {e} — in-process SL active at ₹{sl_trigger:.2f}",
+                             symbol=option_symbol, detail=f"trigger=₹{sl_trigger:.2f}")
 
             # Persist option metadata in broker position for accurate exit pricing
             if hasattr(self.broker, "positions") and option_symbol in self.broker.positions:

@@ -109,9 +109,17 @@ def _get_intraday_df(symbol: str, interval: str):
             _intraday_cache[key] = df
             _intraday_cache_ts[key] = now
             return df
-        msg = "fetch_intraday_df returned insufficient data"
-        logger.error("_get_intraday_df: %s for %s %s", msg, symbol, interval)
-        _log_err("fetch_intraday_df", msg, symbol=symbol, detail=interval)
+        # At market open (before 9:35 IST) there are only 1-2 bars — expected, not an error.
+        from core.utils import now_ist as _now_ist
+        from datetime import time as _dtime
+        _t = _now_ist().time()
+        _at_open = _dtime(9, 15) <= _t < _dtime(9, 35)
+        if _at_open:
+            logger.debug("_get_intraday_df: too few bars at open for %s %s — waiting for 9:35", symbol, interval)
+        else:
+            msg = "fetch_intraday_df returned insufficient data"
+            logger.error("_get_intraday_df: %s for %s %s", msg, symbol, interval)
+            _log_err("fetch_intraday_df", msg, symbol=symbol, detail=interval)
     except Exception as e:
         logger.error("_get_intraday_df: Angel One failed for %s %s: %s", symbol, interval, e)
         _log_err("fetch_intraday_df", str(e), symbol=symbol, detail=interval)
