@@ -359,6 +359,11 @@ class AngelOneBroker:
                 "trigger_price": trigger_price, "tag": tag, "reason": reason,
             }
 
+    def invalidate_positions_cache(self):
+        """Force next get_positions() to hit Angel One API — call after any exit
+        so the position guardian doesn't see a stale position and double-sell."""
+        _positions_cache["ts"] = 0.0
+
     def get_fill_price(self, order_id: str, retries: int = 3, delay: float = 1.5) -> float | None:
         """Fetch actual average fill price from Angel One order book after a MARKET fill."""
         import time as _t

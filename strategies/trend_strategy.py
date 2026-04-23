@@ -602,35 +602,11 @@ class TrendStrategy:
                              f"SL-M exception: {e} — in-process SL active at ₹{sl_trigger:.2f}",
                              symbol=option_symbol, detail=f"trigger=₹{sl_trigger:.2f}")
 
-            # Place exchange TP LIMIT SELL order immediately after entry.
-            # If SL fires first → cancel this TP order to avoid naked short.
-            # If TP fires first → cancel SL-M order.
-            if order.get("status") in ("COMPLETE", "PLACED") and not config.IS_PAPER:
-                tp_price_val = order.get("tp_price")
-                if tp_price_val:
-                    try:
-                        tp_ord = self.broker.place_order(
-                            option_symbol, "SELL", quantity,
-                            order_type="LIMIT", price=float(tp_price_val),
-                            exchange="NFO", product="MIS",
-                            variety="regular", validity="DAY",
-                            tag=f"TP-{self.strategy_name[:14]}",
-                        )
-                        if tp_ord.get("order_id"):
-                            self._tp_orders[option_symbol] = tp_ord["order_id"]
-                            ipc.write_tp_orders(self.strategy_name, self._tp_orders)
-                            order["tp_order_id"] = tp_ord["order_id"]
-                            logger.info("[%s] TP LIMIT placed: %s at ₹%.2f order_id=%s",
-                                        self.strategy_name, option_symbol, tp_price_val, tp_ord["order_id"])
-                        else:
-                            logger.warning("[%s] TP LIMIT rejected for %s: %s — software TP active",
-                                           self.strategy_name, option_symbol, tp_ord.get("reason"))
-                            from core.angel_error_log import log_error as _log_err
-                            _log_err("tp_order_rejected",
-                                     f"TP LIMIT rejected: {tp_ord.get('reason')} — software TP at ₹{tp_price_val}",
-                                     symbol=option_symbol, detail=f"tp=₹{tp_price_val}")
-                    except Exception as e:
-                        logger.error("[%s] Failed to place TP LIMIT for %s: %s", self.strategy_name, option_symbol, e)
+            # TP is managed in-process only (software).
+            # Exchange TP LIMIT SELL is disabled: if exchange SL fires first it
+            # closes the position, but the LIMIT SELL would remain and fire as a
+            # naked short when price recovers — catastrophic. Re-enable only
+            # after proper OCO / GTT support is added.
 
             # Persist option metadata in broker position for accurate exit pricing
             if hasattr(self.broker, "positions") and option_symbol in self.broker.positions:
@@ -714,6 +690,10 @@ class TrendStrategy:
                     self.strategy_name,
                     float(order.get("pnl") or 0),
                 )
+                # Force positions cache refresh so the next guardian cycle sees
+                # the position as gone — prevents double-sell on stale cache.
+                if hasattr(self.broker, "invalidate_positions_cache"):
+                    self.broker.invalidate_positions_cache()
             broken = self.records.check_trade(order)
             if broken:
                 logger.info("ALL-TIME RECORD BROKEN: %s", broken)
@@ -763,9 +743,18 @@ class TrendStrategy:
             if rows:
                 logger.warning(
                     "[%s] %s: position gone from broker but open in DB (%d row(s)) — "
-                    "marked as manually closed. Bot is unblocked for new entries.",
+                    "exchange SL/TP fired or manual close. Cancelling pending orders.",
                     self.strategy_name, underlying, rows,
                 )
+                # Cancel any pending SL-M and TP orders for this underlying.
+                # Exchange SL may have fired — TP order must be cancelled immediately
+                # or it becomes a naked short when price recovers to TP level.
+                for sym in list(self._sl_orders.keys()):
+                    if sym.startswith(underlying):
+                        self._cancel_sl_order(sym)
+                for sym in list(self._tp_orders.keys()):
+                    if sym.startswith(underlying):
+                        self._cancel_tp_order(sym)
         return None
 
     def _consume_force_trade(self, symbol: str, indicators: dict) -> Optional[dict]:
