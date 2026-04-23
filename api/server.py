@@ -803,6 +803,15 @@ def chart_data(user: str = Depends(get_current_user)):
         # S/R levels from last 200 bars
         sr = compute_sr_levels(df.tail(200))
 
+        # EMA 20, 50, 200 on close prices
+        closes = df["Close"].astype(float)
+        times  = [int(ts.timestamp()) for ts in df.index]
+        def _ema_series(period: int) -> list:
+            vals = closes.ewm(span=period, adjust=False).mean()
+            return [{"time": t, "value": round(float(v), 2)}
+                    for t, v in zip(times, vals)
+                    if not (v != v)]  # skip NaN
+
         result = {
             "candles":          candles,
             "levels":           sr["levels"],
@@ -815,6 +824,9 @@ def chart_data(user: str = Depends(get_current_user)):
             "current_price":    sr["current_price"],
             "nearest_support":  sr["nearest_support"],
             "nearest_resistance": sr["nearest_resistance"],
+            "ema20":  _ema_series(20),
+            "ema50":  _ema_series(50),
+            "ema200": _ema_series(200),
         }
         _chart_cache["data"] = result
         _chart_cache["ts"]   = now

@@ -14,6 +14,8 @@ interface Level {
 
 interface Zone { top: number; bottom: number; price: number; strength: number; }
 
+interface EmaPoint { time: number; value: number; }
+
 interface ChartData {
   candles: { time: number; open: number; high: number; low: number; close: number }[];
   levels: Level[];
@@ -24,6 +26,9 @@ interface ChartData {
   current_price: number;
   nearest_support: number | null;
   nearest_resistance: number | null;
+  ema20:  EmaPoint[];
+  ema50:  EmaPoint[];
+  ema200: EmaPoint[];
   error?: string;
 }
 
@@ -32,11 +37,11 @@ interface Props {
 }
 
 const POSITION_LABELS: Record<string, { label: string; color: string }> = {
-  at_resistance:  { label: "AT RESISTANCE — watch for rejection", color: "#ef4444" },
-  at_support:     { label: "AT SUPPORT — watch for bounce",        color: "#22c55e" },
-  breaking_up:    { label: "BREAKING UP through resistance",       color: "#22c55e" },
-  breaking_down:  { label: "BREAKING DOWN through support",        color: "#ef4444" },
-  open_air:       { label: "Open air — between levels",            color: "#94a3b8" },
+  at_resistance:  { label: "⚠ AT SUPPLY / RESISTANCE — expect rejection, watch PE",  color: "#ef4444" },
+  at_support:     { label: "⚡ AT DEMAND / SUPPORT — watch for CE bounce",            color: "#22c55e" },
+  breaking_up:    { label: "🚀 BREAKING UP — CE entry zone",                          color: "#22c55e" },
+  breaking_down:  { label: "🔻 BREAKING DOWN — PE entry zone",                        color: "#ef4444" },
+  open_air:       { label: "Open air — wait for price to reach a zone",               color: "#94a3b8" },
 };
 
 const STRUCTURE_COLORS: Record<string, string> = {
@@ -54,19 +59,24 @@ export default function NiftyChart({ livePrice }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
 
-  // Fetch chart data once on mount
+  // Fetch chart data — on mount then every 30s (live candle updates)
   useEffect(() => {
-    const token = localStorage.getItem("aq_token");
-    fetch(`${API_URL}/api/chart-data`, {
-      headers: { Authorization: `Bearer ${token}` },
-    })
-      .then(r => r.json())
-      .then((d: ChartData) => {
-        if (d.error && !d.candles?.length) { setError(d.error); setLoading(false); return; }
-        setData(d);
-        setLoading(false);
+    const load = () => {
+      const token = localStorage.getItem("aq_token");
+      fetch(`${API_URL}/api/chart-data`, {
+        headers: { Authorization: `Bearer ${token}` },
       })
-      .catch(e => { setError(String(e)); setLoading(false); });
+        .then(r => r.json())
+        .then((d: ChartData) => {
+          if (d.error && !d.candles?.length) { setError(d.error); setLoading(false); return; }
+          setData(d);
+          setLoading(false);
+        })
+        .catch(e => { setError(String(e)); setLoading(false); });
+    };
+    load();
+    const iv = setInterval(load, 30_000);   // refresh every 30s
+    return () => clearInterval(iv);
   }, []);
 
   // Build chart once data arrives
@@ -145,6 +155,22 @@ export default function NiftyChart({ livePrice }: Props) {
         candles.createPriceLine({ price: z.top,    color: "#22c55eaa", lineWidth: lw1, lineStyle: LineStyle.Dotted, axisLabelVisible: false, title: "Demand" });
         candles.createPriceLine({ price: z.bottom, color: "#22c55eaa", lineWidth: lw1, lineStyle: LineStyle.Dotted, axisLabelVisible: false, title: "" });
       });
+
+      // EMA lines — 20 (orange), 50 (blue), 200 (purple)
+      const addEma = (pts: EmaPoint[], color: string, w: 1|2|3|4, label: string) => {
+        if (!pts?.length) return;
+        const s = chart.addLineSeries({
+          color, lineWidth: w,
+          priceLineVisible: false,
+          lastValueVisible: true,
+          title: label,
+          crosshairMarkerVisible: false,
+        });
+        s.setData(pts.map(p => ({ ...p, time: p.time as any })));
+      };
+      addEma(data.ema20,  "#f59e0b", 1, "EMA20");   // amber
+      addEma(data.ema50,  "#3b82f6", 1, "EMA50");   // blue
+      addEma(data.ema200, "#a855f7", 2, "EMA200");  // purple (thicker = more important)
 
       chart.timeScale().fitContent();
 
@@ -228,7 +254,15 @@ export default function NiftyChart({ livePrice }: Props) {
           </span>
           <span className="flex items-center gap-1.5">
             <span className="inline-block w-6 border-t-2 border-amber-400" />
-            Current price
+            Price / EMA20
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block w-6 border-t-2 border-blue-400" />
+            EMA50
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block w-6 border-t-[3px] border-purple-500" />
+            EMA200
           </span>
           <span className="ml-auto text-slate-600">{data.levels.length} levels detected</span>
         </div>
