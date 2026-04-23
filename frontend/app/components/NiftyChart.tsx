@@ -111,7 +111,7 @@ export default function NiftyChart({ livePrice }: Props) {
       // S/R horizontal lines
       data.levels.forEach(lvl => {
         const isResist = lvl.type === "resistance";
-        const width    = Math.min(lvl.strength, 4);
+        const width    = (Math.min(lvl.strength, 4) as 1 | 2 | 3 | 4);
         const color    = isResist ? "#ef444480" : "#22c55e80";
         candles.createPriceLine({
           price:        lvl.price,
@@ -128,24 +128,22 @@ export default function NiftyChart({ livePrice }: Props) {
         pricLineRef.current = candles.createPriceLine({
           price:     data.current_price,
           color:     "#f59e0b",
-          lineWidth: 2,
+          lineWidth: 2 as 1 | 2 | 3 | 4,
           lineStyle: LineStyle.Solid,
           axisLabelVisible: true,
           title:     "NOW",
         });
       }
 
-      // Supply zones (red shaded) — draw as area series overlay approximation
-      // Lightweight Charts v4 doesn't have native rectangle drawing, so we
-      // mark zones via thick dashed lines at zone_top and zone_bot
+      const lw1 = 1 as 1 | 2 | 3 | 4;
       data.supply_zones.forEach(z => {
-        candles.createPriceLine({ price: z.top,    color: "#ef4444aa", lineWidth: 1, lineStyle: LineStyle.Dotted, axisLabelVisible: false, title: "" });
-        candles.createPriceLine({ price: z.bottom, color: "#ef4444aa", lineWidth: 1, lineStyle: LineStyle.Dotted, axisLabelVisible: false, title: "Supply" });
+        candles.createPriceLine({ price: z.top,    color: "#ef4444aa", lineWidth: lw1, lineStyle: LineStyle.Dotted, axisLabelVisible: false, title: "" });
+        candles.createPriceLine({ price: z.bottom, color: "#ef4444aa", lineWidth: lw1, lineStyle: LineStyle.Dotted, axisLabelVisible: false, title: "Supply" });
       });
 
       data.demand_zones.forEach(z => {
-        candles.createPriceLine({ price: z.top,    color: "#22c55eaa", lineWidth: 1, lineStyle: LineStyle.Dotted, axisLabelVisible: false, title: "Demand" });
-        candles.createPriceLine({ price: z.bottom, color: "#22c55eaa", lineWidth: 1, lineStyle: LineStyle.Dotted, axisLabelVisible: false, title: "" });
+        candles.createPriceLine({ price: z.top,    color: "#22c55eaa", lineWidth: lw1, lineStyle: LineStyle.Dotted, axisLabelVisible: false, title: "Demand" });
+        candles.createPriceLine({ price: z.bottom, color: "#22c55eaa", lineWidth: lw1, lineStyle: LineStyle.Dotted, axisLabelVisible: false, title: "" });
       });
 
       chart.timeScale().fitContent();
