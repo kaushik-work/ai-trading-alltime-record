@@ -93,7 +93,22 @@ TARGET_MONTHS = (
     )
 )
 
-CACHE_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backtest_cache")
+CACHE_DIR  = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "backtest_cache")
+_PCR_FILE  = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "db", "pcr_historical.csv")
+
+
+def _load_pcr_history() -> dict:
+    """Load db/pcr_historical.csv → {date_str: pcr_float}. Empty dict if file missing."""
+    if not os.path.exists(_PCR_FILE):
+        return {}
+    try:
+        df = pd.read_csv(_PCR_FILE, usecols=["date", "pcr_weekly"])
+        result = {row["date"]: float(row["pcr_weekly"]) for _, row in df.iterrows()}
+        print(f"  PCR history: {len(result)} days loaded ({min(result)} to {max(result)})")
+        return result
+    except Exception as e:
+        print(f"  WARN: could not load PCR history: {e}")
+        return {}
 
 
 # ── Data loading ──────────────────────────────────────────────────────────────
@@ -300,13 +315,33 @@ def _option_premium(spot: float, strike: int, option_type: str) -> float:
 # ── Core backtest loop ────────────────────────────────────────────────────────
 
 def _run_day(df5: pd.DataFrame, day, day_df: pd.DataFrame,
-             prev_day_df, equity: float) -> tuple[list, float]:
+             prev_day_df, equity: float,
+             pcr_history: dict = None) -> tuple[list, float]:
     """Run one day. Returns (trades_list, end_equity)."""
     from strategies.signal_scorer import score_symbol
 
     trades       = []
     position     = None
     day_start_eq = equity
+
+    # Build oi_data from historical PCR if available for this day
+    day_pcr  = (pcr_history or {}).get(str(day), None)
+    if day_pcr is not None:
+        if day_pcr > 1.3:
+            _sentiment = "very_bullish"
+        elif day_pcr > 1.1:
+            _sentiment = "bullish"
+        elif day_pcr < 0.7:
+            _sentiment = "very_bearish"
+        elif day_pcr < 0.9:
+            _sentiment = "bearish"
+        else:
+            _sentiment = "neutral"
+        _oi_data = {"pcr": day_pcr, "sentiment": _sentiment, "bias": "NEUTRAL",
+                    "ce_wall": 0, "pe_wall": 0, "max_pain": 0, "spot": 0,
+                    "atm_ce_oi_delta": 0, "atm_pe_oi_delta": 0}
+    else:
+        _oi_data = {}   # no PCR data — scorer defaults to neutral (old behaviour)
 
 
     for local_pos, (ts, row) in enumerate(day_df.iterrows()):
@@ -422,7 +457,7 @@ def _run_day(df5: pd.DataFrame, day, day_df: pd.DataFrame,
         df_5m_slice = df5.iloc[: df5.index.get_loc(ts) + 1].tail(120)
 
         # ── Score using the real scorer ──────────────────────────────────────
-        scored = score_symbol(indic, {}, {}, intra, df_5m=df_5m_slice, mode=args.mode)
+        scored = score_symbol(indic, _oi_data, {}, intra, df_5m=df_5m_slice, mode=args.mode)
         action = scored["action"]
         score  = scored["score"]
 
@@ -601,7 +636,8 @@ def main():
     print(f"{'='*60}\n")
 
     print("Loading data...")
-    df5 = _load_5m()
+    df5        = _load_5m()
+    pcr_history = _load_pcr_history()   # {date_str: pcr_float} — empty if no file
 
     available_months = sorted(set(df5["_ym"].unique()).intersection(TARGET_MONTHS))
     if not available_months:
@@ -635,7 +671,7 @@ def main():
             all_day_i = all_dates.index(day)
             prev_day_df = df5[df5["_date"] == all_dates[all_day_i - 1]] if all_day_i > 0 else None
 
-            day_trades, equity = _run_day(df5, day, day_df, prev_day_df, equity)
+            day_trades, equity = _run_day(df5, day, day_df, prev_day_df, equity, pcr_history)
             month_trades.extend(day_trades)
             print(".", end="", flush=True)
 

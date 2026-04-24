@@ -394,9 +394,10 @@ def score_symbol(indicators: dict, oi_data: dict, patterns: dict,
     # When PCR is extreme, ALL participants are aligned one way → spontaneous
     # alignment = phase transition risk = "the crash begins."
     # Signal aligning WITH the herd = chasing exhaustion → penalise hard.
-    # PCR < 0.55 = extreme CE buying (bullish herd); PCR > 2.0 = extreme PE buying (bearish herd)
-    HERD_BULL = 0.55
-    HERD_BEAR = 2.00
+    # Calibrated from 6 months NSE bhavcopy (Oct 2025-Apr 2026, PCR range 0.62-1.46):
+    # < 0.68 = extreme CE crowd (bottom 5%); > 1.40 = extreme PE crowd (top 5%)
+    HERD_BULL = 0.68
+    HERD_BEAR = 1.40
     if pcr < HERD_BULL and score > 0:
         # Everyone is already long CE; we want to BUY too → chasing the herd
         pts = -3
