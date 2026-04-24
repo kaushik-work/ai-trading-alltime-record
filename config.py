@@ -40,14 +40,14 @@ MAX_OPEN_POSITIONS = 1         # one trade at a time — no concurrent positions
 MAX_TRADE_AMOUNT   = 40_000    # max capital per trade — covers 3 NIFTY lots at ₹180 ATM
 MAX_DAILY_LOSS              = 6_250   # ₹6,250 combined hard stop (5% of ₹1.25L) — all strategies pause when hit
 PER_STRATEGY_DAILY_LOSS_PCT = 3.0    # each strategy pauses independently at 3% loss (₹3,750) — doesn't stop others
-MAX_DAILY_TRADES            = 1      # one trade per day — no re-entry after SL/TP
+MAX_DAILY_TRADES            = 10     # soft cap — real gate is MAX_OPEN_POSITIONS=1 (one at a time)
 
 # ── Lot Sizes (NSE) ────────────────────────────────────────────────────────────
 # Verify current lot sizes at NSE or Angel One contract specs
 LOT_SIZES = {
     "NIFTY": 65,   # revised Feb 2026
 }
-MIN_LOTS = 1   # fallback default — runtime value is set from dashboard settings
+MIN_LOTS = 3   # default 3 lots — overridable from dashboard header
 
 # ── Intraday Timing ────────────────────────────────────────────────────────────
 TRADING_TYPE     = "intraday"

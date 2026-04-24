@@ -63,6 +63,8 @@ parser.add_argument("--max-hold",   type=int, default=0,
                     help="Exit if position still open after N bars with no TP progress (0 = off)")
 parser.add_argument("--slippage",   type=float, default=3.0,
                     help="One-way slippage in premium points (applied on entry AND exit, default 3)")
+parser.add_argument("--max-daily-trades", type=int, default=0,
+                    help="Max entries per day — 0=unlimited (live gate is MAX_OPEN_POSITIONS=1)")
 args = parser.parse_args()
 
 import config
@@ -76,12 +78,12 @@ MAX_OPTION_PREM  = config.MAX_OPTION_PREMIUM      # 170
 SIGNAL_THRESHOLD = args.threshold if args.threshold is not None else config.MIN_SIGNAL_SCORE
 config.MIN_SIGNAL_SCORE = SIGNAL_THRESHOLD   # patch so score_symbol() sees the override
 LOT_SIZE         = config.LOT_SIZES["NIFTY"]  # 65
-MIN_LOTS         = args.lots if args.lots is not None else config.MIN_LOTS
+MIN_LOTS         = args.lots if args.lots is not None else config.MIN_LOTS  # default 3
 MAX_DAILY_LOSS   = config.MAX_DAILY_LOSS      # 6250
-TRADE_START      = time(9, 15) if args.no_lunch else time(9, 45)
-TRADE_EXIT       = time(15, 10)
-LUNCH_START      = time(23, 59) if args.no_lunch else time(12, 30)
-LUNCH_END        = time(23, 59) if args.no_lunch else time(13, 30)
+TRADE_START      = time(9, 30)    # matches live: INTRADAY_START 09:30
+TRADE_EXIT       = time(11, 20)   # matches live: INTRADAY_EXIT_BY 11:20
+LUNCH_START      = time(23, 59)   # disabled — we exit at 11:20
+LUNCH_END        = time(23, 59)
 SLIPPAGE         = args.slippage   # pts per side (entry + exit = 2×SLIPPAGE per round trip)
 
 TARGET_MONTHS = (
@@ -115,14 +117,17 @@ def _load_pcr_history() -> dict:
 
 def _load_5m() -> pd.DataFrame:
     os.makedirs(CACHE_DIR, exist_ok=True)
-    cache_path = os.path.join(CACHE_DIR, "NIFTY_5m_90d.csv")
+    # Prefer the larger 180d cache if it exists
+    cache_path = os.path.join(CACHE_DIR, "NIFTY_5m_180d.csv")
+    if not os.path.exists(cache_path):
+        cache_path = os.path.join(CACHE_DIR, "NIFTY_5m_90d.csv")
     if os.path.exists(cache_path) and not args.no_cache:
         df = pd.read_csv(cache_path, index_col=0, parse_dates=True)
-        print(f"  (cache) NIFTY_5m_90d.csv: {len(df)} bars")
+        print(f"  (cache) {os.path.basename(cache_path)}: {len(df)} bars")
         return _norm(df)
-    print("  Fetching NIFTY 5m from Angel One (90d)...")
+    print("  Fetching NIFTY 5m from Angel One (180d)...")
     from data.angel_fetcher import AngelFetcher
-    df = AngelFetcher.get().fetch_historical_df("NIFTY", "5m", days=90)
+    df = AngelFetcher.get().fetch_historical_df("NIFTY", "5m", days=180)
     if df is None or len(df) < 100:
         raise ValueError("No data — check .env Angel One credentials.")
     df = _norm(df)
@@ -435,6 +440,10 @@ def _run_day(df5: pd.DataFrame, day, day_df: pd.DataFrame,
 
         # ── Daily loss guard ─────────────────────────────────────────────────
         if equity - day_start_eq <= -MAX_DAILY_LOSS:
+            break
+
+        # ── Daily trade cap (matches live MAX_DAILY_TRADES) ───────────────────
+        if args.max_daily_trades > 0 and len([t for t in trades if str(t["date"]) == str(day)]) >= args.max_daily_trades:
             break
 
         if LUNCH_START <= bar_time <= LUNCH_END:
