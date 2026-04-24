@@ -92,7 +92,25 @@
       "PowerShell(& \"C:\\\\Users\\\\rkkau\\\\.local\\\\bin\\\\uv.exe\" --version)",
       "PowerShell($p = \"C:\\\\Users\\\\rkkau\\\\AppData\\\\Roaming\\\\uv\\\\python\\\\cpython-3.14-windows-x86_64-none\\\\python.exe\"; & $p --version 2>&1; Write-Host \"Path: $p\")",
       "PowerShell(& \"C:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\.venv\\\\Scripts\\\\python.exe\" --version 2>&1)",
-      "PowerShell(Set-Location \"C:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\frontend\"; & \"C:\\\\Users\\\\rkkau\\\\.local\\\\bin\\\\uv.exe\" run --no-project -- npx --yes npm install lightweight-charts 2>&1 | Select-Object -Last 5)"
+      "PowerShell(Set-Location \"C:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\frontend\"; & \"C:\\\\Users\\\\rkkau\\\\.local\\\\bin\\\\uv.exe\" run --no-project -- npx --yes npm install lightweight-charts 2>&1 | Select-Object -Last 5)",
+      "Bash(.venv/Scripts/python scripts/backtest_live_atr.py --months 2026-01,2026-02,2026-03,2026-04 --slippage 0)",
+      "Bash(.venv/Scripts/python scripts/backtest_live_atr.py --months 2026-01,2026-02,2026-03,2026-04 --slippage 3)",
+      "Bash(.venv/Scripts/python scripts/backtest_live_atr.py --months 2026-01,2026-02,2026-03,2026-04 --slippage 0 --trail)",
+      "Bash(.venv/Scripts/python scripts/backtest_live_atr.py --months 2026-01,2026-02,2026-03,2026-04 --slippage 3 --trail)",
+      "Bash(.venv/Scripts/python scripts/backtest_live_atr.py --months 2026-01,2026-02,2026-03,2026-04 --slippage 1)",
+      "Bash(.venv/Scripts/python scripts/backtest_live_atr.py --months 2026-01,2026-02,2026-03,2026-04 --slippage 1 --trail --threshold 7)",
+      "Bash(.venv/Scripts/python scripts/fetch_historical_pcr.py --from 2026-04-01 --to 2026-04-23)",
+      "Bash(.venv/Scripts/python scripts/fetch_historical_pcr.py --from 2025-10-01 --to 2026-03-31)",
+      "Bash(.venv/Scripts/python scripts/backtest_live_atr.py --months 2026-01,2026-02,2026-03,2026-04 --slippage 1 --min-lots 3)",
+      "Bash(.venv/Scripts/python scripts/backtest_live_atr.py --months 2026-01,2026-02,2026-03,2026-04 --slippage 1 --lots 3)",
+      "Bash(.venv/Scripts/python scripts/backtest_live_atr.py --months 2026-01,2026-02,2026-03,2026-04 --slippage 1 --lots 3 --threshold 8)",
+      "Bash(.venv/Scripts/python scripts/backtest_live_atr.py --months 2026-01,2026-02,2026-03,2026-04 --slippage 1 --lots 1 --threshold 6)",
+      "Bash(.venv/Scripts/python scripts/backtest_live_atr.py --months 2026-01,2026-02,2026-03,2026-04 --slippage 1 --lots 3 --max-daily-trades 1)",
+      "Bash(.venv/Scripts/python -c \"from strategies.signal_scorer import score_symbol; print\\('OK'\\)\")",
+      "Bash(.venv/Scripts/python scripts/backtest_live_atr.py --months 2026-04 --slippage 1 --lots 3 --max-daily-trades 3)",
+      "Bash(.venv/Scripts/python scripts/sweep_indicators.py --months 2026-01,2026-02,2026-03,2026-04 --lots 3 --slippage 1)",
+      "Bash(.venv/Scripts/python scripts/backtest_live_atr.py --months 2026-01,2026-02,2026-03,2026-04 --slippage 1 --lots 3 --max-daily-trades 3 --mode ict_only)",
+      "Bash(.venv/Scripts/python scripts/backtest_live_atr.py --months 2026-01,2026-02,2026-03,2026-04 --slippage 1 --lots 3 --max-daily-trades 1 --skip \"pcr,herd\")"
     ]
   }
 }
