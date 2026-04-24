@@ -43,8 +43,10 @@ parser.add_argument("--sell",       action="store_true",
 parser.add_argument("--trail",      action="store_true",
                     help="Use trailing SL (trails with best premium seen)")
 parser.add_argument("--mode",       type=str, default="atr_only",
-                    choices=["atr_only", "full"],
+                    choices=["atr_only", "ict_only", "full"],
                     help="Scorer mode (default: atr_only)")
+parser.add_argument("--skip",       type=str, default="",
+                    help="Comma-separated scorer sections to disable, e.g. sma,rsi,macd,volume,bb,patterns,pcr,herd,atr_filter,vwap,orb,trend_15m,rsi_15m,pdh_pdl,sr_levels")
 parser.add_argument("--lots",       type=int, default=None,
                     help="Number of lots per trade (overrides config MIN_LOTS)")
 parser.add_argument("--dynamic-lots", action="store_true",
@@ -81,9 +83,10 @@ LOT_SIZE         = config.LOT_SIZES["NIFTY"]  # 65
 MIN_LOTS         = args.lots if args.lots is not None else config.MIN_LOTS  # default 3
 MAX_DAILY_LOSS   = config.MAX_DAILY_LOSS      # 6250
 TRADE_START      = time(9, 30)    # matches live: INTRADAY_START 09:30
-TRADE_EXIT       = time(11, 20)   # matches live: INTRADAY_EXIT_BY 11:20
-LUNCH_START      = time(23, 59)   # disabled — we exit at 11:20
+TRADE_EXIT       = time(11, 30)   # matches live: INTRADAY_EXIT_BY 11:30
+LUNCH_START      = time(23, 59)   # disabled — we exit at 11:30
 LUNCH_END        = time(23, 59)
+SKIP_SECTIONS    = {s.strip() for s in args.skip.split(",") if s.strip()}
 SLIPPAGE         = args.slippage   # pts per side (entry + exit = 2×SLIPPAGE per round trip)
 
 TARGET_MONTHS = (
@@ -349,6 +352,8 @@ def _run_day(df5: pd.DataFrame, day, day_df: pd.DataFrame,
         _oi_data = {}   # no PCR data — scorer defaults to neutral (old behaviour)
 
 
+    cooldown_until = -1   # bar index after which re-entry is allowed (post-exit wait)
+
     for local_pos, (ts, row) in enumerate(day_df.iterrows()):
         bar_time = ts.time() if hasattr(ts, "time") else time(12, 0)
         price    = float(row["Close"])
@@ -417,30 +422,35 @@ def _run_day(df5: pd.DataFrame, day, day_df: pd.DataFrame,
             position["bars_held"] += 1
 
             if sl_hit:
-                # SL-M fills at SL price minus exit slippage (fast market, worst side)
                 exit_p = max(position["sl_price"] - SLIPPAGE, 0.5)
                 pnl    = pnl_fn(exit_p)
                 trades.append(_make_trade(day, position, exit_p, round(pnl, 2), price, "SL"))
                 equity  += pnl
                 position = None
+                cooldown_until = local_pos + 2   # wait 2 bars (10 min) before next entry
             elif tp_hit:
-                # Limit TP: slippage is minimal but still apply for consistency
                 exit_p = max(position["tp_price"] - SLIPPAGE, 0.5)
                 pnl    = pnl_fn(exit_p)
                 trades.append(_make_trade(day, position, exit_p, round(pnl, 2), price, "TP"))
                 equity  += pnl
                 position = None
+                cooldown_until = local_pos + 2
             elif args.max_hold > 0 and position["bars_held"] >= args.max_hold:
                 exit_p = max(curr_prem - SLIPPAGE, 0.5)
                 pnl    = pnl_fn(exit_p)
                 trades.append(_make_trade(day, position, exit_p, round(pnl, 2), price, "DECAY"))
                 equity  += pnl
                 position = None
+                cooldown_until = local_pos + 2
             continue
 
         # ── Daily loss guard ─────────────────────────────────────────────────
         if equity - day_start_eq <= -MAX_DAILY_LOSS:
             break
+
+        # ── Post-exit cooldown — wait 2 bars after SL/TP before re-entering ──
+        if local_pos <= cooldown_until:
+            continue
 
         # ── Daily trade cap (matches live MAX_DAILY_TRADES) ───────────────────
         if args.max_daily_trades > 0 and len([t for t in trades if str(t["date"]) == str(day)]) >= args.max_daily_trades:
@@ -466,7 +476,8 @@ def _run_day(df5: pd.DataFrame, day, day_df: pd.DataFrame,
         df_5m_slice = df5.iloc[: df5.index.get_loc(ts) + 1].tail(120)
 
         # ── Score using the real scorer ──────────────────────────────────────
-        scored = score_symbol(indic, _oi_data, {}, intra, df_5m=df_5m_slice, mode=args.mode)
+        scored = score_symbol(indic, _oi_data, {}, intra, df_5m=df_5m_slice,
+                              mode=args.mode, skip_sections=SKIP_SECTIONS)
         action = scored["action"]
         score  = scored["score"]
 

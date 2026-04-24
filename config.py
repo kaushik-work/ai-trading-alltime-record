@@ -52,7 +52,7 @@ MIN_LOTS = 3   # default 3 lots — overridable from dashboard header
 # ── Intraday Timing ────────────────────────────────────────────────────────────
 TRADING_TYPE     = "intraday"
 INTRADAY_START   = "09:30"    # open at 9:30 — first candle close
-INTRADAY_EXIT_BY = "11:20"    # auto square-off all positions at 11:20
+INTRADAY_EXIT_BY = "11:30"    # auto square-off all positions at 11:30
 ORB_WINDOW_MINS  = 15
 LUNCH_SKIP_START = "23:59"    # disabled — we exit at 11:20 before lunch
 LUNCH_SKIP_END   = "23:59"
@@ -65,8 +65,8 @@ ATR_RR_RATIO    = 3.0    # ATR Intraday  → 1:3  (TP = 4.5%)
 TAKE_PROFIT_PCT = STOP_LOSS_PCT * ATR_RR_RATIO  # 4.5% — alias used by backtest + banner
 
 # ── Option Premium Target Range ───────────────────────────────────────────────
-MIN_OPTION_PREMIUM = 150   # search strikes until premium ≥ ₹150
-MAX_OPTION_PREMIUM = 170   # search strikes until premium ≤ ₹170
+MIN_OPTION_PREMIUM = 155   # target ₹160 strike — search until premium ≥ ₹155
+MAX_OPTION_PREMIUM = 165   # target ₹160 strike — search until premium ≤ ₹165
 
 # ── Signal Score ───────────────────────────────────────────────────────────────
 MIN_SIGNAL_SCORE = 6   # trade only when score ≥ 6 (backtest: 45.2% WR at 6 vs 44.7% at 5)
