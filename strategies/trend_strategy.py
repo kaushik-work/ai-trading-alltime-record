@@ -593,10 +593,27 @@ class TrendStrategy:
                             logger.info("[%s] Using actual fill ₹%.2f (LTP was ₹%.2f, slip=₹%.2f)",
                                         self.strategy_name, actual_fill, option_ltp, actual_fill - option_ltp)
 
-            # SL/TP calculated from ACTUAL FILL PRICE, not stale LTP
-            _atr = decision.get("atr") or indicators.get("atr_5m") or indicators.get("atr_14") or 0
-            _sl_dist = round(_atr / 2, 1) if _atr else round(_entry_price * (self.stop_loss_pct / 100), 1)
-            _sl_dist = max(_sl_dist, 1.0)
+            # SL/TP calculated from ACTUAL FILL PRICE, not stale LTP.
+            # Use 5m ATR only — daily ATR (atr_14 ~150 pts) would make SL unreachable.
+            # 5m ATR for NIFTY is typically 15-35 pts. Cap at 50 to catch bad data.
+            _atr_raw = decision.get("atr") or 0
+            if not _atr_raw or _atr_raw > 50:
+                # decision["atr"] was contaminated by daily ATR — recompute from df
+                try:
+                    import pandas as _pd
+                    _df5 = self.market._get_df(symbol) if isinstance(self.market, RealMarketData) else None
+                    if _df5 is not None and len(_df5) >= 10:
+                        _h = _df5["High"].astype(float)
+                        _l = _df5["Low"].astype(float)
+                        _c = _df5["Close"].astype(float)
+                        _tr = _pd.concat([(_h - _l), (_h - _c.shift(1)).abs(),
+                                          (_l - _c.shift(1)).abs()], axis=1).max(axis=1)
+                        _atr_raw = float(_tr.ewm(span=14, adjust=False).mean().iloc[-1])
+                except Exception:
+                    _atr_raw = 0
+            # Final fallback: 20 pts is a reasonable NIFTY 5m ATR when we have no data
+            _atr = min(_atr_raw, 50) if _atr_raw > 0 else 20.0
+            _sl_dist = max(round(_atr / 2, 1), 5.0)   # minimum 5 pts so spread can't kill it
             order["sl_price"] = round(_entry_price - _sl_dist, 1)
             order["tp_price"] = round(_entry_price + _sl_dist * self.rr_ratio, 1)
             logger.info(

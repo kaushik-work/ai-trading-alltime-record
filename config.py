@@ -36,11 +36,11 @@ TARGET_PHASE_B   = 1_500_000
 # ── Budget & Risk ──────────────────────────────────────────────────────────────
 STARTING_BUDGET    = 125_000   # ₹1.25L — 3 lots × 2 strategies running independently
 RISK_PER_TRADE_PCT = 2.0       # % of portfolio risked per trade (backtest optimal)
-MAX_OPEN_POSITIONS = 2         # max concurrent positions (Phase A)
+MAX_OPEN_POSITIONS = 1         # one trade at a time — no concurrent positions
 MAX_TRADE_AMOUNT   = 40_000    # max capital per trade — covers 3 NIFTY lots at ₹180 ATM
 MAX_DAILY_LOSS              = 6_250   # ₹6,250 combined hard stop (5% of ₹1.25L) — all strategies pause when hit
 PER_STRATEGY_DAILY_LOSS_PCT = 3.0    # each strategy pauses independently at 3% loss (₹3,750) — doesn't stop others
-MAX_DAILY_TRADES            = 10     # generous cap — quality gates below are the real filter
+MAX_DAILY_TRADES            = 1      # one trade per day — no re-entry after SL/TP
 
 # ── Lot Sizes (NSE) ────────────────────────────────────────────────────────────
 # Verify current lot sizes at NSE or Angel One contract specs
@@ -51,11 +51,11 @@ MIN_LOTS = 1   # fallback default — runtime value is set from dashboard settin
 
 # ── Intraday Timing ────────────────────────────────────────────────────────────
 TRADING_TYPE     = "intraday"
-INTRADAY_START   = "09:45"    # skip first 30 min — volatile, fake moves
-INTRADAY_EXIT_BY = "15:10"    # mandatory EOD square-off
+INTRADAY_START   = "09:30"    # open at 9:30 — first candle close
+INTRADAY_EXIT_BY = "11:20"    # auto square-off all positions at 11:20
 ORB_WINDOW_MINS  = 15
-LUNCH_SKIP_START = "12:30"    # NSE choppy window — no new entries
-LUNCH_SKIP_END   = "13:30"
+LUNCH_SKIP_START = "23:59"    # disabled — we exit at 11:20 before lunch
+LUNCH_SKIP_END   = "23:59"
 
 # ── Stop Loss / Take Profit ────────────────────────────────────────────────────
 STOP_LOSS_PCT   = 1.5    # % of option premium — SL trigger for all strategies
