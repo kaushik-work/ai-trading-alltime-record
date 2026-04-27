@@ -60,7 +60,7 @@ PCR_LO_CE   = args.pcr_lo_ce    # CE entry only when PCR > this (avoids bullish 
 PCR_HI_PE   = args.pcr_hi_pe    # PE entry only when PCR < this (avoids bearish herd)
 RISK_FREE   = 0.065
 START_H, START_M = 9, 30
-EXIT_H,  EXIT_M  = 11, 30
+EXIT_H,  EXIT_M  = 15, 20
 
 
 # ── Load data ────────────────────────────────────────────────────────────────

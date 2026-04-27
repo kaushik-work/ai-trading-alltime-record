@@ -83,8 +83,8 @@ LOT_SIZE         = config.LOT_SIZES["NIFTY"]  # 65
 MIN_LOTS         = args.lots if args.lots is not None else config.MIN_LOTS  # default 3
 MAX_DAILY_LOSS   = config.MAX_DAILY_LOSS      # 6250
 TRADE_START      = time(9, 30)    # matches live: INTRADAY_START 09:30
-TRADE_EXIT       = time(11, 30)   # matches live: INTRADAY_EXIT_BY 11:30
-LUNCH_START      = time(23, 59)   # disabled — we exit at 11:30
+TRADE_EXIT       = time(15, 20)   # hold until near close
+LUNCH_START      = time(23, 59)   # disabled
 LUNCH_END        = time(23, 59)
 SKIP_SECTIONS    = {s.strip() for s in args.skip.split(",") if s.strip()}
 SLIPPAGE         = args.slippage   # pts per side (entry + exit = 2×SLIPPAGE per round trip)
