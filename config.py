@@ -52,9 +52,9 @@ MIN_LOTS = 3   # default 3 lots — overridable from dashboard header
 # ── Intraday Timing ────────────────────────────────────────────────────────────
 TRADING_TYPE     = "intraday"
 INTRADAY_START   = "09:30"    # open at 9:30 — first candle close
-INTRADAY_EXIT_BY = "11:30"    # auto square-off all positions at 11:30
+INTRADAY_EXIT_BY = "15:20"    # auto square-off all positions at 15:20
 ORB_WINDOW_MINS  = 15
-LUNCH_SKIP_START = "23:59"    # disabled — we exit at 11:20 before lunch
+LUNCH_SKIP_START = "23:59"    # disabled
 LUNCH_SKIP_END   = "23:59"
 
 # ── Stop Loss / Take Profit ────────────────────────────────────────────────────
