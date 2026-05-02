@@ -30,6 +30,9 @@ def is_market_open() -> bool:
     now = datetime.now()
     if now.weekday() >= 5:  # Saturday/Sunday
         return False
+    is_hol, _ = ipc.is_market_holiday(now.strftime("%Y-%m-%d"))
+    if is_hol:
+        return False
     open_h, open_m = map(int, config.MARKET_OPEN.split(":"))
     close_h, close_m = map(int, config.MARKET_CLOSE.split(":"))
     market_open = now.replace(hour=open_h, minute=open_m, second=0)

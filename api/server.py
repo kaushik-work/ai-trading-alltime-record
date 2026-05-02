@@ -77,7 +77,9 @@ def _get_prices() -> dict:
     from datetime import datetime as _dt, time as _dtime
     _now = _dt.now(_ZI("Asia/Kolkata"))
     _t = _now.time()
-    _market_open = _dtime(9, 15) <= _t <= _dtime(15, 30) and _now.weekday() < 5
+    from core.ipc import is_market_holiday as _is_hol_fn
+    _is_hol, _ = _is_hol_fn(_now.strftime("%Y-%m-%d"))
+    _market_open = _dtime(9, 15) <= _t <= _dtime(15, 30) and _now.weekday() < 5 and not _is_hol
     if not _market_open:
         return _price_cache  # return last known prices, don't hit Angel One API
     if _time.time() - _price_cache_ts < _PRICE_TTL:
@@ -686,6 +688,60 @@ def remove_unblock(date_str: str, user: str = Depends(get_current_user)):
     """Remove the unblock override — date goes back to its original blocked state."""
     ipc.remove_event_unblock(date_str)
     return {"status": "block_restored", "date": date_str}
+
+
+# ── Market Holidays API ───────────────────────────────────────────────────────
+
+@app.get("/api/market-holidays")
+def get_market_holidays(_user: str = Depends(get_current_user)):
+    """List all NSE market holidays (config + runtime-added)."""
+    import config
+    from datetime import date
+    today_str = date.today().isoformat()
+    runtime   = ipc.read_runtime_holidays()
+    all_dates = sorted(set(config.NSE_MARKET_HOLIDAYS) | set(runtime))
+    holidays  = []
+    for d in all_dates:
+        label  = config.NSE_MARKET_HOLIDAYS.get(d) or runtime.get(d, "")
+        source = "config" if d in config.NSE_MARKET_HOLIDAYS else "runtime"
+        holidays.append({
+            "date":     d,
+            "label":    label,
+            "source":   source,
+            "is_today": d == today_str,
+        })
+    is_hol, hol_label = ipc.is_market_holiday(today_str)
+    return {
+        "holidays":      holidays,
+        "today_holiday": is_hol,
+        "today_label":   hol_label if is_hol else None,
+    }
+
+
+@app.post("/api/market-holidays")
+def add_holiday(body: dict, _user: str = Depends(get_current_user)):
+    """Add a runtime market holiday. Body: {date: 'YYYY-MM-DD', label: 'reason'}"""
+    from datetime import date as _date
+    date_str = body.get("date", "").strip()
+    label    = body.get("label", "NSE Holiday").strip()
+    try:
+        _date.fromisoformat(date_str)
+    except ValueError:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD.")
+    ipc.add_market_holiday(date_str, label)
+    return {"status": "added", "date": date_str, "label": label}
+
+
+@app.delete("/api/market-holidays/{date_str}")
+def remove_holiday(date_str: str, user: str = Depends(get_current_user)):
+    """Remove a runtime market holiday. Config-hardcoded holidays cannot be removed here."""
+    import config
+    if date_str in config.NSE_MARKET_HOLIDAYS:
+        from fastapi import HTTPException
+        raise HTTPException(status_code=400, detail="Cannot remove config-hardcoded holiday. Edit config.py.")
+    ipc.remove_market_holiday(date_str)
+    return {"status": "removed", "date": date_str}
 
 
 @app.post("/api/angel/session")

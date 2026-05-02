@@ -84,6 +84,24 @@ MARKET_CLOSE = "15:30"
 # ── Claude Model ───────────────────────────────────────────────────────────────
 CLAUDE_MODEL = "claude-sonnet-4-6"
 
+# ── NSE Market Holidays — exchange closed, no trading possible ────────────────
+NSE_MARKET_HOLIDAYS: dict[str, str] = {
+    "2026-01-26": "Republic Day",
+    "2026-02-26": "Mahashivratri",
+    "2026-03-25": "Holi",
+    "2026-04-02": "Ram Navami",
+    "2026-04-03": "Good Friday",
+    "2026-04-14": "Dr. Ambedkar Jayanti",
+    "2026-05-01": "Maharashtra Day",
+    "2026-08-15": "Independence Day",
+    "2026-08-27": "Ganesh Chaturthi",
+    "2026-10-02": "Gandhi Jayanti / Dussehra",
+    "2026-10-20": "Diwali (Laxmi Puja)",
+    "2026-10-21": "Diwali (Balipratipada)",
+    "2026-11-05": "Gurunanak Jayanti",
+    "2026-12-25": "Christmas",
+}
+
 # ── Event Calendar — skip on these dates (IV crush guaranteed) ────────────────
 EVENT_BLOCK_DATES: dict[str, str] = {
     "2026-02-01": "Union Budget",

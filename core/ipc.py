@@ -144,6 +144,49 @@ def remove_event_block(date: str) -> dict:
     return blocks
 
 
+# ── Market holidays (runtime additions) ──────────────────────────────────────
+
+HOLIDAYS_FILE = FLAGS_DIR / "market_holidays.json"
+
+
+def read_runtime_holidays() -> dict:
+    """Return runtime-added holidays {date: label}."""
+    import json
+    if not HOLIDAYS_FILE.exists():
+        return {}
+    try:
+        return json.loads(HOLIDAYS_FILE.read_text())
+    except Exception:
+        return {}
+
+
+def add_market_holiday(date: str, label: str) -> dict:
+    holidays = read_runtime_holidays()
+    holidays[date] = label
+    import json
+    HOLIDAYS_FILE.write_text(json.dumps(holidays, indent=2))
+    return holidays
+
+
+def remove_market_holiday(date: str) -> dict:
+    holidays = read_runtime_holidays()
+    holidays.pop(date, None)
+    import json
+    HOLIDAYS_FILE.write_text(json.dumps(holidays, indent=2))
+    return holidays
+
+
+def is_market_holiday(date_str: str) -> tuple[bool, str]:
+    """Return (is_holiday, reason). Checks config + runtime."""
+    import config
+    if date_str in config.NSE_MARKET_HOLIDAYS:
+        return True, config.NSE_MARKET_HOLIDAYS[date_str]
+    runtime = read_runtime_holidays()
+    if date_str in runtime:
+        return True, runtime[date_str]
+    return False, ""
+
+
 # ── Runtime settings (lots, etc.) ────────────────────────────────────────────
 
 SETTINGS_FILE = FLAGS_DIR / "settings.json"

@@ -26,7 +26,6 @@ import argparse
 import csv
 import os
 import sys
-import threading
 import time
 from datetime import date, datetime, time as dtime, timedelta
 from pathlib import Path
@@ -235,6 +234,12 @@ MARKET_CLOSE = dtime(15, 35)
 
 if not args.dry_run and not is_trading_day():
     log("Today is a weekend. Nothing to do.")
+    sys.exit(0)
+
+from core.ipc import is_market_holiday
+_is_hol, _hol_label = is_market_holiday(date.today().isoformat())
+if not args.dry_run and _is_hol:
+    log(f"Today is a market holiday: {_hol_label}. NSE is closed. Exiting.")
     sys.exit(0)
 
 log(f"Starting daily runner for {today_str}")
