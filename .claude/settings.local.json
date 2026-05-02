@@ -145,7 +145,13 @@
       "PowerShell(Get-ScheduledTask -TaskName \"NiftyDailyRunner\" | Select-Object TaskName, State, @{N='NextRun';E={\\(Get-ScheduledTaskInfo -TaskName $_.TaskName\\).NextRunTime}})",
       "PowerShell(Get-ScheduledTask | Where-Object {$_.TaskName -eq \"NiftyDailyRunner\"} | Format-List TaskName, State, Description)",
       "Bash(.venv/Scripts/python scripts/get_token.py)",
-      "Bash(.venv/Scripts/python scripts/test_login.py)"
+      "Bash(.venv/Scripts/python scripts/test_login.py)",
+      "Bash(ls -la db/collector_summary.csv)",
+      "Bash(schtasks //query //tn \"NiftyDailyRunner\" //fo LIST)",
+      "Bash(powershell -command \"Get-ScheduledTask -TaskName 'NiftyDailyRunner' | Get-ScheduledTaskInfo | Select-Object LastRunTime, NextRunTime, LastTaskResult\")",
+      "Bash(powershell -command ' *)",
+      "PowerShell(Start-Process \"taskschd.msc\")",
+      "Bash(timeout 8 .venv/Scripts/python scripts/collect_option_snapshots.py --dry-run)"
     ]
   }
 }

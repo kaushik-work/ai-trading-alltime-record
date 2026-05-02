@@ -13,7 +13,7 @@ Shows what the collector captured today (or any past date):
 """
 import argparse
 import sys
-from datetime import date, datetime, timedelta
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -78,10 +78,15 @@ for symbol in ["NIFTY", "BANKNIFTY"]:
     snapshots      = df.groupby("timestamp").ngroups
     first_snap     = df["timestamp"].min()
     last_snap      = df["timestamp"].max()
-    expected_snaps = 75  # 9:15 to 15:30 at 5min intervals
+    expected_snaps = 75   # 9:15 to 15:30 at 5min intervals
+    expected_ctr   = 34   # ATM +/-8 = 17 strikes x 2 (CE+PE)
+    expected_rows  = expected_snaps * expected_ctr  # 2,550
 
-    print(f"    Rows        : {total_rows:,}")
+    rows_per_snap  = total_rows / snapshots if snapshots else 0
+
+    print(f"    Rows        : {total_rows:,}  (expected ~{expected_rows:,})")
     print(f"    Snapshots   : {snapshots}  (expected ~{expected_snaps})")
+    print(f"    Rows/snap   : {rows_per_snap:.0f}  (expected ~{expected_ctr})")
     print(f"    First snap  : {first_snap.strftime('%H:%M:%S')}")
     print(f"    Last snap   : {last_snap.strftime('%H:%M:%S')}")
 
