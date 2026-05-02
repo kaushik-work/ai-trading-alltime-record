@@ -144,7 +144,8 @@
       "Bash(schtasks /query /tn \"NiftyDailyRunner\" /fo LIST)",
       "PowerShell(Get-ScheduledTask -TaskName \"NiftyDailyRunner\" | Select-Object TaskName, State, @{N='NextRun';E={\\(Get-ScheduledTaskInfo -TaskName $_.TaskName\\).NextRunTime}})",
       "PowerShell(Get-ScheduledTask | Where-Object {$_.TaskName -eq \"NiftyDailyRunner\"} | Format-List TaskName, State, Description)",
-      "Bash(.venv/Scripts/python scripts/get_token.py)"
+      "Bash(.venv/Scripts/python scripts/get_token.py)",
+      "Bash(.venv/Scripts/python scripts/test_login.py)"
     ]
   }
 }
