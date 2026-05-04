@@ -415,9 +415,9 @@ class BotRunner:
     async def _sync_angel_trades(self):
         """Pull Angel One tradeBook and reconcile against SQLite open trades.
 
-        For each SELL in today's Angel One book: if our DB still shows that symbol
-        open (BUY, closed_at IS NULL), compute real PnL and close the DB record.
-        This handles manual closes and SL-M fills that the bot never saw.
+        For each BUY: if our DB has no matching order_id, import it so manually
+        placed or Windows-bot trades are visible in the P&L dashboard.
+        For each SELL: if our DB shows that symbol open, compute real PnL and close.
         """
         if config.IS_PAPER:
             return
@@ -427,17 +427,42 @@ class BotRunner:
             angel_trades = await loop.run_in_executor(None, AngelFetcher.get().get_trade_book)
             self.last_angel_trades = angel_trades
 
+            # ── Import missing BUY trades ─────────────────────────────────────
+            buys = [t for t in angel_trades if t["side"] == "BUY"]
+            for buy in buys:
+                symbol   = buy["symbol"]
+                order_id = buy["order_id"]
+                existing = self.memory.get_open_trade_for_symbol(symbol)
+                if existing and existing.get("order_id") == order_id:
+                    continue  # already in DB
+                order = {
+                    "order_id":  order_id,
+                    "symbol":    symbol,
+                    "side":      "BUY",
+                    "quantity":  buy["quantity"],
+                    "price":     buy["price"],
+                    "pnl":       0,
+                    "status":    "OPEN",
+                    "timestamp": now_ist().isoformat(),
+                    "strategy":  "ANGEL_SYNC",
+                }
+                decision = {"reasoning": f"imported from Angel One trade book: {symbol}", "confidence": 1.0, "risk_level": "UNKNOWN"}
+                self.memory.log_trade(order, decision)
+                logger.info("angel_sync: imported BUY %s qty=%d @ ₹%.2f (order %s)",
+                            symbol, buy["quantity"], buy["price"], order_id)
+
+            # ── Close matched SELL trades ─────────────────────────────────────
             sells = [t for t in angel_trades if t["side"] == "SELL"]
             for sell in sells:
                 symbol = sell["symbol"]
                 open_trade = self.memory.get_open_trade_for_symbol(symbol)
                 if not open_trade:
                     continue
-                buy_price = float(open_trade.get("price") or 0)
+                buy_price  = float(open_trade.get("price") or 0)
                 sell_price = sell["price"]
-                qty = int(open_trade.get("quantity") or sell["quantity"])
-                pnl = round((sell_price - buy_price) * qty, 2)
-                order_id = open_trade.get("order_id", "")
+                qty        = int(open_trade.get("quantity") or sell["quantity"])
+                pnl        = round((sell_price - buy_price) * qty, 2)
+                order_id   = open_trade.get("order_id", "")
                 self.memory.close_trade(order_id, pnl)
                 logger.info(
                     "angel_sync: closed %s (order %s) pnl=%.2f buy=%.2f sell=%.2f",
@@ -510,7 +535,8 @@ class BotRunner:
                     expiry=None, opt_sym: str = "", entry_prem: float = 0.0) -> dict:
         ts       = now_ist().isoformat()
         order_id = f"{strategy.upper()}-{now_ist().strftime('%Y%m%d%H%M%S')}"
-        lot_qty  = config.LOT_SIZES.get("NIFTY", 65)
+        min_lots = ipc.read_settings().get("min_lots", config.MIN_LOTS)
+        lot_qty  = config.LOT_SIZES.get("NIFTY", 65) * min_lots
         expiry_str = expiry.isoformat() if expiry and hasattr(expiry, "isoformat") else str(expiry or "")
         order = {
             "order_id":    order_id,

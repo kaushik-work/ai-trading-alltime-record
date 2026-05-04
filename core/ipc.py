@@ -194,7 +194,7 @@ def is_market_holiday(date_str: str) -> tuple[bool, str]:
 SETTINGS_FILE = FLAGS_DIR / "settings.json"
 
 _SETTINGS_DEFAULTS = {
-    "min_lots": 1,
+    "min_lots": 3,
     "vix_at_open": None,   # India VIX fetched at 9:30 AM IST
     "vix_auto_lots": None, # bot-recommended lots based on VIX at open
 }
