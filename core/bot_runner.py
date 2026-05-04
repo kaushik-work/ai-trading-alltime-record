@@ -220,16 +220,45 @@ class BotRunner:
             # Update last_scores for the debug/signal-radar endpoint
             sc = self._atr_strategy.last_score
             if sc:
+                score      = sc.get("score", 0)
+                threshold  = sc.get("threshold", 6)
+                direction  = sc.get("action", "HOLD")
+                will_trade = abs(score) >= threshold
                 entry = {
-                    "score": sc.get("score", 0),
-                    "direction": sc.get("action", "HOLD"),
-                    "action": sc.get("action", "HOLD"),
-                    "threshold": sc.get("threshold", 6),
-                    "will_trade": abs(sc.get("score", 0)) >= sc.get("threshold", 6),
+                    "score": score, "direction": direction, "action": direction,
+                    "threshold": threshold, "will_trade": will_trade,
                     "note": "ATR technical analysis only (sections 1–11)",
                 }
                 self.last_scores["ATR Intraday"] = entry
                 self._paper_seller.on_signal("ATR Intraday", entry)
+
+                # ── Persist every evaluation to signal_log ────────────────────
+                try:
+                    from core.memory import log_signal
+                    from data.angel_fetcher import AngelFetcher
+                    af         = AngelFetcher.get()
+                    nifty_spot = af.get_index_ltp("NIFTY") or 0
+                    opt_type   = "CE" if direction == "BUY" else ("PE" if direction == "SELL" else "")
+                    strike     = int(round(nifty_spot / 50) * 50) if nifty_spot else 0
+                    opt_prem   = 0.0
+                    if opt_type and strike and nifty_spot:
+                        from data.angel_fetcher import AngelFetcher as _AF
+                        expiry = af.nearest_weekly_expiry()
+                        _, opt_prem = af.get_option_ltp("NIFTY", strike, opt_type, expiry)
+                        opt_prem = opt_prem or 0.0
+                    did_trade  = bool(self._atr_strategy.last_score.get("did_trade"))
+                    reason     = sc.get("skip_reason", "")
+                    if not will_trade and not reason:
+                        reason = f"score {score:+.0f} below threshold {threshold}"
+                    log_signal(
+                        strategy="ATR Intraday", score=score, threshold=threshold,
+                        direction=direction, will_trade=will_trade, did_trade=did_trade,
+                        reason_skipped=reason, nifty_spot=nifty_spot,
+                        option_type=opt_type, strike=strike, option_premium=float(opt_prem),
+                        signals_fired="|".join(sc.get("signals", [])[:5]),
+                    )
+                except Exception as _log_err:
+                    logger.debug("signal_log write failed: %s", _log_err)
         except Exception as e:
             logger.error("ATR Intraday cycle: %s", e, exc_info=True)
 

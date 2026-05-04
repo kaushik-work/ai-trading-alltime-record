@@ -69,6 +69,25 @@ def init_db():
                 data TEXT NOT NULL,
                 timestamp TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS signal_log (
+                id              INTEGER PRIMARY KEY AUTOINCREMENT,
+                timestamp       TEXT NOT NULL,
+                date            TEXT NOT NULL,
+                strategy        TEXT NOT NULL,
+                symbol          TEXT NOT NULL DEFAULT 'NIFTY',
+                score           REAL NOT NULL,
+                threshold       REAL NOT NULL,
+                direction       TEXT NOT NULL,
+                will_trade      INTEGER NOT NULL DEFAULT 0,
+                did_trade       INTEGER NOT NULL DEFAULT 0,
+                reason_skipped  TEXT,
+                nifty_spot      REAL,
+                option_type     TEXT,
+                strike          INTEGER,
+                option_premium  REAL,
+                signals_fired   TEXT
+            );
         """)
     # Migration: add new columns to existing databases
     new_cols = [
@@ -344,3 +363,54 @@ class TradeMemory:
             conn.execute("""
                 INSERT INTO market_snapshots (symbol, data, timestamp) VALUES (?, ?, ?)
             """, (symbol, json.dumps(data), now_ist().isoformat()))
+
+
+def log_signal(
+    strategy: str,
+    score: float,
+    threshold: float,
+    direction: str,
+    will_trade: bool,
+    did_trade: bool = False,
+    reason_skipped: str = "",
+    nifty_spot: float = 0,
+    option_type: str = "",
+    strike: int = 0,
+    option_premium: float = 0,
+    signals_fired: str = "",
+    symbol: str = "NIFTY",
+):
+    """Persist every 5-min signal evaluation — trade or no-trade — to signal_log."""
+    ts = now_ist().isoformat()
+    with get_connection() as conn:
+        conn.execute("""
+            INSERT INTO signal_log
+            (timestamp, date, strategy, symbol, score, threshold, direction,
+             will_trade, did_trade, reason_skipped, nifty_spot, option_type,
+             strike, option_premium, signals_fired)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            ts, ts[:10], strategy, symbol,
+            round(score, 2), round(threshold, 2), direction,
+            int(will_trade), int(did_trade), reason_skipped,
+            round(nifty_spot, 2) if nifty_spot else None,
+            option_type or None,
+            strike or None,
+            round(option_premium, 2) if option_premium else None,
+            signals_fired or None,
+        ))
+
+
+def get_signal_log(date: str = None, limit: int = 500) -> list:
+    """Return signal evaluations, newest first. Optionally filter by date (YYYY-MM-DD)."""
+    with get_connection() as conn:
+        if date:
+            rows = conn.execute("""
+                SELECT * FROM signal_log WHERE date = ?
+                ORDER BY timestamp DESC LIMIT ?
+            """, (date, limit)).fetchall()
+        else:
+            rows = conn.execute("""
+                SELECT * FROM signal_log ORDER BY timestamp DESC LIMIT ?
+            """, (limit,)).fetchall()
+    return [dict(r) for r in rows]

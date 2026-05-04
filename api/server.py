@@ -336,6 +336,33 @@ def pnl_report(start: str = None, end: str = None, user: str = Depends(get_curre
         "trades": all_trades,
     }
 
+@app.get("/api/signal-log")
+def signal_log_endpoint(date: str = None, limit: int = 200, user: str = Depends(get_current_user)):
+    """Every 5-min strategy evaluation — trade or no-trade — newest first."""
+    from core.memory import get_signal_log
+    rows = get_signal_log(date=date, limit=limit)
+    # Attach pre-signal premium: for each row, find what premium was 2-3 rows earlier
+    for i, row in enumerate(rows):
+        pre2 = rows[i + 2] if i + 2 < len(rows) else None
+        pre3 = rows[i + 3] if i + 3 < len(rows) else None
+        row["pre2_premium"] = pre2["option_premium"] if pre2 else None
+        row["pre3_premium"] = pre3["option_premium"] if pre3 else None
+    return {"rows": rows, "count": len(rows)}
+
+
+@app.get("/api/paper-comparison")
+def paper_comparison(user: str = Depends(get_current_user)):
+    """Buyer vs seller paper trade results for every signal that fired."""
+    from core.bot_runner import get_runner
+    runner = get_runner()
+    ps = runner._paper_seller
+    return {
+        "open":    ps.get_open_positions(),
+        "closed":  ps.get_all_trades(),
+        "summary": ps.get_summary(),
+    }
+
+
 @app.get("/api/health")
 def health():
     from zoneinfo import ZoneInfo
