@@ -60,6 +60,7 @@ class AngelFetcher:
         self._failed_at: Optional[datetime] = None   # datetime of last failure; retry after 10 min
         self._instruments: Optional[list] = None
         self._instruments_date: Optional[date] = None
+        self._candle_failures = 0  # consecutive empty/None candle responses
 
     @classmethod
     def get(cls) -> "AngelFetcher":
@@ -229,11 +230,32 @@ class AngelFetcher:
                 "todate":      to_dt,
             })
             if resp and resp.get("status") and resp.get("data"):
+                self._candle_failures = 0
                 return resp["data"]
-            if resp and resp.get("errorCode") == "AG8001":
-                logger.warning("AngelFetcher._candle_data: token expired (AG8001), forcing re-login")
+
+            err_code = (resp.get("errorCode") or "") if resp else ""
+            err_msg  = (resp.get("message")   or "").lower() if resp else ""
+            auth_err = (
+                err_code == "AG8001"
+                or "invalid token" in err_msg
+                or "session"       in err_msg
+                or "unauthorized"  in err_msg
+                or "expired"       in err_msg
+            )
+            if auth_err:
+                logger.warning("AngelFetcher._candle_data: auth error (code=%s), forcing re-login", err_code or err_msg)
                 self._invalidate_token()
-            logger.warning("AngelFetcher._candle_data empty response for %s %s", token, angel_interval)
+                self._candle_failures = 0
+            else:
+                self._candle_failures += 1
+                logger.warning(
+                    "AngelFetcher._candle_data empty response for %s %s (code=%s, fail#%d)",
+                    token, angel_interval, err_code or "none", self._candle_failures,
+                )
+                if self._candle_failures >= 3:
+                    logger.warning("AngelFetcher._candle_data: 3 consecutive failures — forcing re-login")
+                    self._invalidate_token()
+                    self._candle_failures = 0
             return None
         except Exception as e:
             msg = str(e)
@@ -243,6 +265,13 @@ class AngelFetcher:
             if ("Invalid Token" in msg or "Unauthorized" in msg or "AG8001" in msg
                     or "parse" in msg.lower() or "json" in msg.lower()):
                 self._invalidate_token()
+                self._candle_failures = 0
+            else:
+                self._candle_failures += 1
+                if self._candle_failures >= 3:
+                    logger.warning("AngelFetcher._candle_data: 3 consecutive exceptions — forcing re-login")
+                    self._invalidate_token()
+                    self._candle_failures = 0
             return None
 
     @staticmethod

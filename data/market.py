@@ -7,8 +7,7 @@ No fallbacks — if Angel One fails, the cycle is skipped.
 
 import logging
 import time
-from datetime import datetime, timedelta
-from typing import Optional
+from datetime import datetime
 
 import config
 
@@ -16,6 +15,8 @@ logger = logging.getLogger(__name__)
 
 _daily_df_cache: dict[str, object] = {}
 _daily_df_cache_day: dict[str, str] = {}
+_daily_df_cache_ts: dict[str, float] = {}
+_DAILY_FAIL_TTL = 120  # seconds to suppress repeated errors on failed daily fetch
 
 # Shared intraday data cache — keyed by (symbol, interval)
 # Prevents each strategy cycle from independently hitting Angel One
@@ -66,10 +67,18 @@ def _get_daily_df(symbol: str):
     from core.angel_error_log import log_error as _log_err
     from core.utils import now_ist
 
+    now_ts   = time.time()
     today_key = now_ist().date().isoformat()
+
+    # Return good cached value
     cached = _daily_df_cache.get(symbol)
     if cached is not None and _daily_df_cache_day.get(symbol) == today_key:
         return cached
+
+    # Suppress repeated errors: if the last attempt failed recently, don't retry yet
+    last_ts = _daily_df_cache_ts.get(symbol, 0)
+    if cached is None and (now_ts - last_ts) < _DAILY_FAIL_TTL:
+        return None
 
     try:
         from data.angel_fetcher import AngelFetcher
@@ -77,11 +86,13 @@ def _get_daily_df(symbol: str):
         if df is not None and len(df) >= 10:
             _daily_df_cache[symbol] = df
             _daily_df_cache_day[symbol] = today_key
+            _daily_df_cache_ts[symbol] = now_ts
             return df
         df = _build_daily_df_from_intraday(symbol)
         if df is not None:
             _daily_df_cache[symbol] = df
             _daily_df_cache_day[symbol] = today_key
+            _daily_df_cache_ts[symbol] = now_ts
             return df
         msg = "fetch_daily_df returned insufficient data"
         logger.error("_get_daily_df: %s for %s", msg, symbol)
@@ -89,6 +100,8 @@ def _get_daily_df(symbol: str):
     except Exception as e:
         logger.error("_get_daily_df: Angel One failed for %s: %s", symbol, e)
         _log_err("fetch_daily_df", str(e), symbol=symbol, detail="daily")
+
+    _daily_df_cache_ts[symbol] = now_ts  # record failure time to suppress next 2 min
     return None
 
 
