@@ -164,6 +164,7 @@ def add_market_holiday(date: str, label: str) -> dict:
     holidays = read_runtime_holidays()
     holidays[date] = label
     import json
+    HOLIDAYS_FILE.parent.mkdir(parents=True, exist_ok=True)
     HOLIDAYS_FILE.write_text(json.dumps(holidays, indent=2))
     return holidays
 
@@ -172,6 +173,7 @@ def remove_market_holiday(date: str) -> dict:
     holidays = read_runtime_holidays()
     holidays.pop(date, None)
     import json
+    HOLIDAYS_FILE.parent.mkdir(parents=True, exist_ok=True)
     HOLIDAYS_FILE.write_text(json.dumps(holidays, indent=2))
     return holidays
 

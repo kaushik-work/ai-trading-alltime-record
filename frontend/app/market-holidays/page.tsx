@@ -64,8 +64,9 @@ export default function MarketHolidaysPage() {
       showFlash("Holiday added."); setNewDate(""); setNewLabel("");
       fetchHolidays();
     } else {
-      const j = await res.json();
-      setError(j.detail || "Failed to add.");
+      const j = await res.json().catch(() => ({}));
+      const detail = j.detail || "Failed to add.";
+      setError(detail === "Not Found" ? "API endpoint not found — redeploy the server." : detail);
     }
   }
 
