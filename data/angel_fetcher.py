@@ -12,6 +12,10 @@ Instrument tokens (NSE index spot — stable, don't change):
 """
 
 import logging
+
+# Suppress noisy internal ERROR logs from smartapi-python for non-critical failures
+# (e.g. VIX token lookup, scrip master misses). Real auth/order errors still surface.
+logging.getLogger("smartConnect").setLevel(logging.CRITICAL)
 import os
 import threading
 from datetime import datetime, date, timedelta
@@ -413,18 +417,25 @@ class AngelFetcher:
         """Fetch India VIX live price. Returns None if unavailable."""
         if not self._ensure_logged_in():
             return None
-        try:
-            resp = self._api.ltpData(exchange="NSE", tradingsymbol="India VIX",
-                                     symboltoken="99919000")
-            if resp and resp.get("status") and resp.get("data"):
-                vix = float(resp["data"].get("ltp", 0))
-                if vix > 0:
-                    logger.info("India VIX: %.2f", vix)
-                    return vix
-            if resp and resp.get("errorCode") == "AG8001":
-                self._invalidate_token()
-        except Exception as e:
-            logger.warning("AngelFetcher.fetch_vix: %s", e)
+        for token in ("99919000", "99919003"):
+            try:
+                resp = self._api.ltpData(exchange="NSE", tradingsymbol="India VIX",
+                                         symboltoken=token)
+                if resp and resp.get("status") and resp.get("data"):
+                    vix = float(resp["data"].get("ltp", 0))
+                    if vix > 0:
+                        logger.info("India VIX: %.2f (token %s)", vix, token)
+                        return vix
+                if resp and resp.get("errorCode") == "AG8001":
+                    self._invalidate_token()
+                    return None
+                err = resp.get("errorcode", "") if resp else ""
+                if err == "AB4046":
+                    logger.debug("VIX token %s not in scrip master, trying next", token)
+                    continue
+            except Exception as e:
+                logger.debug("AngelFetcher.fetch_vix token %s: %s", token, e)
+        logger.debug("India VIX unavailable — both tokens failed")
         return None
 
     def fetch_vix_historical_df(self, days: int = 100):
@@ -437,8 +448,10 @@ class AngelFetcher:
             now = datetime.now(ZoneInfo("Asia/Kolkata"))
             from_d = (now - timedelta(days=days + 5)).strftime("%Y-%m-%d")
             to_d   = now.strftime("%Y-%m-%d")
-            rows = self._candle_data("99919000", "NSE", "ONE_DAY",
+            rows = (self._candle_data("99919000", "NSE", "ONE_DAY",
                                      f"{from_d} 09:15", f"{to_d} 15:30")
+                    or self._candle_data("99919003", "NSE", "ONE_DAY",
+                                        f"{from_d} 09:15", f"{to_d} 15:30"))
             if not rows:
                 return None
             df = pd.DataFrame([[r[0], float(r[4])] for r in rows], columns=["date", "vix"])

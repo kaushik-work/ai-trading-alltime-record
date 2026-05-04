@@ -235,5 +235,5 @@ class OptionChainFetcher:
             return result
 
         except Exception as e:
-            logger.error("OptionChainFetcher._fetch_live %s: %s", symbol, e)
+            logger.warning("OptionChainFetcher._fetch_live %s: %s", symbol, e)
             return {**_ERROR_DICT, "error": str(e), "fetched_at": datetime.now().isoformat()}
