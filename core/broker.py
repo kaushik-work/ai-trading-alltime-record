@@ -244,7 +244,7 @@ class AngelOneBroker:
         add_check("lot_size", lot_ok, f"Quantity {quantity} {'matches' if lot_ok else 'must be multiple of'} lot size {lot}")
 
         balance = self.get_portfolio_summary().get("balance", 0)
-        add_check("cash_balance", balance > 0, f"Available cash ₹{balance:,.2f}")
+        add_check("cash_balance", balance > 0, f"Available cash ₹{balance:,.2f}", critical=False)
 
         resolved_symbol = tradingsymbol
         resolved_price = float(price or 0)
