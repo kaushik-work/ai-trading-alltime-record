@@ -120,9 +120,13 @@ def _get_intraday_df(symbol: str, interval: str):
             msg = "fetch_intraday_df returned insufficient data"
             logger.error("_get_intraday_df: %s for %s %s", msg, symbol, interval)
             _log_err("fetch_intraday_df", msg, symbol=symbol, detail=interval)
+            _intraday_cache[key] = None
+            _intraday_cache_ts[key] = now
     except Exception as e:
         logger.error("_get_intraday_df: Angel One failed for %s %s: %s", symbol, interval, e)
         _log_err("fetch_intraday_df", str(e), symbol=symbol, detail=interval)
+        _intraday_cache[key] = None
+        _intraday_cache_ts[key] = now
     return None
 
 
