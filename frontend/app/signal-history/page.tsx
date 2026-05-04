@@ -139,7 +139,7 @@ export default function SignalHistoryPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      <Header />
+      <Header mode="paper" connected={true} botStatus="unknown" onBotToggle={() => {}} />
       <div className="max-w-7xl mx-auto px-4 py-6">
         <div className="flex items-center gap-3 mb-6">
           <button onClick={() => router.back()} className="text-sm text-gray-500 hover:text-gray-800">← Back</button>

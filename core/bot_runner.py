@@ -125,6 +125,10 @@ class BotRunner:
         self.last_zones: list = []                      # today's watch zones (pre-market briefing)
         from core.paper_seller import get_paper_seller
         self._paper_seller = get_paper_seller()
+        # ── Early entry (Option B): 2 consecutive rising scores in same direction ──
+        self._early_prev_score: float = 0.0             # last candle's score
+        self._early_prev_dir: str = "HOLD"              # last candle's direction
+        self._early_entry_fired: bool = False           # already entered early this signal
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -259,8 +263,71 @@ class BotRunner:
                     )
                 except Exception as _log_err:
                     logger.debug("signal_log write failed: %s", _log_err)
+
+                # ── Option B early entry: 2 consecutive rising scores ─────────
+                # Fires when score rises for 2 straight candles in same direction
+                # AND hasn't crossed threshold yet (that's handled by run_watchlist).
+                # Enters 1–2 candles before full confirmation → better premium.
+                try:
+                    self._check_early_entry(score, threshold, direction)
+                except Exception as _ee_err:
+                    logger.debug("early_entry check failed: %s", _ee_err)
+
+                # Roll state for next candle
+                self._early_prev_score = score
+                self._early_prev_dir   = direction
+
         except Exception as e:
             logger.error("ATR Intraday cycle: %s", e, exc_info=True)
+
+    def _check_early_entry(self, score: float, threshold: float, direction: str):
+        """Enter early if score has risen for 2 consecutive candles in same direction
+        and hasn't crossed threshold yet (full signal handles its own entry)."""
+        if direction == "HOLD":
+            # Signal reset — clear early-entry state
+            self._early_entry_fired = False
+            return
+
+        prev_score = self._early_prev_score
+        prev_dir   = self._early_prev_dir
+        abs_score  = abs(score)
+
+        # Already fired full signal — run_watchlist handles it
+        if abs_score >= threshold:
+            self._early_entry_fired = False
+            return
+
+        # Already placed an early entry this signal run — don't stack
+        if self._early_entry_fired:
+            return
+
+        # No open position check
+        open_pos = self.memory.get_open_trade_for_symbol("NIFTY")
+        if open_pos:
+            return
+
+        # Condition: direction same as previous, score rising, prev was also rising
+        # (score > prev_score > 0 in the same direction)
+        same_dir    = (direction == prev_dir)
+        score_rose  = abs_score > abs(prev_score)
+        building    = abs_score >= threshold * 0.55  # at least 55% of threshold
+        if not (same_dir and score_rose and building):
+            return
+
+        logger.info(
+            "[EARLY ENTRY] Score rising: prev=%+.0f → now=%+.0f (threshold=%d) — entering %s early",
+            prev_score, score, threshold, direction,
+        )
+        self._early_entry_fired = True
+
+        # Delegate to strategy's normal entry path with early=True flag
+        if self._atr_strategy:
+            try:
+                self._atr_strategy._force_early_entry(direction)
+            except AttributeError:
+                logger.debug("_force_early_entry not available on strategy")
+            except Exception as _fe:
+                logger.error("Early entry execution failed: %s", _fe)
 
     async def _atr_fast_check(self):
         """Runs 2 min into each 5m candle to catch moves 3 min earlier than bar close.
