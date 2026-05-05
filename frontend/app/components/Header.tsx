@@ -217,6 +217,10 @@ export default function Header({ mode, connected, botStatus, onBotToggle, errorC
                 className="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2">
                 <span>📡</span> Signal Radar
               </button>
+              <button onClick={() => { router.push("/option-chain"); setMenuOpen(false); }}
+                className="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2">
+                <span>📈</span> Option Chain
+              </button>
               <button onClick={() => { router.push("/pnl"); setMenuOpen(false); }}
                 className="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2">
                 <span>💰</span> PPnL
