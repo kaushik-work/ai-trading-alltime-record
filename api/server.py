@@ -385,9 +385,10 @@ def pnl_report(start: str = None, end: str = None, user: str = Depends(get_curre
             daily[date]["rejected"] += 1
         elif pnl > 0:
             daily[date]["wins"] += 1
-        elif pnl < 0:
+        elif pnl <= 0 and t.get("status") == "COMPLETE":
             daily[date]["losses"] += 1
 
+    # Convert to list sorted by date descending
     daily_summary = [
         {"date": d, **v, "trades": v["trades"]}
         for d, v in sorted(daily.items(), reverse=True)
@@ -395,18 +396,53 @@ def pnl_report(start: str = None, end: str = None, user: str = Depends(get_curre
 
     total_pnl  = round(sum((t.get("pnl") or 0) for t in round_trips), 2)
     win_trades = sum(1 for t in round_trips if (t.get("pnl") or 0) > 0)
-    total_count = len(round_trips) + len(rejected_trades)
+    total_count = len(round_trips) + len(legacy_rejected)
     win_rate   = round(win_trades / len(round_trips) * 100, 1) if round_trips else 0
 
     return {
         "total_pnl":      total_pnl,
         "total_trades":   total_count,
         "completed_trades": len(round_trips),
-        "rejected_trades":  len(rejected_trades),
+        "rejected_trades":  len(legacy_rejected),
         "win_rate":       win_rate,
         "daily":          daily_summary,
         "trades":         all_entries,
     }
+
+@app.get("/api/pcr-log")
+def pcr_log_data(days: int = 2, user: str = Depends(get_current_user)):
+    """Return historical PCR/OI data from pcr_log.csv for the specified number of days."""
+    try:
+        import csv
+        from datetime import datetime, timedelta
+        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+        log_file = os.path.join(config.BASE_DIR, "db", "pcr_log.csv")
+        if not os.path.exists(log_file):
+            return _safe_json([])
+            
+        data = []
+        with open(log_file, "r") as f:
+            reader = csv.reader(f)
+            for row in reader:
+                if len(row) >= 9 and row[0] >= cutoff:
+                    try:
+                        data.append({
+                            "timestamp": row[0],
+                            "symbol": row[1],
+                            "pcr": float(row[2]),
+                            "ce_oi": int(row[3]),
+                            "pe_oi": int(row[4]),
+                            "ce_wall": int(row[5]),
+                            "pe_wall": int(row[6]),
+                            "max_pain": int(row[7]),
+                            "spot": float(row[8]),
+                        })
+                    except ValueError:
+                        continue
+        return _safe_json(data)
+    except Exception as e:
+        logger.error(f"Error reading pcr_log: {e}")
+        return _safe_json([])
 
 @app.get("/api/signal-log")
 def signal_log_endpoint(date: str = None, limit: int = 200, user: str = Depends(get_current_user)):
