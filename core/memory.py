@@ -318,6 +318,7 @@ class TradeMemory:
                 "exit_time": trade.get("timestamp"),
                 "closed_at": trade.get("closed_at") or (buy or {}).get("closed_at"),
                 "status": trade.get("status"),
+                "mode": trade.get("mode") or (buy or {}).get("mode"),
                 "entry_remark": (buy or {}).get("entry_remark"),
                 "exit_remark": trade.get("exit_remark"),
                 "buy_order_id": (buy or {}).get("order_id"),
@@ -356,6 +357,16 @@ class TradeMemory:
                 WHERE symbol = ? AND side = 'BUY' AND closed_at IS NULL
                 ORDER BY timestamp DESC LIMIT 1
             """, (symbol,)).fetchone()
+        return dict(row) if row else None
+
+    def get_open_trade_for_underlying(self, underlying: str) -> Optional[dict]:
+        """Return the unclosed BUY row for this underlying (any strategy), or None."""
+        with get_connection() as conn:
+            row = conn.execute("""
+                SELECT * FROM trades
+                WHERE underlying = ? AND side = 'BUY' AND closed_at IS NULL
+                ORDER BY timestamp DESC LIMIT 1
+            """, (underlying,)).fetchone()
         return dict(row) if row else None
 
     def save_market_snapshot(self, symbol: str, data: dict):

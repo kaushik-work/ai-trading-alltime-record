@@ -82,10 +82,10 @@ class TrendStrategy:
     # ── Intraday timing guards ─────────────────────────────────────────────────
 
     def _in_trading_window(self) -> bool:
-        """AishDoc: only trade between INTRADAY_START and INTRADAY_EXIT_BY."""
+        """AishDoc: only take new trades between INTRADAY_START and INTRADAY_ENTRY_CUTOFF."""
         now = _now_ist().time().replace(second=0, microsecond=0)
         start = _parse_time(config.INTRADAY_START)
-        end   = _parse_time(config.INTRADAY_EXIT_BY)
+        end   = _parse_time(getattr(config, "INTRADAY_ENTRY_CUTOFF", config.INTRADAY_EXIT_BY))
         return start <= now <= end
 
     def _in_lunch_skip(self) -> bool:
@@ -674,62 +674,82 @@ class TrendStrategy:
             atm_strike  = pos.get("atm_strike") or pos.get("strike") or atm_strike
             option_symbol = pos.get("symbol") or symbol
 
-            # Cancel both SL-M and TP LIMIT before placing normal exit
-            # to avoid double-sell / naked short on exchange.
-            if not config.IS_PAPER:
-                self._cancel_sl_order(option_symbol)
-                self._cancel_tp_order(option_symbol)
-
-            _, _, exit_ltp, expiry = self._get_option_ltp(
-                pos.get("underlying", symbol), option_type, current_price, strike=int(atm_strike)
-            )
-            if exit_ltp is None:
-                return {"status": "SKIPPED", "reason": "option LTP unavailable at exit"}
-            if not config.IS_PAPER and hasattr(self.broker, "preflight_order"):
-                preflight = self.broker.preflight_order(
-                    symbol=pos.get("underlying", symbol),
-                    side=side,
-                    quantity=quantity,
-                    order_type="MARKET",
-                    price=exit_ltp,
-                    exchange=pos.get("exchange", "NFO"),
-                    product=pos.get("product", "MIS"),
-                    variety="regular",
-                    validity="DAY",
-                    tag=self.strategy_name[:20],
-                    tradingsymbol=option_symbol,
-                    option_type=option_type,
-                    strike=int(atm_strike),
-                    expiry=expiry,
-                    log_failures=True,
+            if pos.get("is_virtual"):
+                logger.info("[%s] Processing virtual exit for %s", self.strategy_name, option_symbol)
+                _, _, exit_ltp, expiry = self._get_option_ltp(
+                    pos.get("underlying", symbol), option_type, current_price, strike=int(atm_strike)
                 )
-                if not preflight.get("ok"):
-                    logger.error("[%s] Live exit preflight failed for %s: %s", self.strategy_name, option_symbol, preflight.get("error"))
-                    return {
-                        "status": "REJECTED",
-                        "symbol": option_symbol,
-                        "side": side,
-                        "quantity": quantity,
-                        "reason": preflight.get("error"),
-                        "preflight": preflight,
-                    }
-            order = self.broker.place_order(
-                option_symbol, side, quantity, price=exit_ltp,
-                exchange=pos.get("exchange", "NFO"), product=pos.get("product", "MIS"), order_type="MARKET",
-                variety="regular", validity="DAY", tag=self.strategy_name[:20],
-            )
-            order["price"] = exit_ltp
-            order["timestamp"] = order.get("timestamp") or _now_ist().isoformat()
-            order["expiry"] = pos.get("expiry") or (expiry.isoformat() if expiry else None)
-
-            # Compute P&L from actual entry vs exit price so it's stored correctly.
-            # Without this, order["pnl"] stays None → stored as 0 → dashboard shows ₹0.
-            entry_px = float(pos.get("avg_price") or pos.get("average_price") or
-                             pos.get("price") or pos.get("buy_price") or 0)
-            if entry_px > 0 and exit_ltp and exit_ltp > 0:
-                order["pnl"] = round((exit_ltp - entry_px) * quantity, 2)
-                logger.info("[%s] P&L: entry=₹%.2f exit=₹%.2f qty=%d → ₹%.2f",
-                            self.strategy_name, entry_px, exit_ltp, quantity, order["pnl"])
+                if exit_ltp is None:
+                    return {"status": "SKIPPED", "reason": "option LTP unavailable at virtual exit"}
+                order = {
+                    "status": "COMPLETE",
+                    "order_id": f"VIRTUAL-EXIT-{self.strategy_name}-{_now_ist().strftime('%Y%m%d%H%M%S%f')}",
+                    "price": exit_ltp,
+                    "timestamp": _now_ist().isoformat(),
+                    "expiry": pos.get("expiry") or (expiry.isoformat() if expiry else None)
+                }
+                entry_px = float(pos.get("avg_price") or 0)
+                if entry_px > 0 and exit_ltp > 0:
+                    order["pnl"] = round((exit_ltp - entry_px) * quantity, 2)
+                    logger.info("[%s] VIRTUAL P&L: entry=₹%.2f exit=₹%.2f qty=%d → ₹%.2f",
+                                self.strategy_name, entry_px, exit_ltp, quantity, order["pnl"])
+            else:
+                # Cancel both SL-M and TP LIMIT before placing normal exit
+                # to avoid double-sell / naked short on exchange.
+                if not config.IS_PAPER:
+                    self._cancel_sl_order(option_symbol)
+                    self._cancel_tp_order(option_symbol)
+    
+                _, _, exit_ltp, expiry = self._get_option_ltp(
+                    pos.get("underlying", symbol), option_type, current_price, strike=int(atm_strike)
+                )
+                if exit_ltp is None:
+                    return {"status": "SKIPPED", "reason": "option LTP unavailable at exit"}
+                if not config.IS_PAPER and hasattr(self.broker, "preflight_order"):
+                    preflight = self.broker.preflight_order(
+                        symbol=pos.get("underlying", symbol),
+                        side=side,
+                        quantity=quantity,
+                        order_type="MARKET",
+                        price=exit_ltp,
+                        exchange=pos.get("exchange", "NFO"),
+                        product=pos.get("product", "MIS"),
+                        variety="regular",
+                        validity="DAY",
+                        tag=self.strategy_name[:20],
+                        tradingsymbol=option_symbol,
+                        option_type=option_type,
+                        strike=int(atm_strike),
+                        expiry=expiry,
+                        log_failures=True,
+                    )
+                    if not preflight.get("ok"):
+                        logger.error("[%s] Live exit preflight failed for %s: %s", self.strategy_name, option_symbol, preflight.get("error"))
+                        return {
+                            "status": "REJECTED",
+                            "symbol": option_symbol,
+                            "side": side,
+                            "quantity": quantity,
+                            "reason": preflight.get("error"),
+                            "preflight": preflight,
+                        }
+                order = self.broker.place_order(
+                    option_symbol, side, quantity, price=exit_ltp,
+                    exchange=pos.get("exchange", "NFO"), product=pos.get("product", "MIS"), order_type="MARKET",
+                    variety="regular", validity="DAY", tag=self.strategy_name[:20],
+                )
+                order["price"] = exit_ltp
+                order["timestamp"] = order.get("timestamp") or _now_ist().isoformat()
+                order["expiry"] = pos.get("expiry") or (expiry.isoformat() if expiry else None)
+    
+                # Compute P&L from actual entry vs exit price so it's stored correctly.
+                # Without this, order["pnl"] stays None → stored as 0 → dashboard shows ₹0.
+                entry_px = float(pos.get("avg_price") or pos.get("average_price") or
+                                 pos.get("price") or pos.get("buy_price") or 0)
+                if entry_px > 0 and exit_ltp and exit_ltp > 0:
+                    order["pnl"] = round((exit_ltp - entry_px) * quantity, 2)
+                    logger.info("[%s] P&L: entry=₹%.2f exit=₹%.2f qty=%d → ₹%.2f",
+                                self.strategy_name, entry_px, exit_ltp, quantity, order["pnl"])
 
         if order.get("status") in ("COMPLETE", "PLACED"):
             order["underlying"]  = symbol if side == "BUY" else pos.get("underlying", symbol)
@@ -751,7 +771,42 @@ class TrendStrategy:
             if broken:
                 logger.info("ALL-TIME RECORD BROKEN: %s", broken)
         elif order.get("status") == "REJECTED":
-            logger.error("[%s] Order rejected for %s: %s", self.strategy_name, order.get("symbol"), order.get("reason"))
+            # ── Record rejected trades so they appear on the dashboard ─────────
+            # Angel One returns REJECTED (e.g. insufficient funds, lot-size error,
+            # session expired). We track them as virtual OPEN trades so they block
+            # new entries until their virtual SL or TP is hit.
+            rejection_reason = order.get("reason", "rejected by broker")
+            logger.error("[%s] Order rejected for %s: %s", self.strategy_name, order.get("symbol"), rejection_reason)
+            
+            _entry_price = option_ltp or current_price
+            _atr_raw = decision.get("atr") or 20.0
+            _atr = min(_atr_raw, 50) if _atr_raw > 0 else 20.0
+            _sl_dist = max(round(_atr / 2, 1), 5.0)
+
+            _rejected_order = {
+                **order,
+                "underlying":  symbol if side == "BUY" else (pos or {}).get("underlying", symbol),
+                "option_type": option_type,
+                "strike":      atm_strike,
+                "strategy":    self.strategy_name,
+                "status":      "OPEN",  # Keep OPEN so it blocks new entries!
+                "pnl":         0,
+                "price":       _entry_price,
+                "sl_price":    round(_entry_price - _sl_dist, 1),
+                "tp_price":    round(_entry_price + _sl_dist * self.rr_ratio, 1),
+                "close_reason": rejection_reason,
+                "mode":        "virtual_rejected", # Mark as virtual
+                # generate a synthetic order_id so INSERT OR IGNORE doesn't silently
+                # drop it if order_id is None (Angel One returns None on rejection)
+                "order_id": order.get("order_id") or f"REJECTED-{self.strategy_name}-{_now_ist().strftime('%Y%m%d%H%M%S%f')}",
+            }
+            _rejected_decision = {
+                **decision,
+                "reasoning": f"REJECTED: {rejection_reason}",
+                "confidence": 0.0,
+                "risk_level": "REJECTED",
+            }
+            self.memory.log_trade(_rejected_order, _rejected_decision)
 
         return order
 
@@ -771,6 +826,20 @@ class TrendStrategy:
                 "option_type": option_type, "atm_strike": strike, "expiry": expiry}
 
     def _find_open_option_position(self, underlying: str) -> Optional[dict]:
+        db_trade = self.memory.get_open_trade_for_underlying(underlying)
+        if db_trade and db_trade.get("mode") == "virtual_rejected":
+            return {
+                "symbol": db_trade.get("symbol"),
+                "underlying": underlying,
+                "option_type": db_trade.get("option_type"),
+                "atm_strike": db_trade.get("strike"),
+                "quantity": db_trade.get("quantity"),
+                "avg_price": db_trade.get("price"),
+                "sl_price": db_trade.get("sl_price"),
+                "tp_price": db_trade.get("tp_price"),
+                "is_virtual": True
+            }
+
         positions = self.broker.get_positions()
         legacy = positions.get(underlying)
         if legacy and legacy.get("quantity", 0) > 0 and self.memory.has_open_trade(underlying, self.strategy_name):

@@ -307,33 +307,105 @@ def pnl_report(start: str = None, end: str = None, user: str = Depends(get_curre
         # include full end date
         all_trades = [t for t in all_trades if t.get("timestamp", "") <= end + "T23:59:59"]
 
+    # Filter out pure REJECTED trades (legacy shape before virtualization)
+    legacy_rejected = [t for t in all_trades if t.get("status") == "REJECTED"]
+    normal_trades   = [t for t in all_trades if t.get("status") != "REJECTED"]
+
+    round_trips = memory.build_round_trips(normal_trades)
+
+    # Format legacy rejected trades to match the round_trip shape
+    rejected_formatted = [
+        {
+            "strategy":    t.get("strategy", "—"),
+            "symbol":      t.get("symbol"),
+            "underlying":  t.get("underlying") or t.get("symbol"),
+            "option_type": t.get("option_type"),
+            "strike":      t.get("strike"),
+            "expiry":      t.get("expiry"),
+            "side":        t.get("side", "BUY"),
+            "quantity":    t.get("quantity"),
+            "lot_size":    t.get("lot_size", 65),
+            "entry_price": t.get("price"),
+            "exit_price":  None,
+            "pnl":         0,
+            "close_reason": t.get("close_reason") or t.get("action_reason", "rejected"),
+            "score":       t.get("score"),
+            "entry_time":  t.get("timestamp"),
+            "exit_time":   None,
+            "status":      "REJECTED",
+        }
+        for t in legacy_rejected
+    ]
+
+    # Re-map virtual_rejected round trips so they display as REJECTED in the UI
+    for rt in round_trips:
+        if rt.get("mode") == "virtual_rejected":
+            rt["status"] = "REJECTED"
+            rt["close_reason"] = rt.get("close_reason") or "rejected by broker (virtual completion)"
+
+    # Also grab pending OPEN trades so they show up on the current day's dashboard
+    open_trades = [t for t in normal_trades if t.get("side") == "BUY" and t.get("closed_at") is None]
+    open_formatted = []
+    for t in open_trades:
+        # Don't duplicate if it somehow got into round trips (it shouldn't)
+        if any(rt.get("buy_order_id") == t.get("order_id") for rt in round_trips):
+            continue
+        open_formatted.append({
+            "strategy":    t.get("strategy", "—"),
+            "symbol":      t.get("symbol"),
+            "underlying":  t.get("underlying") or t.get("symbol"),
+            "option_type": t.get("option_type"),
+            "strike":      t.get("strike"),
+            "expiry":      t.get("expiry"),
+            "side":        t.get("side", "BUY"),
+            "quantity":    t.get("quantity"),
+            "lot_size":    t.get("lot_size", 65),
+            "entry_price": t.get("price"),
+            "exit_price":  None,
+            "pnl":         0,
+            "close_reason": t.get("close_reason") or "",
+            "score":       t.get("score"),
+            "entry_time":  t.get("timestamp"),
+            "exit_time":   None,
+            "status":      "REJECTED" if t.get("mode") == "virtual_rejected" else "OPEN",
+        })
+
+    all_entries = round_trips + rejected_formatted + open_formatted
+
     # Group by date for daily summary
     from collections import defaultdict
-    daily: dict = defaultdict(lambda: {"trades": [], "total_pnl": 0, "wins": 0, "losses": 0})
-    for t in all_trades:
-        ts = t.get("timestamp", "")
+    daily: dict = defaultdict(lambda: {"trades": [], "total_pnl": 0, "wins": 0, "losses": 0, "rejected": 0})
+    for t in all_entries:
+        ts   = t.get("entry_time") or t.get("timestamp", "")
         date = ts[:10] if ts else "unknown"
         daily[date]["trades"].append(t)
         pnl = t.get("pnl") or 0
         daily[date]["total_pnl"] = round(daily[date]["total_pnl"] + pnl, 2)
-        if pnl > 0: daily[date]["wins"] += 1
-        elif pnl < 0: daily[date]["losses"] += 1
+        if t.get("status") == "REJECTED":
+            daily[date]["rejected"] += 1
+        elif pnl > 0:
+            daily[date]["wins"] += 1
+        elif pnl < 0:
+            daily[date]["losses"] += 1
 
     daily_summary = [
         {"date": d, **v, "trades": v["trades"]}
         for d, v in sorted(daily.items(), reverse=True)
     ]
 
-    total_pnl  = round(sum(t.get("pnl") or 0 for t in all_trades), 2)
-    win_trades = sum(1 for t in all_trades if (t.get("pnl") or 0) > 0)
-    win_rate   = round(win_trades / len(all_trades) * 100, 1) if all_trades else 0
+    total_pnl  = round(sum((t.get("pnl") or 0) for t in round_trips), 2)
+    win_trades = sum(1 for t in round_trips if (t.get("pnl") or 0) > 0)
+    total_count = len(round_trips) + len(rejected_trades)
+    win_rate   = round(win_trades / len(round_trips) * 100, 1) if round_trips else 0
 
     return {
-        "total_pnl": total_pnl,
-        "total_trades": len(all_trades),
-        "win_rate": win_rate,
-        "daily": daily_summary,
-        "trades": all_trades,
+        "total_pnl":      total_pnl,
+        "total_trades":   total_count,
+        "completed_trades": len(round_trips),
+        "rejected_trades":  len(rejected_trades),
+        "win_rate":       win_rate,
+        "daily":          daily_summary,
+        "trades":         all_entries,
     }
 
 @app.get("/api/signal-log")

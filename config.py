@@ -50,12 +50,13 @@ LOT_SIZES = {
 MIN_LOTS = 3   # default 3 lots — overridable from dashboard header
 
 # ── Intraday Timing ────────────────────────────────────────────────────────────
-TRADING_TYPE     = "intraday"
-INTRADAY_START   = "09:30"    # open at 9:30 — first candle close
-INTRADAY_EXIT_BY = "15:20"    # auto square-off all positions at 15:20
-ORB_WINDOW_MINS  = 15
-LUNCH_SKIP_START = "23:59"    # disabled
-LUNCH_SKIP_END   = "23:59"
+TRADING_TYPE          = "intraday"
+INTRADAY_START        = "09:30"    # open at 9:30 — first candle close
+INTRADAY_ENTRY_CUTOFF = "15:00"    # stop taking new entries at 3:00 PM
+INTRADAY_EXIT_BY      = "15:20"    # auto square-off all positions at 15:20
+ORB_WINDOW_MINS       = 15
+LUNCH_SKIP_START      = "23:59"    # disabled
+LUNCH_SKIP_END        = "23:59"
 
 # ── Stop Loss / Take Profit ────────────────────────────────────────────────────
 STOP_LOSS_PCT   = 1.5    # % of option premium — SL trigger for all strategies

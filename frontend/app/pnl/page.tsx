@@ -11,6 +11,27 @@ function authHeaders() {
   return { Authorization: `Bearer ${localStorage.getItem("aq_token") ?? ""}` };
 }
 
+/** Normalise a trade row — handles both round-trip shape and raw rejected shape */
+function normalise(t: any) {
+  return {
+    symbol:      t.symbol,
+    side:        t.side ?? "BUY",
+    entry_price: t.entry_price ?? t.price ?? null,
+    exit_price:  t.exit_price ?? null,
+    sl_price:    t.sl_price ?? t.stop_loss ?? null,
+    quantity:    t.quantity,
+    pnl:         t.pnl ?? 0,
+    status:      t.status ?? "",
+    close_reason: t.close_reason ?? "",
+    score:       t.score ?? null,
+    strategy:    t.strategy ?? "—",
+    option_type: t.option_type ?? "",
+    strike:      t.strike ?? null,
+    entry_time:  t.entry_time ?? t.timestamp ?? null,
+    exit_time:   t.exit_time ?? t.closed_at ?? null,
+  };
+}
+
 export default function PnLPage() {
   const router = useRouter();
   useEffect(() => {
@@ -52,7 +73,7 @@ export default function PnLPage() {
         <div className="flex items-center gap-3">
           <button onClick={() => router.push("/")} className="text-gray-400 hover:text-gray-700 text-sm font-medium">← Back</button>
           <div className="w-px h-4 bg-gray-200" />
-          <span className="font-bold text-gray-800 text-sm">Profit & Loss Report</span>
+          <span className="font-bold text-gray-800 text-sm">Profit &amp; Loss Report</span>
         </div>
 
         {/* ── Date filter ── */}
@@ -97,17 +118,22 @@ export default function PnLPage() {
         {/* ── Summary KPIs ── */}
         {data && (
           <div className="grid grid-cols-3 gap-4 text-gray-900">
-            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 text-gray-900">
-              <div className="text-xs text-gray-500 uppercase tracking-widest font-semibold mb-1">Total P&L</div>
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
+              <div className="text-xs text-gray-500 uppercase tracking-widest font-semibold mb-1">Total P&amp;L</div>
               <div className={`text-2xl font-bold ${data.total_pnl >= 0 ? "text-green-600" : "text-red-500"}`}>
                 ₹{data.total_pnl?.toFixed(2)}
               </div>
             </div>
-            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 text-gray-900">
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
               <div className="text-xs text-gray-500 uppercase tracking-widest font-semibold mb-1">Total Trades</div>
               <div className="text-2xl font-bold text-gray-900">{data.total_trades}</div>
+              {data.rejected_trades > 0 && (
+                <div className="text-xs text-orange-500 mt-1 font-medium">
+                  {data.rejected_trades} rejected (insufficient funds)
+                </div>
+              )}
             </div>
-            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5 text-gray-900">
+            <div className="bg-white rounded-xl border border-gray-200 shadow-sm p-5">
               <div className="text-xs text-gray-500 uppercase tracking-widest font-semibold mb-1">Win Rate</div>
               <div className="text-2xl font-bold text-gray-900">{data.win_rate}%</div>
             </div>
@@ -129,9 +155,12 @@ export default function PnLPage() {
                 >
                   <div className="flex items-center gap-4">
                     <span className="font-semibold text-gray-900 text-sm">{day.date}</span>
-                    <span className="text-xs text-gray-500">{day.trades.length} trades</span>
+                    <span className="text-xs text-gray-500">{day.trades.length} signal{day.trades.length !== 1 ? "s" : ""}</span>
                     <span className="text-xs text-green-600">{day.wins}W</span>
                     <span className="text-xs text-red-500">{day.losses}L</span>
+                    {day.rejected > 0 && (
+                      <span className="text-xs text-orange-500 font-medium">{day.rejected} rejected</span>
+                    )}
                   </div>
                   <div className="flex items-center gap-3">
                     <span className={`font-bold text-sm ${day.total_pnl >= 0 ? "text-green-600" : "text-red-500"}`}>
@@ -152,52 +181,66 @@ export default function PnLPage() {
                         <tr className="bg-gray-50">
                           <th className="px-4 py-2.5 text-left text-xs text-gray-500 font-semibold uppercase">Time</th>
                           <th className="px-4 py-2.5 text-left text-xs text-gray-500 font-semibold uppercase">Symbol</th>
+                          <th className="px-4 py-2.5 text-left text-xs text-gray-500 font-semibold uppercase">Strategy</th>
                           <th className="px-4 py-2.5 text-left text-xs text-gray-500 font-semibold uppercase">Side</th>
                           <th className="px-4 py-2.5 text-right text-xs text-gray-500 font-semibold uppercase">Entry</th>
                           <th className="px-4 py-2.5 text-right text-xs text-gray-500 font-semibold uppercase">Exit</th>
-                          <th className="px-4 py-2.5 text-right text-xs text-gray-500 font-semibold uppercase">Stop Loss</th>
                           <th className="px-4 py-2.5 text-right text-xs text-gray-500 font-semibold uppercase">Qty</th>
-                          <th className="px-4 py-2.5 text-left text-xs text-gray-500 font-semibold uppercase">Timeframe</th>
-                          <th className="px-4 py-2.5 text-right text-xs text-gray-500 font-semibold uppercase">P&L</th>
+                          <th className="px-4 py-2.5 text-right text-xs text-gray-500 font-semibold uppercase">Score</th>
+                          <th className="px-4 py-2.5 text-right text-xs text-gray-500 font-semibold uppercase">P&amp;L</th>
                           <th className="px-4 py-2.5 text-left text-xs text-gray-500 font-semibold uppercase">Result</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {day.trades.map((t: any, i: number) => {
-                          const pnl = t.pnl ?? 0;
-                          const isWin = pnl > 0;
-                          const isSell = t.side === "SELL";
+                        {day.trades.map((raw: any, i: number) => {
+                          const t = normalise(raw);
+                          const isRejected = t.status === "REJECTED";
+                          const isWin = t.pnl > 0;
                           return (
-                            <tr key={i} className="border-t border-gray-50 hover:bg-gray-50 transition-colors">
+                            <tr key={i} className={`border-t border-gray-50 hover:bg-gray-50 transition-colors ${isRejected ? "opacity-60" : ""}`}>
                               <td className="px-4 py-2.5 text-gray-500 text-xs font-mono">
-                                {t.timestamp ? new Date(t.timestamp).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }) : "—"}
+                                {t.entry_time ? new Date(t.entry_time).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }) : "—"}
                               </td>
-                              <td className="px-4 py-2.5 font-semibold text-indigo-600">{t.symbol}</td>
+                              <td className="px-4 py-2.5 font-semibold text-indigo-600">
+                                {t.symbol}
+                                {t.option_type && (
+                                  <span className={`ml-1 text-xs font-bold ${t.option_type === "CE" ? "text-green-600" : "text-red-500"}`}>
+                                    {t.option_type}
+                                  </span>
+                                )}
+                              </td>
+                              <td className="px-4 py-2.5 text-xs text-gray-500">{t.strategy}</td>
                               <td className={`px-4 py-2.5 font-semibold text-xs ${t.side === "BUY" ? "text-green-600" : "text-red-500"}`}>
                                 {t.side}
                               </td>
                               <td className="px-4 py-2.5 text-right text-gray-700">
-                                {t.side === "BUY" ? `₹${Number(t.price).toLocaleString("en-IN")}` : "—"}
+                                {t.entry_price != null ? `₹${Number(t.entry_price).toFixed(2)}` : "—"}
                               </td>
                               <td className="px-4 py-2.5 text-right text-gray-700">
-                                {isSell ? `₹${Number(t.price).toLocaleString("en-IN")}` : "—"}
+                                {t.exit_price != null ? `₹${Number(t.exit_price).toFixed(2)}` : "—"}
                               </td>
-                              <td className="px-4 py-2.5 text-right text-orange-500 text-xs font-medium">
-                                {t.stop_loss ? `₹${Number(t.stop_loss).toLocaleString("en-IN")}` : "—"}
+                              <td className="px-4 py-2.5 text-right text-gray-700">{t.quantity ?? "—"}</td>
+                              <td className="px-4 py-2.5 text-right text-gray-500 text-xs">
+                                {t.score != null ? `${t.score > 0 ? "+" : ""}${t.score}` : "—"}
                               </td>
-                              <td className="px-4 py-2.5 text-right text-gray-700">{t.quantity}</td>
-                              <td className="px-4 py-2.5 text-xs text-gray-500">{t.timeframe || "15m"}</td>
-                              <td className={`px-4 py-2.5 text-right font-bold ${pnl >= 0 ? "text-green-600" : "text-red-500"}`}>
-                                {pnl !== 0 ? `${pnl >= 0 ? "+" : ""}₹${pnl.toFixed(2)}` : "—"}
+                              <td className={`px-4 py-2.5 text-right font-bold ${isRejected ? "text-gray-400" : t.pnl >= 0 ? "text-green-600" : "text-red-500"}`}>
+                                {isRejected ? "—" : t.pnl !== 0 ? `${t.pnl >= 0 ? "+" : ""}₹${t.pnl.toFixed(2)}` : "—"}
                               </td>
                               <td className="px-4 py-2.5">
-                                {pnl !== 0 && (
+                                {isRejected ? (
+                                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-orange-100 text-orange-700"
+                                        title={t.close_reason}>
+                                    REJECTED
+                                  </span>
+                                ) : t.pnl !== 0 ? (
                                   <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
                                     isWin ? "bg-green-100 text-green-700" : "bg-red-100 text-red-600"
                                   }`}>
                                     {isWin ? "WIN" : "LOSS"}
                                   </span>
-                                )}
+                                ) : t.status === "OPEN" ? (
+                                  <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-blue-100 text-blue-700">OPEN</span>
+                                ) : null}
                               </td>
                             </tr>
                           );
