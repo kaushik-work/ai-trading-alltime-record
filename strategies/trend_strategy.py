@@ -40,23 +40,19 @@ def _parse_time(t: str) -> dtime:
 
 class TrendStrategy:
     """
-    Production intraday strategy for NIFTY & BANKNIFTY.
-    Replaces BaseStrategy as the main trading engine.
+    Production intraday strategy for NIFTY ATR Intraday — the bot's only live strategy.
     """
 
-    def __init__(self, strategy_name: str = "ATR Intraday", score_mode: str = "full"):
+    def __init__(self, strategy_name: str = "ATR Intraday", score_mode: str = "atr_only"):
         self.strategy_name = strategy_name
-        self.score_mode = score_mode      # "full" | "atr_only" | "ict_only"
+        self.score_mode = score_mode      # "atr_only" — only mode currently supported
         self.last_score: dict = {}        # most recent score result — read by BotRunner for debug
         self.broker = get_broker()
         self.memory = TradeMemory()
         self.records = RecordTracker()
         self.market = get_market_data(self.broker if not config.IS_PAPER else None)
         self.stop_loss_pct = config.STOP_LOSS_PCT
-        _rr_map = {
-            "atr_only": getattr(config, "ATR_RR_RATIO", 3.0),
-        }
-        self.rr_ratio = _rr_map.get(score_mode, getattr(config, "ATR_RR_RATIO", 3.0))
+        self.rr_ratio = getattr(config, "ATR_RR_RATIO", 3.0)
         self.take_profit_pct = config.STOP_LOSS_PCT * self.rr_ratio
         self.paused = False
         self._sl_orders: dict[str, str] = self._load_sl_orders()

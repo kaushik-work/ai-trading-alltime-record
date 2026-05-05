@@ -43,8 +43,8 @@ parser.add_argument("--sell",       action="store_true",
 parser.add_argument("--trail",      action="store_true",
                     help="Use trailing SL (trails with best premium seen)")
 parser.add_argument("--mode",       type=str, default="atr_only",
-                    choices=["atr_only", "ict_only", "full"],
-                    help="Scorer mode (default: atr_only)")
+                    choices=["atr_only"],
+                    help="Scorer mode (only atr_only supported)")
 parser.add_argument("--skip",       type=str, default="",
                     help="Comma-separated scorer sections to disable, e.g. sma,rsi,macd,volume,bb,patterns,pcr,herd,atr_filter,vwap,orb,trend_15m,rsi_15m,pdh_pdl,sr_levels")
 parser.add_argument("--lots",       type=int, default=None,

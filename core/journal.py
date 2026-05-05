@@ -14,12 +14,11 @@ Structure:
       "win_rate":         75.0
     },
     "strategy_breakdown": {
-      "Musashi":     {"trades": 2, "pnl": 800.0, "wins": 1, "losses": 1},
-      ...
+      "ATR Intraday": {"trades": 2, "pnl": 800.0, "wins": 1, "losses": 1}
     },
     "trades": [
       {
-        "strategy":     "Musashi",
+        "strategy":     "ATR Intraday",
         "symbol":       "NIFTY",
         "option_type":  "CE",
         "strike":       22500,
@@ -209,44 +208,29 @@ def _journal_path(date_str: str) -> str:
 
 
 def _collect_vix_context() -> dict:
-    """Collect today's VIX level and per-strategy override decisions."""
+    """Collect today's India VIX level for the journal.
+
+    The bot uses VIX to scale lot sizes (see BotRunner._vix_auto_lots_set), not
+    as a hard trade gate, so this is informational only.
+    """
     try:
         from data.angel_fetcher import AngelFetcher
         vix = AngelFetcher.get().fetch_vix()
     except Exception:
         vix = None
 
-    vix_override_global = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE)
-    vix_override_atr    = ipc.flag_exists(ipc.FLAG_VIX_OVERRIDE_ATR)
-    threshold           = config.VIX_THRESHOLD
-
-    blocked = (vix is not None) and (vix > threshold) and not vix_override_global
-
     return {
-        "india_vix":         vix,
-        "threshold":         threshold,
-        "blocked_by_vix":    blocked,
-        "override_global":   vix_override_global,
-        "override_atr":      vix_override_atr,
-        "learning": _analyse_vix_decision(vix, threshold, vix_override_global, vix_override_atr),
+        "india_vix":      vix,
+        "blocked_by_vix": False,
+        "learning":       _analyse_vix_decision(vix),
     }
 
 
-def _analyse_vix_decision(vix, threshold, override_global, override_atr) -> str:
-    """Generate a human-readable analysis of today's VIX-related decisions."""
+def _analyse_vix_decision(vix) -> str:
+    """Human-readable VIX summary for the journal."""
     if vix is None:
-        return "VIX data unavailable today — no VIX gate decision recorded."
-    lines = [f"India VIX today: {vix:.1f} (threshold: {threshold})"]
-    if vix <= threshold:
-        lines.append("VIX was within normal range — gate was open, no override needed.")
-    else:
-        lines.append(f"VIX exceeded threshold ({vix:.1f} > {threshold}).")
-        if override_global:
-            lines.append("GLOBAL VIX override was ON — ATR Intraday traded through high VIX.")
-        else:
-            atr_status = "bypassed (override ON)" if override_atr else "blocked"
-            lines.append(f"ATR Intraday: {atr_status}.")
-    return " ".join(lines)
+        return "VIX data unavailable today."
+    return f"India VIX today: {vix:.1f} (used for auto-lot sizing at 9:30 IST)."
 
 
 def _analyse_day_bias(day_bias: dict, trades_list: list) -> dict:
