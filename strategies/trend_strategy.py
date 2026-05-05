@@ -917,50 +917,6 @@ class TrendStrategy:
         self._tp_orders.clear()
         return results
 
-    # ── Early entry (Option B) ────────────────────────────────────────────────
-
-    def _force_early_entry(self, direction: str):
-        """Enter 1-2 candles before full signal confirmation.
-        Called by BotRunner when 2 consecutive rising scores detected.
-        Reuses full execution path but bypasses the threshold gate."""
-        symbol = "NIFTY"
-        try:
-            from data.market import RealMarketData
-            market = RealMarketData()
-            indicators = market.get_indicators(symbol)
-            intraday   = market.get_intraday_indicators(symbol)
-            current_price = indicators.get("last_price") or 0
-            if not current_price:
-                logger.warning("[EARLY] Could not get NIFTY price — aborting early entry")
-                return
-
-            if self._find_open_option_position(symbol):
-                logger.info("[EARLY] Already have open position — skipping early entry")
-                return
-
-            if self._must_square_off() or not self._in_trading_window():
-                return
-
-            sc = self.last_score or {}
-            atr = intraday.get("atr_5m") or indicators.get("atr_14", 0)
-            decision = {
-                "action":          "BUY",
-                "symbol":          symbol,
-                "quantity":        self._calc_quantity(symbol, current_price, atr),
-                "confidence":      round(abs(sc.get("score", 4)) / 10, 2),
-                "reasoning":       f"Early entry: 2-candle rising score → {direction} (pre-confirmation)",
-                "risk_level":      "MEDIUM",
-                "score":           sc.get("score", 0),
-                "signals":         sc.get("signals", []),
-                "entry_direction": direction,
-                "early_entry":     True,
-            }
-            result = self._execute(decision, indicators)
-            if result:
-                logger.info("[EARLY] Entry placed: %s", result)
-        except Exception as e:
-            logger.error("[EARLY] _force_early_entry failed: %s", e)
-
     # ── Watchlist loop ─────────────────────────────────────────────────────────
 
     def run_watchlist(self) -> dict:

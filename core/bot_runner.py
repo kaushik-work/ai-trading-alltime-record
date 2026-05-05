@@ -125,10 +125,7 @@ class BotRunner:
         self.last_zones: list = []                      # today's watch zones (pre-market briefing)
         from core.paper_seller import get_paper_seller
         self._paper_seller = get_paper_seller()
-        # ── Early entry (Option B): 2 consecutive rising scores in same direction ──
-        self._early_prev_score: float = 0.0             # last candle's score
-        self._early_prev_dir: str = "HOLD"              # last candle's direction
-        self._early_entry_fired: bool = False           # already entered early this signal
+        self._zone_entry_fired_today: bool = False      # zone reversal: one entry per day max
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -264,70 +261,88 @@ class BotRunner:
                 except Exception as _log_err:
                     logger.debug("signal_log write failed: %s", _log_err)
 
-                # ── Option B early entry: 2 consecutive rising scores ─────────
-                # Fires when score rises for 2 straight candles in same direction
-                # AND hasn't crossed threshold yet (that's handled by run_watchlist).
-                # Enters 1–2 candles before full confirmation → better premium.
+                # ── Zone reversal early entry ─────────────────────────────────
                 try:
-                    self._check_early_entry(score, threshold, direction)
-                except Exception as _ee_err:
-                    logger.debug("early_entry check failed: %s", _ee_err)
-
-                # Roll state for next candle
-                self._early_prev_score = score
-                self._early_prev_dir   = direction
+                    self._check_zone_reversal_entry()
+                except Exception as _ze_err:
+                    logger.debug("zone_reversal_entry check failed: %s", _ze_err)
 
         except Exception as e:
             logger.error("ATR Intraday cycle: %s", e, exc_info=True)
 
-    def _check_early_entry(self, score: float, threshold: float, direction: str):
-        """Enter early if score has risen for 2 consecutive candles in same direction
-        and hasn't crossed threshold yet (full signal handles its own entry)."""
-        if direction == "HOLD":
-            # Signal reset — clear early-entry state
-            self._early_entry_fired = False
+    def _check_zone_reversal_entry(self):
+        """Enter early when price taps a supply/demand zone and the last 5m candle
+        confirms rejection — independent of the ATR score build-up."""
+        if self._zone_entry_fired_today:
+            return
+        if self.memory.get_open_trade_for_symbol("NIFTY"):
+            return
+        if self._atr_strategy is None:
             return
 
-        prev_score = self._early_prev_score
-        prev_dir   = self._early_prev_dir
-        abs_score  = abs(score)
+        try:
+            from core.ipc import read_watch_zones
+            from core.zone_briefing import get_active_zone
+            from data.angel_fetcher import AngelFetcher
 
-        # Already fired full signal — run_watchlist handles it
-        if abs_score >= threshold:
-            self._early_entry_fired = False
-            return
+            zones = read_watch_zones()
+            if not zones:
+                return
 
-        # Already placed an early entry this signal run — don't stack
-        if self._early_entry_fired:
-            return
+            af    = AngelFetcher.get()
+            spot  = af.get_index_ltp("NIFTY")
+            if not spot:
+                return
 
-        # No open position check
-        open_pos = self.memory.get_open_trade_for_symbol("NIFTY")
-        if open_pos:
-            return
+            zone = get_active_zone(spot, zones, proximity_pts=40)
+            if not zone:
+                return
 
-        # Condition: direction same as previous, score rising, prev was also rising
-        # (score > prev_score > 0 in the same direction)
-        same_dir    = (direction == prev_dir)
-        score_rose  = abs_score > abs(prev_score)
-        building    = abs_score >= threshold * 0.55  # at least 55% of threshold
-        if not (same_dir and score_rose and building):
-            return
+            # Fetch last two 5m bars to confirm rejection candle
+            from data.market import _get_intraday_df
+            df = _get_intraday_df("NIFTY", "5m")
+            if df is None or len(df) < 2:
+                return
 
-        logger.info(
-            "[EARLY ENTRY] Score rising: prev=%+.0f → now=%+.0f (threshold=%d) — entering %s early",
-            prev_score, score, threshold, direction,
-        )
-        self._early_entry_fired = True
+            last      = df.iloc[-1]
+            prev      = df.iloc[-2]
+            last_open  = float(last["Open"])
+            last_close = float(last["Close"])
+            prev_close = float(prev["Close"])
 
-        # Delegate to strategy's normal entry path with early=True flag
-        if self._atr_strategy:
-            try:
-                self._atr_strategy._force_early_entry(direction)
-            except AttributeError:
-                logger.debug("_force_early_entry not available on strategy")
-            except Exception as _fe:
-                logger.error("Early entry execution failed: %s", _fe)
+            zone_dir = zone["direction"]  # "CE" = support (buy CE), "PE" = resistance (buy PE)
+
+            if zone_dir == "PE":
+                # Resistance zone — look for bearish rejection:
+                # last candle closed below open AND below previous close
+                bearish = last_close < last_open and last_close < prev_close
+                if not bearish:
+                    return
+                direction = "SELL"
+                logger.info(
+                    "[ZONE REVERSAL] Resistance zone at ₹%.0f | NIFTY=%.0f | bearish rejection → PE entry",
+                    zone["mid"], spot,
+                )
+            elif zone_dir == "CE":
+                # Support zone — look for bullish rejection (hammer / green candle)
+                bullish = last_close > last_open and last_close > prev_close
+                if not bullish:
+                    return
+                direction = "BUY"
+                logger.info(
+                    "[ZONE REVERSAL] Support zone at ₹%.0f | NIFTY=%.0f | bullish bounce → CE entry",
+                    zone["mid"], spot,
+                )
+            else:
+                return
+
+            self._zone_entry_fired_today = True
+            self._atr_strategy._force_early_entry(direction)
+
+        except AttributeError:
+            pass  # _get_intraday_df_raw not available — skip silently
+        except Exception as e:
+            logger.debug("Zone reversal entry: %s", e)
 
     async def _atr_fast_check(self):
         """Runs 2 min into each 5m candle to catch moves 3 min earlier than bar close.
@@ -568,10 +583,11 @@ class BotRunner:
             logger.error("_sync_angel_trades: %s", e, exc_info=True)
 
     async def _reset_day_bias(self):
-        """Reset day bias to NEUTRAL at 20:00 IST each evening."""
+        """Reset day bias and early-entry state at 20:00 IST each evening."""
         try:
             ipc.write_day_bias("NEUTRAL", "")
             self.last_day_bias = ipc.read_day_bias()
+            self._zone_entry_fired_today = False
             logger.info("Day bias reset to NEUTRAL for tomorrow.")
         except Exception as e:
             logger.error("Bias reset failed: %s", e)
