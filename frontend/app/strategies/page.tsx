@@ -7,16 +7,16 @@ const STRATEGIES = [
   {
     id: "atr",
     name: "ATR Intraday",
-    tag: "旧",
-    color: "#6b7280",
-    bg: "#f9fafb",
-    tagline: "Legacy Multi-Pattern",
-    timeframe: "15m",
-    rr: "1 : 2.0",
-    maxTrades: 3,
-    window: "9:45–15:10",
-    threshold: 7,
-    description: "The original strategy. Uses a broad multi-indicator confluence — VWAP, ORB (Opening Range Breakout), PDH/PDL levels, and 12 candlestick patterns. Claude AI scores signals from -10 to +10 based on all conditions.",
+    tag: "ATR",
+    color: "#6366f1",
+    bg: "#eef2ff",
+    tagline: "Multi-Signal Confluence",
+    timeframe: "5m",
+    rr: "1 : 3.0",
+    maxTrades: 10,
+    window: "9:30–15:20",
+    threshold: 6,
+    description: "The bot's only live strategy. Multi-indicator confluence — VWAP, ORB (Opening Range Breakout), PDH/PDL, SMA50/SMA20/EMA9, RSI, MACD, Bollinger, ATR-vol filter, PCR + OI walls + herd gate, S/R zones, and 12 candlestick patterns. Score from -10 to +10; live entry threshold ≥ 8.",
     howItWorks: [
       { icon: "📐", title: "ORB (Opening Range Breakout)", desc: "The high/low of the first 15-min candle sets the range. Breakout above/below is a directional signal." },
       { icon: "〰️", title: "VWAP Direction", desc: "Price above/below VWAP sets the intraday bias. Trades only taken in the VWAP direction." },
@@ -171,109 +171,6 @@ export default function StrategiesPage() {
   );
 }
 
-
-/* ── (removed) Delta diagram — Strategy A retired ────────────────────────── */
-function DeltaDiagram() {
-  return (
-    <div>
-      <svg viewBox="0 0 280 160" className="w-full">
-        <rect width="280" height="160" rx="8" fill="#f0fdf4" />
-
-        {/* Delta bars — green positive, red negative */}
-        {[
-          { x: 15,  h: 30, pos: true  },
-          { x: 35,  h: 45, pos: true  },
-          { x: 55,  h: 20, pos: true  },
-          { x: 75,  h: 10, pos: false },
-          { x: 95,  h: 35, pos: true  },
-          { x: 115, h: 50, pos: true  },
-          { x: 135, h: 42, pos: true  },
-          { x: 155, h: 38, pos: true  },
-        ].map((b, i) => (
-          <rect key={i} x={b.x} y={110 - b.h} width="16" height={b.h}
-            fill={b.pos ? "#10b981" : "#ef4444"} fillOpacity="0.8" rx="2" />
-        ))}
-
-        {/* Zero line */}
-        <line x1="10" y1="110" x2="190" y2="110" stroke="#6b7280" strokeWidth="1" />
-        <text x="12" y="108" fontSize="7" fill="#6b7280">0</text>
-
-        {/* Cum delta line */}
-        <polyline points="23,100 43,80 63,68 83,72 103,55 123,35 143,28 163,22"
-          fill="none" stroke="#059669" strokeWidth="2" />
-        <text x="165" y="22" fontSize="7" fill="#059669">cum δ</text>
-
-        {/* Signal arrow */}
-        <line x1="115" y1="30" x2="115" y2="15" stroke="#059669" strokeWidth="2" />
-        <polygon points="115,10 111,18 119,18" fill="#059669" />
-        <text x="122" y="14" fontSize="7" fill="#059669">BUY</text>
-
-        {/* Labels */}
-        <text x="12" y="145" fontSize="7" fill="#6b7280">Session delta positive →</text>
-        <text x="12" y="155" fontSize="7" fill="#059669">Dynamic delta confirms → ENTRY</text>
-
-        {/* Score box */}
-        <rect x="200" y="10" width="72" height="36" rx="4" fill="#fff" stroke="#d1fae5" />
-        <text x="208" y="22" fontSize="7" fill="#6b7280">Delta Score</text>
-        <text x="208" y="34" fontSize="10" fontWeight="bold" fill="#059669">+1 signal</text>
-        <text x="208" y="44" fontSize="6" fill="#6b7280">+strategy B = +3</text>
-      </svg>
-      <p className="text-[10px] text-gray-400 text-center mt-1">Session + dynamic delta both positive → entry signal</p>
-    </div>
-  );
-}
-
-/* ── Strategy B — Trendline channel diagram ──────────────────────────────── */
-function TrendlineDiagram() {
-  return (
-    <div>
-      <svg viewBox="0 0 280 160" className="w-full">
-        <rect width="280" height="160" rx="8" fill="#fffbeb" />
-
-        {/* Upper trendline (resistance / HRS) */}
-        <line x1="20" y1="40" x2="220" y2="60" stroke="#ef4444" strokeWidth="1.5" strokeDasharray="5 2" />
-        <text x="222" y="62" fontSize="7" fill="#ef4444">HRS</text>
-
-        {/* Lower trendline (support / HPS) */}
-        <line x1="20" y1="100" x2="220" y2="115" stroke="#059669" strokeWidth="1.5" strokeDasharray="5 2" />
-        <text x="222" y="118" fontSize="7" fill="#059669">HPS-T</text>
-
-        {/* Channel fill */}
-        <polygon points="20,40 220,60 220,115 20,100" fill="#d97706" fillOpacity="0.05" />
-
-        {/* Price candles */}
-        {[
-          { x: 30,  y: 85 }, { x: 55, y: 80 }, { x: 80, y: 90 },
-          { x: 105, y: 75 }, { x: 130, y: 85 }, { x: 155, y: 108 },
-          { x: 180, y: 112 },
-        ].map((c, i) => (
-          <g key={i}>
-            <line x1={c.x+4} y1={c.y-8} x2={c.x+4} y2={c.y+8} stroke={i > 4 ? "#10b981" : "#6b7280"} strokeWidth="1" />
-            <rect x={c.x} y={c.y-4} width="8" height="7"
-              fill={i > 4 ? "#10b981" : "#9ca3af"} rx="1" />
-          </g>
-        ))}
-
-        {/* Entry arrow at HPS touch */}
-        <line x1="180" y1="108" x2="180" y2="88" stroke="#059669" strokeWidth="2" />
-        <polygon points="180,83 176,91 184,91" fill="#059669" />
-        <text x="186" y="90" fontSize="7" fill="#059669">BUY</text>
-        <text x="186" y="100" fontSize="6" fill="#059669">at HPS-T</text>
-
-        {/* Pivot dots */}
-        {[[35,95],[85,88],[155,108]].map(([x,y],i) => (
-          <circle key={i} cx={x} cy={y} r="3" fill="#059669" fillOpacity="0.6" />
-        ))}
-        {[[40,42],[110,50],[170,56]].map(([x,y],i) => (
-          <circle key={i} cx={x} cy={y} r="3" fill="#ef4444" fillOpacity="0.6" />
-        ))}
-
-        <text x="12" y="150" fontSize="7" fill="#6b7280">Lower TL = rising support (HPS-T) · Upper TL = falling resistance (HRS)</text>
-      </svg>
-      <p className="text-[10px] text-gray-400 text-center mt-1">Price touches lower TL → HPS-T buy zone → entry with delta confirm</p>
-    </div>
-  );
-}
 
 /* ── ATR Intraday Diagram — ORB + candlestick ─────────────────────────────── */
 function AtrDiagram() {

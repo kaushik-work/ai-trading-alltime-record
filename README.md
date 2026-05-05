@@ -1,8 +1,9 @@
 # AI Trading Bot — All-Time Record
 
-Fully automated intraday trading bot for **NIFTY** options using Claude AI + jugaad-trader (Zerodha).
+Fully automated intraday trading bot for **NIFTY** options on Angel One SmartAPI,
+with Claude AI for trade narrative + post-trade review.
 
-**Backend:** FastAPI on Railway | **Frontend:** Vercel | **Data:** Zerodha → NSE India API
+**Backend:** FastAPI on a DigitalOcean droplet (Docker) | **Frontend:** Next.js on Vercel | **Data:** Angel One SmartAPI
 
 ---
 
@@ -10,93 +11,97 @@ Fully automated intraday trading bot for **NIFTY** options using Claude AI + jug
 
 | Phase | Budget | Style | Goal | Status |
 |-------|--------|-------|------|--------|
-| **A** | ₹20,000 | Intraday NIFTY | Compound to ₹1.5L | ✅ Active |
-| **B** | ₹1.5L | Intraday + Swing | Compound to ₹15L | 🔒 Locked |
-| **C** | ₹15L+ | Options Selling (Straddle / Iron Condor) | Monthly income | 🔒 Locked |
+| **A** | ₹1.25L | Intraday NIFTY | Compound to ₹1.5L | ✅ Active |
+| **B** | ₹1.5L  | Intraday + Swing | Compound to ₹15L | 🔒 Locked |
+| **C** | ₹15L+  | Options Selling (Straddle / Iron Condor) | Monthly income | 🔒 Locked |
 
 ---
 
-## Strategies
+## Strategy
 
-Three independent strategies run simultaneously. All trade NIFTY CE/PE options.
+The bot runs a **single live strategy**: **ATR Intraday**.
 
-### 1. Musashi — 15-min Trend Rider
-- **Signal:** EMA8/21 stack + VWAP bias + pullback to EMA21 + Heikin-Ashi + RSI + volume
-- **Timeframe:** 15-minute bars
-- **Entry window:** 9:45–11:30 AM + 1:30–2:30 PM IST
-- **R:R:** 1:2.5 (SL = 1.25× ATR, TP = 3.125× ATR)
-- **Max trades:** 2 per day
-- **Threshold:** 7.5 / 10
-
-### 2. Raijin — 5-min VWAP Mean-Reversion Scalp
-- **Signal:** Price at VWAP ±2σ band + Heikin-Ashi flip + RSI extreme + volume spike
+### ATR Intraday
+- **Signal:** SMA50 + SMA20 + EMA9 + RSI + MACD + Bollinger + Volume + ATR-vol filter
+  + VWAP + ORB + 15m trend/RSI + PDH/PDL + 12 candlestick patterns
+  + PCR + OI walls + herd-gate + S/R zones (RBD/DBR + structure)
 - **Timeframe:** 5-minute bars
-- **Entry window:** 9:45–10:45 AM + 2:15–2:45 PM IST
-- **R:R:** 1:2.0 (SL = 0.6× ATR, TP = 1.2× ATR)
-- **Max trades:** 3 per day
-- **Threshold:** 8.5 / 10
+- **Score range:** −10 to +10. Live entry threshold: ≥ ±8 (config default ±6,
+  hard-floor of 8 enforced in `strategies/trend_strategy.py` to skip 6–7 traps).
+- **R:R:** 1:3.0 — SL = ½ × min(5m ATR, 50)pts (≥ 5pts floor); TP = SL × 3.0
+- **Entry window:** 09:30–15:20 IST. Mandatory square-off at 15:20.
+- **Strike selection:** Walk ATM ± 10 strikes in ₹50 steps until premium falls
+  in ₹155–₹165 range. Closest match used as fallback.
+- **Zone gating:** Pre-market watch zones (PDH/PDL/ORB/weekly) computed at 09:00.
+  Trade rejected if signal fights an active zone within 30pts.
+- **Zone-reversal early entry:** Independent of score — at most one entry/day.
+  When price taps a watch zone and the last 5m candle confirms rejection
+  (bearish at resistance / bullish at support), force-entry CE/PE.
 
-### 3. ATR Intraday — AishDoc Multi-Signal
-- **Signal:** SMA50 trend + VWAP + ORB breakout + RSI + MACD + PDH/PDL + candlestick patterns
-- **Timeframe:** 15-minute bars, score −10 to +10
-- **Entry window:** 9:45 AM – 3:10 PM IST
-- **Threshold:** ±5 / 10, Claude AI confirms before order
-- **Square-off:** 3:10 PM hard close
+C-ICT was active previously and will be **rebuilt from scratch later**.
+Musashi / Raijin / SMC / Expiry-Day Gap research are not in the live path.
 
 ---
 
 ## Data Pipeline
 
 ```
-Zerodha (jugaad-trader)   ←  primary: real NSE bars, real volume
+Angel One SmartAPI   ←  primary: real NSE bars + option chain + VIX
         ↓ if unavailable
-NSE India public API      ←  fallback: official OHLCV, no login needed
-        ↓ if unavailable
-Cycle skipped             ←  never trade on bad data
+Cycle skipped        ←  never trade on bad data
 ```
 
-No yfinance anywhere. All three strategies and the backtest engine use the same pipeline.
+5-minute option chain snapshots are persisted to build a real historical
+premium dataset over time (mitigates the BS-vs-live premium mismatch that
+hurts naive backtests).
 
 ---
 
 ## Architecture
 
 ```
-Railway (FastAPI)
-├── api/server.py          # REST + WebSocket endpoints, bot lifecycle
-├── core/bot_runner.py     # APScheduler — runs all 3 strategies every 5/15 min
-│
-├── strategies/
-│   ├── nifty_intraday.py  # Musashi scorer (0–10)
-│   ├── nifty_scalp.py     # Raijin scorer (0–10)
-│   ├── trend_strategy.py  # ATR Intraday (AishDoc, −10 to +10)
-│   ├── signal_scorer.py   # ATR Intraday scoring engine
-│   ├── indicators.py      # Custom TA: EMA, RSI, ATR, VWAP, HA, swing structure
-│   └── patterns.py        # 12 candlestick pattern detectors
-│
-├── data/
-│   ├── zerodha_fetcher.py # jugaad-trader singleton — intraday + daily + historical DFs
-│   ├── nse_fetcher.py     # NSE India API singleton — OHLCV fallback
-│   └── market.py          # RealMarketData — indicators for ATR Intraday
-│
-├── core/
-│   ├── brain.py           # Claude AI — trade remarks (entry + exit)
-│   ├── broker.py          # MockBroker (paper) + JugaadBroker (live)
-│   ├── memory.py          # SQLite trade history
-│   ├── records.py         # All-time records tracker
-│   ├── journal.py         # Daily journal — saved at 3:20 PM
-│   └── security.py        # Credential masking in logs
-│
-├── backtesting/
-│   ├── engine.py          # Bar-by-bar replay — Musashi, Raijin, ATR Intraday
-│   ├── metrics.py         # Win rate, Sharpe, max drawdown, profit factor
-│   └── charges.py         # Real brokerage + STT + exchange fees
-│
-└── db/
-    └── trading.db         # SQLite — trades, records, journals
+DigitalOcean droplet (Docker)
+└── api  (FastAPI + APScheduler in one process)
+    ├── api/server.py           # REST + WebSocket, snapshot every 5s
+    ├── core/bot_runner.py      # AsyncIOScheduler — schedules every cycle
+    │
+    ├── strategies/
+    │   ├── trend_strategy.py   # Order execution, SL/TP, zone gating
+    │   ├── signal_scorer.py    # ATR Intraday scoring engine (atr_only)
+    │   ├── indicators.py       # EMA, RSI, ATR, VWAP, swing structure
+    │   ├── patterns.py         # 12 candlestick pattern detectors
+    │   └── vix_filter.py       # India VIX regime helper
+    │
+    ├── data/
+    │   ├── angel_fetcher.py    # Angel One singleton — TOTP, bars, option LTP, VIX
+    │   ├── market.py           # RealMarketData — daily + intraday indicators
+    │   ├── option_chain.py     # OI walls, PCR, max-pain, herd-gate
+    │   └── oi_data.py          # OI helpers
+    │
+    ├── core/
+    │   ├── brain.py            # Claude AI trade remarks
+    │   ├── broker.py           # MockBroker (paper) + AngelOneBroker (live)
+    │   ├── memory.py           # SQLite — trades, signal_log, daily_summaries
+    │   ├── records.py          # All-time records tracker
+    │   ├── journal.py          # Daily journal JSON + Claude review (haiku)
+    │   ├── ipc.py              # Flag-file IPC: pause, force-trade, day-bias, settings
+    │   ├── paper_seller.py     # Buyer-vs-seller paper P&L comparison
+    │   ├── sr_levels.py        # RBD/DBR institutional zones, structure detection
+    │   ├── zone_briefing.py    # Pre-market PDH/PDL/ORB/weekly watch zones (9 AM)
+    │   ├── greeks.py           # Black-Scholes delta/gamma/theta/vega
+    │   ├── trade_analyst.py    # Post-trade Claude analysis
+    │   └── angel_error_log.py  # Append-only error log
+    │
+    ├── backtesting/
+    │   ├── engine.py           # ATR Intraday bar-by-bar replay
+    │   ├── metrics.py          # Win rate, Sharpe, drawdown, profit factor
+    │   └── charges.py          # NSE brokerage + STT + exchange + GST
+    │
+    └── db/
+        └── trading.db          # SQLite
 
 Vercel (Next.js frontend)
-└── frontend/              # Dashboard — live P&L, signal scores, backtest, journals
+└── frontend/                   # Dashboard, signal radar, P&L, backtest, journal
 ```
 
 ---
@@ -110,40 +115,39 @@ pip install -r requirements.txt
 
 ### 2. Configure `.env`
 ```env
-# Zerodha
-ZERODHA_USER_ID=AB1234
-ZERODHA_PASSWORD=your_password
-ZERODHA_TOTP_SECRET=your_totp_base32_secret   # 32-char base32 key from Kite 2FA settings
+# Angel One SmartAPI
+ANGEL_API_KEY=...
+ANGEL_CLIENT_ID=...
+ANGEL_PASSWORD=...
+ANGEL_TOTP_TOKEN=...        # base32 secret from Angel One 2FA setup
 
 # Claude AI
 ANTHROPIC_API_KEY=sk-ant-...
 
 # Mode
-TRADING_MODE=paper        # paper = simulation | live = real money (ATR Intraday only)
-
-# Risk (Phase A defaults)
-STARTING_BUDGET=20000
-MAX_TRADE_AMOUNT=10000
-MAX_DAILY_LOSS=2000
-RISK_PER_TRADE_PCT=5.0
-MIN_SIGNAL_SCORE=5
+TRADING_MODE=paper          # paper = simulation | live = real money
 ```
 
-### 3. Get TOTP secret
-1. Login to [kite.zerodha.com](https://kite.zerodha.com) → My Profile → Security
-2. Enable 2FA → click **"Can't scan? Get the key instead"**
-3. Copy the 32-character base32 key → paste as `ZERODHA_TOTP_SECRET`
+All financial parameters (capital, lot size, SL/TP, premium target) live in
+`config.py` — not env vars. See `feedback_deploy_habits.md` for the rationale.
+
+### 3. Daily token routine
+Run before 09:15 IST every trading day:
+```bash
+.venv/Scripts/python scripts/get_token.py     # Windows
+.venv/bin/python     scripts/get_token.py     # droplet
+```
 
 ---
 
 ## Run Locally
 
 ```bash
-# Start FastAPI backend
+# Start FastAPI backend (Bot runs inside the same process via APScheduler lifespan)
 python -m uvicorn api.server:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-API available at `http://localhost:8000`
+API at `http://localhost:8000`, WebSocket at `ws://localhost:8000/ws`.
 
 ---
 
@@ -151,15 +155,24 @@ API available at `http://localhost:8000`
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/auth/token` | POST | Login (returns JWT) |
-| `/api/snapshot` | GET | Full dashboard data — P&L, trades, positions, prices |
-| `/api/bot/debug` | GET | Live signal scores for all 3 strategies |
-| `/api/bot/pause` | POST | Pause trading |
-| `/api/bot/resume` | POST | Resume trading |
-| `/api/backtest` | POST | Run backtest (Musashi / Raijin / ATR Intraday) |
-| `/api/journals` | GET | List saved daily journals |
-| `/api/journals/{date}` | GET | Get a specific day's journal |
-| `/ws` | WebSocket | Live snapshot every 5 seconds |
+| `/api/auth/token`        | POST      | Login (returns JWT) |
+| `/api/snapshot`          | GET       | Full dashboard snapshot |
+| `/api/bot/debug`         | GET       | Live ATR signal score |
+| `/api/bot/pause`         | POST      | Pause trading |
+| `/api/bot/resume`        | POST      | Resume trading |
+| `/api/bot/bias`          | POST      | Set day bias (BULLISH / NEUTRAL / BEARISH) |
+| `/api/trade/force`       | POST      | Queue a manual trade |
+| `/api/live/preflight`    | POST      | Validate token, contract, LTP, margin |
+| `/api/backtest`          | POST      | Run ATR Intraday backtest |
+| `/api/journals`          | GET       | List daily journals |
+| `/api/journals/{date}`   | GET       | Get a specific day's journal |
+| `/api/signal-log`        | GET       | Every 5-min evaluation (trade or no-trade) |
+| `/api/paper-comparison`  | GET       | Buyer-vs-seller paper P&L per signal |
+| `/api/chart-data`        | GET       | NIFTY 5m candles + S/R + EMA + POC |
+| `/api/event-blocks`      | GET/POST  | Event-blocked dates (Budget, RBI MPC) |
+| `/api/market-holidays`   | GET/POST  | NSE market holidays |
+| `/api/angel/session`     | POST      | Force fresh Angel One TOTP login |
+| `/ws`                    | WebSocket | Live snapshot every 5s |
 
 ---
 
@@ -168,20 +181,19 @@ API available at `http://localhost:8000`
 ```json
 POST /api/backtest
 {
-  "strategy": "Musashi",
+  "strategy": "ATR Intraday",
   "symbol": "NIFTY",
   "period": "60d",
-  "interval": "15m",
-  "capital": 20000,
-  "risk_pct": 4.0,
-  "rr_ratio": 2.5,
-  "daily_loss_limit_pct": 8.0
+  "interval": "5m",
+  "capital": 125000,
+  "risk_pct": 2.0,
+  "rr_ratio": 3.0,
+  "daily_loss_limit_pct": 5.0
 }
 ```
 
-Strategies: `"Musashi"` | `"Raijin"` | `"ATR Intraday"`
-
-Backtest uses real Zerodha historical bars — same data as live trading.
+Backtest replays real Angel One historical bars. For realistic results
+(bar-level SL + slippage modeling), use `scripts/backtest_live_atr.py`.
 
 ---
 
@@ -191,18 +203,29 @@ Backtest uses real Zerodha historical bars — same data as live trading.
 |-|-----------|-----------|
 | `TRADING_MODE` | `paper` | `live` |
 | Real money | No | Yes |
-| Orders placed | Simulated (MockBroker) | Real Zerodha orders via jugaad-trader |
-| Which strategies go live | None | ATR Intraday only (Musashi + Raijin log to DB only) |
-| Market data | Zerodha → NSE India | Same |
+| Orders placed | Simulated (MockBroker) | Real Angel One orders |
+| Market data | Angel One | Same |
 
-> **Note:** Musashi and Raijin do not place real orders even in live mode — they log simulated trades to the database. Only ATR Intraday calls `broker.place_order()`.
+> Always run paper for at least 1–2 weeks after material strategy changes.
+> Verify signal scores in the Signal Radar, then flip `TRADING_MODE=live`.
 
-**Before switching to live:** Run paper for at least 1–2 weeks after the data pipeline is stable → verify signal scores in Railway logs → check trade quality in journals → then set `TRADING_MODE=live`.
+---
+
+## Deploy
+
+```bash
+git pull
+docker compose build --no-cache
+docker compose up -d --force-recreate
+```
+
+Or use `deploy.sh`. The GitHub Actions workflow (`.github/workflows/deploy.yml`)
+SSHs into the droplet on push to `main` and runs the same sequence.
 
 ---
 
 ## Security
 
 - All credentials in `.env` — never committed (`.gitignore`)
-- Logs automatically mask API keys, passwords, tokens
+- Logs automatically mask API keys, passwords, tokens (`core/security.py`)
 - Never push `.env` to git

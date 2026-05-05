@@ -8,21 +8,6 @@ import NiftyChart from "./components/NiftyChart";
 const _API    = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const WS_URL  = _API.replace(/^http/, "ws") + "/ws";
 
-const STRATEGIES = [
-  {
-    name: "ATR Intraday",
-    tag: "ATR",
-    symbols: ["NIFTY"],
-    timeframe: "5m",
-    status: "active",
-    description: "VWAP + ORB + PDH/PDL + SMA/EMA/RSI/MACD. Score -10 to +10, threshold ≥6. ATR/2 SL, 1:3 R:R, ₹150–170 strikes. +215% Jan–Apr 2026.",
-    target: "+215%",
-    rr: "1:3.0",
-    risk: "2%",
-    color: "indigo",
-  },
-];
-
 export default function Home() {
   const router = useRouter();
   const [authed, setAuthed] = useState(false);
