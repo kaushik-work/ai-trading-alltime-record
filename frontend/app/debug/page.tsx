@@ -13,23 +13,6 @@ export default function DebugPage() {
   const [loading, setLoading] = useState(false);
   const [lastFetch, setLastFetch] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [vixSaving, setVixSaving] = useState<Record<string, boolean>>({});
-
-  async function toggleVix(endpoint: string, currentState: boolean) {
-    const key = endpoint;
-    setVixSaving(s => ({ ...s, [key]: true }));
-    try {
-      const token = localStorage.getItem("aq_token");
-      await fetch(`${API_URL}${endpoint}`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
-        body: JSON.stringify({ enable: !currentState }),
-      });
-      await fetchDebug();
-    } finally {
-      setVixSaving(s => ({ ...s, [key]: false }));
-    }
-  }
 
   async function runPreflight() {
     const token = localStorage.getItem("aq_token");
@@ -239,11 +222,9 @@ export default function DebugPage() {
         {/* Strategy cards */}
         <div className="space-y-4">
           {[
-            { name: "ATR Intraday", tag: "ATR", color: "#6366f1", bg: "#eef2ff", interval: "5m", type: "Technical (sections 1–11)", vixEndpoint: "/api/bot/vix-override/atr", vixKey: "vix_override_atr", display: "atr" },
-          ].map(({ name, tag, color, bg, interval, type, vixEndpoint, vixKey, display }) => {
+            { name: "ATR Intraday", tag: "ATR", color: "#6366f1", bg: "#eef2ff", interval: "5m", type: "Technical (sections 1–11)" },
+          ].map(({ name, tag, color, bg, interval, type }) => {
             const s = strategies[name];
-            const vixOn: boolean = vixKey ? (data?.[vixKey] ?? false) : false;
-            const vixBusy = vixEndpoint ? (vixSaving[vixEndpoint] ?? false) : false;
             return (
               <div key={name} className="bg-white rounded-xl border border-gray-200 p-5">
                 {/* Header */}
@@ -258,20 +239,6 @@ export default function DebugPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    {vixEndpoint && (
-                      <button
-                        onClick={() => toggleVix(vixEndpoint, vixOn)}
-                        disabled={vixBusy}
-                        className="text-[10px] font-semibold px-2 py-1 rounded-full border transition-colors disabled:opacity-50"
-                        style={vixOn
-                          ? { background: "#fef3c7", color: "#b45309", borderColor: "#f59e0b" }
-                          : { background: "#f3f4f6", color: "#6b7280", borderColor: "#d1d5db" }
-                        }
-                        title={vixOn ? "VIX gate bypassed — click to restore" : "VIX gate active — click to bypass"}
-                      >
-                        {vixOn ? "Override ON" : "Override OFF"}
-                      </button>
-                    )}
                     {s ? (
                       <ActionBadge action={s.action ?? (s.will_trade ? "TRADE" : "HOLD")} />
                     ) : (
@@ -284,12 +251,6 @@ export default function DebugPage() {
                   <div className="text-sm text-gray-400 italic">No signal data yet — refreshes during market hours.</div>
                 ) : s.error ? (
                   <div className="text-sm text-red-500">Error: {s.error}</div>
-                ) : display === "ict" ? (
-                  <IctScoreDisplay s={s} color={color} />
-                ) : display === "smc" ? (
-                  <SmcScoreDisplay s={s} color={color} />
-                ) : display === "vision" ? (
-                  <VisionScoreDisplay s={s} color={color} />
                 ) : (
                   <AtrScoreDisplay s={s} color={color} />
                 )}
@@ -334,108 +295,6 @@ function ActionBadge({ action }: { action: string }) {
   );
 }
 
-function ScoreBar({ label, score, max, color }: { label: string; score: number; max: number; color: string }) {
-  const pct = Math.min((score / max) * 100, 100);
-  return (
-    <div className="mb-2">
-      <div className="flex justify-between text-xs mb-1">
-        <span className="text-gray-500 font-medium">{label}</span>
-        <span className="font-bold text-gray-700">{score.toFixed(1)} / {max}</span>
-      </div>
-      <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
-        <div className="h-full rounded-full transition-all"
-             style={{ width: `${pct}%`, background: color }} />
-      </div>
-    </div>
-  );
-}
-
-function ScoreDisplay({ s, color }: { s: any; color: string }) {
-  const threshold = s.threshold ?? 8.5;
-  const threshPct = (threshold / 10) * 100;
-  return (
-    <div>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
-        <div>
-          <ScoreBar label="Buy Score (CE)" score={s.buy_score ?? 0} max={10} color="#22c55e" />
-          <ScoreBar label="Sell Score (PE)" score={s.sell_score ?? 0} max={10} color="#ef4444" />
-        </div>
-        <div className="bg-gray-50 rounded-lg p-3">
-          <div className="text-[10px] text-gray-400 uppercase font-semibold mb-2">Threshold</div>
-          <div className="relative h-3 bg-gray-200 rounded-full mb-2">
-            <div className="absolute top-0 bottom-0 rounded-full" style={{ left: 0, width: `${threshPct}%`, background: color, opacity: 0.3 }} />
-            <div className="absolute top-1/2 -translate-y-1/2 w-0.5 h-4 rounded bg-gray-600" style={{ left: `${threshPct}%` }} />
-          </div>
-          <div className="text-xs text-gray-500">Need ≥ <b>{threshold}</b> to trade</div>
-          {s.bars && <div className="text-xs text-gray-400 mt-1">{s.bars} bars · bar_time {s.bar_time_ist}</div>}
-        </div>
-      </div>
-      {s.details && Object.keys(s.details).length > 0 && (
-        <div>
-          <div className="text-[10px] text-gray-400 uppercase font-semibold mb-2">Score Breakdown</div>
-          <div className="flex flex-wrap gap-2">
-            {Object.entries(s.details).map(([k, v]: any) => (
-              <span key={k} className="text-[10px] px-2 py-0.5 rounded font-medium"
-                    style={{ background: v > 0 ? "#dcfce7" : "#f3f4f6", color: v > 0 ? "#15803d" : "#6b7280" }}>
-                {k}: +{v}
-              </span>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
-function IctScoreDisplay({ s, color }: { s: any; color: string }) {
-  const score = s.score ?? 0;
-  const of = s.order_flow ?? {};
-  return (
-    <div>
-      <div className="mb-3">
-        <div className="flex justify-between text-xs mb-1">
-          <span className="text-gray-500">ICT Signal Score</span>
-          <span className="font-bold text-gray-700">{score > 0 ? "+" : ""}{score} / ±4</span>
-        </div>
-        <div className="h-3 bg-gray-100 rounded-full overflow-hidden relative">
-          <div className="absolute top-0 bottom-0 w-0.5 bg-gray-300" style={{ left: "50%" }} />
-          <div className="h-full rounded-full transition-all"
-               style={{
-                 width: `${Math.abs(score) / 4 * 50}%`,
-                 marginLeft: score >= 0 ? "50%" : `${50 - Math.abs(score) / 4 * 50}%`,
-                 background: score >= 0 ? "#22c55e" : "#ef4444",
-               }} />
-        </div>
-        <div className="flex justify-between text-[9px] text-gray-400 mt-0.5">
-          <span>-4 (SELL)</span><span>0</span><span>+4 (BUY)</span>
-        </div>
-      </div>
-      <div className="text-xs text-gray-500 mb-2">
-        Direction: <b>{s.direction ?? "—"}</b> · Threshold: <b>±{s.threshold ?? 2}</b> · Will trade: <b>{s.will_trade ? "YES" : "NO"}</b>
-      </div>
-      {(of.ict_liq_score != null || of.ict_ob_score != null) && (
-        <div className="flex flex-wrap gap-2 text-[10px]">
-          {of.ict_liq_score != null && (
-            <span className="px-2 py-0.5 rounded font-medium"
-                  style={{ background: of.ict_liq_score > 0 ? "#dcfce7" : of.ict_liq_score < 0 ? "#fee2e2" : "#f3f4f6",
-                           color:      of.ict_liq_score > 0 ? "#15803d" : of.ict_liq_score < 0 ? "#dc2626" : "#6b7280" }}>
-              Liq sweep: {of.ict_liq_score > 0 ? "+" : ""}{of.ict_liq_score}
-            </span>
-          )}
-          {of.ict_ob_score != null && (
-            <span className="px-2 py-0.5 rounded font-medium"
-                  style={{ background: of.ict_ob_score > 0 ? "#dcfce7" : of.ict_ob_score < 0 ? "#fee2e2" : "#f3f4f6",
-                           color:      of.ict_ob_score > 0 ? "#15803d" : of.ict_ob_score < 0 ? "#dc2626" : "#6b7280" }}>
-              OB retest: {of.ict_ob_score > 0 ? "+" : ""}{of.ict_ob_score}
-            </span>
-          )}
-        </div>
-      )}
-      {s.note && <div className="text-[10px] text-gray-400 mt-1">{s.note}</div>}
-    </div>
-  );
-}
-
 function AtrScoreDisplay({ s, color }: { s: any; color: string }) {
   const score = s.score ?? 0;
   return (
@@ -466,104 +325,3 @@ function AtrScoreDisplay({ s, color }: { s: any; color: string }) {
   );
 }
 
-function SmcScoreDisplay({ s, color }: { s: any; color: string }) {
-  const score = s.score ?? 0;
-  const details: Record<string, number> = s.details ?? s.breakdown ?? {};
-  const patternMap: Record<string, string> = {
-    choch: "CHOCH", ob: "OB", breaker: "Breaker", fvg: "FVG", amd: "AMD", confluence: "Confluence",
-  };
-  return (
-    <div>
-      <div className="mb-3">
-        <div className="flex justify-between text-xs mb-1">
-          <span className="text-gray-500">SMC Score</span>
-          <span className="font-bold text-gray-700">{score > 0 ? "+" : ""}{score} / ±10</span>
-        </div>
-        <div className="h-3 bg-gray-100 rounded-full overflow-hidden relative">
-          <div className="absolute top-0 bottom-0 w-0.5 bg-gray-300" style={{ left: "50%" }} />
-          <div className="h-full rounded-full transition-all"
-               style={{
-                 width: `${Math.abs(score) / 10 * 50}%`,
-                 marginLeft: score >= 0 ? "50%" : `${50 - Math.abs(score) / 10 * 50}%`,
-                 background: score >= 0 ? "#22c55e" : "#ef4444",
-               }} />
-        </div>
-        <div className="flex justify-between text-[9px] text-gray-400 mt-0.5">
-          <span>-10 (SELL)</span><span>0</span><span>+10 (BUY)</span>
-        </div>
-      </div>
-      <div className="text-xs text-gray-500 mb-2">
-        Direction: <b>{s.direction ?? "—"}</b> · Threshold: <b>±{s.threshold ?? 6}</b> · Will trade: <b>{s.will_trade ? "YES" : "NO"}</b>
-      </div>
-      {Object.keys(details).length > 0 && (
-        <div className="flex flex-wrap gap-2">
-          {Object.entries(details).map(([k, v]: any) => (
-            <span key={k} className="text-[10px] px-2 py-0.5 rounded font-medium"
-                  style={{ background: v > 0 ? "#ede9fe" : v < 0 ? "#fee2e2" : "#f3f4f6",
-                           color:      v > 0 ? "#7c3aed" : v < 0 ? "#dc2626" : "#6b7280" }}>
-              {patternMap[k] ?? k}: {v > 0 ? "+" : ""}{v}
-            </span>
-          ))}
-        </div>
-      )}
-      {s.note && <div className="text-[10px] text-gray-400 mt-2">{s.note}</div>}
-    </div>
-  );
-}
-
-function VisionScoreDisplay({ s, color }: { s: any; color: string }) {
-  const score = s.score ?? 0;
-  const confColor: Record<string, string> = { high: "#15803d", medium: "#b45309", low: "#6b7280" };
-  const conf = s.confidence ?? "—";
-  return (
-    <div>
-      <div className="mb-3">
-        <div className="flex justify-between text-xs mb-1">
-          <span className="text-gray-500">Vision Score</span>
-          <span className="font-bold text-gray-700">{score > 0 ? "+" : ""}{score} / ±10</span>
-        </div>
-        <div className="h-3 bg-gray-100 rounded-full overflow-hidden relative">
-          <div className="absolute top-0 bottom-0 w-0.5 bg-gray-300" style={{ left: "50%" }} />
-          <div className="h-full rounded-full transition-all"
-               style={{
-                 width: `${Math.abs(score) / 10 * 50}%`,
-                 marginLeft: score >= 0 ? "50%" : `${50 - Math.abs(score) / 10 * 50}%`,
-                 background: score >= 0 ? "#22c55e" : "#ef4444",
-               }} />
-        </div>
-        <div className="flex justify-between text-[9px] text-gray-400 mt-0.5">
-          <span>-10 (SELL)</span><span>0</span><span>+10 (BUY)</span>
-        </div>
-      </div>
-      <div className="flex flex-wrap gap-2 text-[10px] mb-2">
-        {s.structure && (
-          <span className="px-2 py-0.5 rounded font-medium bg-gray-100 text-gray-600">
-            Structure: {s.structure}
-          </span>
-        )}
-        {s.model_detected && s.model_detected !== "none" && (
-          <span className="px-2 py-0.5 rounded font-medium" style={{ background: color + "22", color }}>
-            {s.model_detected}
-          </span>
-        )}
-        {typeof conf === "string" && conf !== "—" && (
-          <span className="px-2 py-0.5 rounded font-medium"
-                style={{ background: "#f3f4f6", color: confColor[conf] ?? "#6b7280" }}>
-            Confidence: {conf}
-          </span>
-        )}
-      </div>
-      {s.observations && s.observations.length > 0 && (
-        <ul className="text-[10px] text-gray-500 space-y-0.5 mb-1">
-          {s.observations.slice(0, 3).map((obs: string, i: number) => (
-            <li key={i} className="truncate">· {obs}</li>
-          ))}
-        </ul>
-      )}
-      {s.invalidation && (
-        <div className="text-[10px] text-red-400 mt-1">Invalidation: {s.invalidation}</div>
-      )}
-      {s.error && <div className="text-[10px] text-red-400 mt-1">{s.error}</div>}
-    </div>
-  );
-}

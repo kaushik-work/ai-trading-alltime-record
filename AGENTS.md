@@ -1,89 +1,73 @@
 # AI Trading Bot — Agent Guide
 
-## Architecture Overview (updated 2026-04-07)
+## Architecture (updated 2026-05-06)
 
-This is an **intraday NIFTY options trading bot** targeting ₹1.25L → ₹15L.
-Stack: Python 3.12, FastAPI, Next.js, SQLite, Angel One SmartAPI, Claude claude-sonnet-4-6.
+Intraday NIFTY options trading bot. Phase A capital ₹1.25L → ₹15L target.
+Stack: Python 3.12, FastAPI, Next.js, SQLite, Angel One SmartAPI, Claude Sonnet 4.6.
 
-### Two Independent Bots (NOT combined)
+### One Live Strategy: ATR Intraday
 
-| Strategy | Score mode | Sections used | Threshold | Scheduler |
+| Strategy | Score mode | Sections | Threshold | Scheduler |
 |---|---|---|---|---|
-| ATR Intraday | `atr_only` | 1–11 (SMA/EMA/RSI/MACD/VWAP/ORB/PDH) | ±6 | Every 5 min |
-| C-ICT | `ict_only` | 12 only (ICT OB + liquidity sweep) | ±2 | Every 5 min (+2m30s offset) |
+| ATR Intraday | `atr_only` | 1–11 (SMA / EMA / RSI / MACD / VWAP / ORB / PDH/PDL / patterns / PCR / OI / herd / ATR-vol) + 12 (S/R + structure gate) | live ≥ ±8 (config ±6) | `*/5 * * * *` :05 |
 
-Each has its own `TrendStrategy` instance → own position tracker → own VIX gate.
+A second `_atr_fast_check` job fires at :30 of each odd-numbered minute when the
+previous bar's score was 6–7 (near miss) — catches moves 3 minutes early.
 
-### Key Files
+C-ICT was active previously and will be **rebuilt from scratch later**. The
+prior C-ICT scorer (`order_flow.py`, `ict_only` mode) and the dead Musashi /
+Raijin / SMC / Expiry-Day Gap research code paths have all been removed.
+
+### Key files
 
 | File | Role |
 |---|---|
-| `strategies/signal_scorer.py` | Scoring engine. `mode` param gates which sections run. |
-| `strategies/order_flow.py` | ICT logic: `find_ict_signals()`, `analyse()` |
-| `strategies/trend_strategy.py` | Entry/exit, `TrendStrategy(strategy_name, score_mode)`, `self.last_score` |
-| `core/bot_runner.py` | `_atr_cycle()` + `_ict_cycle()` jobs, `_is_vix_blocked(strategy)` |
-| `core/ipc.py` | Flag files: pause, vix_override, vix_override_atr, vix_override_ict, day_bias |
-| `core/journal.py` | Daily journal: trades + VIX context + day bias review + auto learning notes |
-| `api/server.py` | FastAPI: snapshot, debug, VIX override endpoints, WebSocket |
-| `config.py` | All financial params hardcoded here — NOT env vars (except TRADING_MODE) |
-| `scripts/backtest_full.py` | Month-on-month backtest for both strategies |
+| `strategies/signal_scorer.py` | `score_symbol(..., mode="atr_only")` — 12-section scorer, returns `{score, action, threshold, signals, breakdown, confidence}` |
+| `strategies/trend_strategy.py` | `TrendStrategy(strategy_name, score_mode)` — order execution, SL/TP, zone gating |
+| `core/bot_runner.py` | `_atr_cycle`, `_atr_fast_check`, `_position_guardian`, `_zone_briefing`, `_eod_squareoff`, `_save_journal` |
+| `core/zone_briefing.py` | Pre-market watch zones (PDH/PDL/ORB/weekly) computed at 09:00 IST |
+| `core/sr_levels.py` | RBD/DBR institutional zones, structure detection |
+| `core/ipc.py` | Flag files: pause/resume, force_trade, day_bias, sl_orders, tp_orders, watch_zones, settings, event_blocks, runtime_holidays |
+| `core/journal.py` | Daily journal JSON + Claude AI review (haiku for daily, sonnet for weekly) |
+| `api/server.py` | FastAPI: snapshot, signal-log, paper-comparison, chart-data, holidays, event-blocks, WebSocket |
+| `config.py` | All financial params hardcoded (capital, SL/TP, premium target, lot size, holidays) — not env vars |
+| `scripts/backtest_live_atr.py` | Realistic ATR backtest with `--slippage` modeling |
+| `scripts/collect_option_snapshots.py` | 5-min option chain snapshot writer (builds historical premium dataset) |
 
-### VIX Gate System
+### Daily routine
 
-Three flags (persist across restarts, excluded from `clear_all_flags()`):
-- `vix_override` — global bypass (both strategies)
-- `vix_override_atr` — bypass ATR Intraday only
-- `vix_override_ict` — bypass C-ICT only
+1. Run `python scripts/get_token.py` before 09:15 IST.
+2. 09:00 — `_zone_briefing` writes today's watch zones.
+3. 09:30 — `_vix_auto_lots_set` reads India VIX and sets `min_lots` for the day.
+4. 09:30–15:20 — every 5 min: ATR cycle + position guardian.
+5. 15:20 — `_eod_squareoff` then `_save_journal` (with Claude review).
+6. 20:00 — day bias resets to NEUTRAL, zone-entry-fired flag clears.
+7. Saturday 08:00 — Claude weekly review.
 
-API endpoints: `POST /api/bot/vix-override`, `/api/bot/vix-override/atr`, `/api/bot/vix-override/ict`
+### When changing strategy logic — update ALL these places
 
-### When Changing Strategy Logic — Update ALL 6 Places
-1. `strategies/signal_scorer.py` — mode logic + section thresholds
-2. `strategies/order_flow.py` — ICT signals implementation
-3. `strategies/trend_strategy.py` — execution + `score_mode` param usage
-4. `core/bot_runner.py` — cycle jobs, VIX checks, `last_scores` population
-5. `scripts/backtest_full.py` — keep in sync with live logic
-6. `frontend/app/debug/page.tsx` — Signal Radar display for both strategies
-
-### Daily Routine
-1. Run `python scripts/get_token.py` before 9:15 AM IST
-2. Bot auto-starts ATR (9:45) + C-ICT (9:45 +2m30s), skips lunch 12:30–13:30
-3. Mandatory EOD squareoff at 15:10, journal saved at 15:20
-4. Day bias resets to NEUTRAL at 20:00 IST
+1. `strategies/signal_scorer.py` — section logic / thresholds
+2. `strategies/trend_strategy.py` — execution, SL/TP, live threshold floor
+3. `core/bot_runner.py` — cycle jobs, `last_scores` shape
+4. `scripts/backtest_live_atr.py` — keep parity with live logic
+5. `frontend/app/debug/page.tsx` — Signal Radar display
+6. `frontend/app/strategies/page.tsx` — Strategy Playbook copy
 
 ---
 
 ## MCP Tools: code-review-graph
 
-**ALWAYS use graph tools BEFORE Grep/Glob/Read to explore the codebase.**
-The graph is faster, cheaper (fewer tokens), and gives structural context.
-
-### When to use graph tools FIRST
-
-- **Exploring code**: `semantic_search_nodes` or `query_graph` instead of Grep
-- **Understanding impact**: `get_impact_radius` instead of manually tracing imports
-- **Code review**: `detect_changes` + `get_review_context` instead of reading entire files
-- **Finding relationships**: `query_graph` with callers_of/callees_of/imports_of/tests_for
-- **Architecture questions**: `get_architecture_overview` + `list_communities`
-
-Fall back to Grep/Glob/Read **only** when the graph doesn't cover what you need.
-
-### Key Tools
+**ALWAYS use graph tools BEFORE Grep/Glob/Read** for codebase exploration.
+The graph is faster, cheaper, and gives structural context (callers, dependents,
+test coverage) that file scanning cannot.
 
 | Tool | Use when |
 |------|----------|
-| `detect_changes` | Reviewing code changes — gives risk-scored analysis |
-| `get_review_context` | Need source snippets for review — token-efficient |
-| `get_impact_radius` | Understanding blast radius of a change |
-| `get_affected_flows` | Finding which execution paths are impacted |
-| `query_graph` | Tracing callers, callees, imports, tests, dependencies |
 | `semantic_search_nodes` | Finding functions/classes by name or keyword |
-| `get_architecture_overview` | Understanding high-level codebase structure |
-| `refactor_tool` | Planning renames, finding dead code |
+| `query_graph` | Tracing callers/callees/imports/tests |
+| `detect_changes` | Risk-scored review of code changes |
+| `get_impact_radius` | Blast radius of a change |
+| `get_review_context` | Token-efficient source snippets for review |
+| `get_architecture_overview` | High-level structure |
 
-### Workflow
-
-1. The graph auto-updates on file changes (via hooks).
-2. Use `detect_changes` for code review.
-3. Use `get_affected_flows` to understand impact.
-4. Use `query_graph` pattern="tests_for" to check coverage.
+Fall back to Grep/Glob/Read only when the graph doesn't cover what you need.
