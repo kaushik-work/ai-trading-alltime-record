@@ -34,15 +34,30 @@ Raijin / SMC / Expiry-Day Gap research code paths have all been removed.
 | `scripts/backtest_live_atr.py` | Realistic ATR backtest with `--slippage` modeling |
 | `scripts/collect_option_snapshots.py` | 5-min option chain snapshot writer (builds historical premium dataset) |
 
-### Daily routine
+### Daily routine — fully automated on the droplet
 
-1. Run `python scripts/get_token.py` before 09:15 IST.
-2. 09:00 — `_zone_briefing` writes today's watch zones.
-3. 09:30 — `_vix_auto_lots_set` reads India VIX and sets `min_lots` for the day.
-4. 09:30–15:20 — every 5 min: ATR cycle + position guardian.
-5. 15:20 — `_eod_squareoff` then `_save_journal` (with Claude review).
-6. 20:00 — day bias resets to NEUTRAL, zone-entry-fired flag clears.
-7. Saturday 08:00 — Claude weekly review.
+All scheduling lives in `core/bot_runner.py` (APScheduler in the api container)
+and the shell-loop wrapper in the collector container. There is no laptop
+dependency, no cron, no Windows Task Scheduler.
+
+1. **Container start (any time)** — Angel One TOTP login + warm-up.
+2. **09:00 IST** — `_zone_briefing` writes today's watch zones.
+3. **09:00–15:35 IST** — collector container scrapes 5-min option chain
+   snapshots → CSV in `db/oi_snapshots/` + Mongo `option_snapshots`.
+4. **09:30 IST** — `_vix_auto_lots_set` reads India VIX, sets `min_lots`.
+5. **09:30–15:20 IST** — every 5 min: ATR cycle + position guardian (only
+   when a position is open) + Angel One trade book sync.
+6. **15:20 IST** — `_eod_squareoff` closes any open position, then
+   `_save_journal` writes JSON + Claude AI review (mirrored to Mongo).
+7. **20:00 IST** — day bias resets to NEUTRAL, zone-entry-fired flag clears.
+8. **Saturday 08:00 IST** — Claude weekly review (mirrored to Mongo).
+
+**No daily token script run is required.** TOTP auth is lazy and self-healing.
+
+`scripts/get_token.py` is a manual sanity check only:
+```bash
+docker compose exec api python scripts/get_token.py
+```
 
 ### When changing strategy logic — update ALL these places
 

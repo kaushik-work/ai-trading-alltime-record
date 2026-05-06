@@ -131,12 +131,23 @@ TRADING_MODE=paper          # paper = simulation | live = real money
 All financial parameters (capital, lot size, SL/TP, premium target) live in
 `config.py` — not env vars. See `feedback_deploy_habits.md` for the rationale.
 
-### 3. Daily token routine
-Run before 09:15 IST every trading day:
+### 3. Daily token routine — automatic on droplet
+
+Nothing to do daily. Angel One TOTP login is automatic — `data/angel_fetcher.py`
+reads `ANGEL_API_KEY / ANGEL_CLIENT_ID / ANGEL_PASSWORD / ANGEL_TOTP_TOKEN`
+from `.env` and generates a fresh session on first authenticated call. The bot
+runs 24/7 on the DigitalOcean droplet so this happens automatically every
+container start and as needed during the session.
+
+`scripts/get_token.py` remains as a **manual sanity check only**:
+
 ```bash
-.venv/Scripts/python scripts/get_token.py     # Windows
-.venv/bin/python     scripts/get_token.py     # droplet
+# Run inside the api container if you ever need to verify creds work
+docker compose exec api python scripts/get_token.py
 ```
+
+It does not need to be scheduled on a laptop or as a cron — the droplet
+handles its own auth.
 
 ---
 
