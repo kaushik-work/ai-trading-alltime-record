@@ -375,6 +375,13 @@ def save_daily_journal(date_str: Optional[str] = None) -> str:
         json.dump(journal, f, indent=2, ensure_ascii=False)
     logger.info("Daily journal saved → %s (%d trades, PnL=₹%.2f)", path, len(trades_list), total_pnl)
 
+    # Mirror to Mongo (fire-and-forget)
+    try:
+        from core import mongo
+        mongo.mirror_journal(date_str, journal)
+    except Exception:
+        pass
+
     # Generate AI review (may take a few seconds — runs after file is already saved)
     try:
         recent = [j for d in list_journals()[1:6] if (j := load_journal(d)) is not None]
@@ -382,6 +389,11 @@ def save_daily_journal(date_str: Optional[str] = None) -> str:
         with open(path, "w", encoding="utf-8") as f:
             json.dump(journal, f, indent=2, ensure_ascii=False)
         logger.info("AI review added to journal → %s", path)
+        try:
+            from core import mongo
+            mongo.mirror_journal(date_str, journal)   # re-mirror with AI review
+        except Exception:
+            pass
     except Exception as e:
         logger.error("AI review generation failed: %s", e)
 
@@ -543,6 +555,11 @@ No filler. No "it's important to note that...". Direct, data-driven, serious."""
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
     logger.info("Weekly review saved → %s", path)
+    try:
+        from core import mongo
+        mongo.mirror_weekly_review(f"week-{year}-{week_num}", data)
+    except Exception:
+        pass
     return path
 
 

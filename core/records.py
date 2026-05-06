@@ -59,12 +59,18 @@ class RecordTracker:
             is_new_record = True
 
         if is_new_record:
+            achieved_at = datetime.now().isoformat()
             with get_connection() as conn:
                 conn.execute("""
                     INSERT OR REPLACE INTO alltime_records (key, value, symbol, order_id, achieved_at, description)
                     VALUES (?, ?, ?, ?, ?, ?)
-                """, (key, value, symbol, order_id, datetime.now().isoformat(), description))
+                """, (key, value, symbol, order_id, achieved_at, description))
             logger.info("NEW ALL-TIME RECORD: %s = %.2f (%s)", description, value, symbol or "")
+            try:
+                from core import mongo
+                mongo.mirror_record(description, value, symbol or "", achieved_at)
+            except Exception:
+                pass
             return True
         return False
 

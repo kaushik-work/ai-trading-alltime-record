@@ -178,7 +178,14 @@ class TradeMemory:
                 order.get("entry_remark"),
                 order.get("exit_remark"),
             ))
-            return cursor.lastrowid
+            row_id = cursor.lastrowid
+        # Mirror to Mongo (fire-and-forget; failures swallowed)
+        try:
+            from core import mongo
+            mongo.mirror_trade(order, decision)
+        except Exception:
+            pass
+        return row_id
 
     def update_remarks(self, order_id: str, entry_remark: str = None, exit_remark: str = None):
         """Update AI-generated remarks on a trade."""
@@ -192,10 +199,16 @@ class TradeMemory:
 
     def close_trade(self, order_id: str, pnl: float):
         """Update a trade with P&L when closed."""
+        closed_at = now_ist().isoformat()
         with get_connection() as conn:
             conn.execute("""
                 UPDATE trades SET pnl = ?, closed_at = ? WHERE order_id = ?
-            """, (pnl, now_ist().isoformat(), order_id))
+            """, (pnl, closed_at, order_id))
+        try:
+            from core import mongo
+            mongo.mirror_trade_close(order_id, pnl, closed_at)
+        except Exception:
+            pass
 
     def close_latest_open_trade(self, symbol: str, strategy: str, pnl: float):
         """Mark the most recent open BUY row as closed for a completed exit."""
@@ -432,6 +445,27 @@ def log_signal(
             round(option_premium, 2) if option_premium else None,
             signals_fired or None,
         ))
+    try:
+        from core import mongo
+        mongo.mirror_signal({
+            "timestamp":      ts,
+            "date":           ts[:10],
+            "strategy":       strategy,
+            "symbol":         symbol,
+            "score":          round(score, 2),
+            "threshold":      round(threshold, 2),
+            "direction":      direction,
+            "will_trade":     bool(will_trade),
+            "did_trade":      bool(did_trade),
+            "reason_skipped": reason_skipped,
+            "nifty_spot":     round(nifty_spot, 2) if nifty_spot else None,
+            "option_type":    option_type or None,
+            "strike":         strike or None,
+            "option_premium": round(option_premium, 2) if option_premium else None,
+            "signals_fired":  signals_fired or None,
+        })
+    except Exception:
+        pass
 
 
 def get_signal_log(date: str = None, limit: int = 500) -> list:
