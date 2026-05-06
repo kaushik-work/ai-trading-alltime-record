@@ -247,10 +247,16 @@ class TrendStrategy:
         if portfolio.get("open_positions", 0) >= config.MAX_OPEN_POSITIONS:
             return None
 
-        # Duplicate guard — DB-backed so it survives container restarts.
-        if self.memory.has_open_underlying_today(symbol):
+        # Duplicate guard — one live trade per strategy at a time.
+        # DB-backed so it survives container restarts. Includes virtual_rejected
+        # rows: if Angel One rejected an entry (e.g. insufficient funds), it's
+        # logged as virtual_rejected OPEN so this guard blocks fresh attempts
+        # until the virtual SL/TP resolves it (otherwise the bot would re-fire
+        # every 5 min and never get tracked).
+        if self.memory.has_open_for_strategy(self.strategy_name, symbol):
             logger.info(
-                "[%s] %s already has an unclosed BUY in DB today. Skipping.",
+                "[%s] %s already has an unclosed BUY (live or virtual_rejected) "
+                "for this strategy today. Skipping.",
                 self.strategy_name, symbol,
             )
             return None

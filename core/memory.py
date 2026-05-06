@@ -235,6 +235,25 @@ class TradeMemory:
             """, (underlying, f"{today}T00:00:00")).fetchone()
         return row is not None
 
+    def has_open_for_strategy(self, strategy: str, underlying: str) -> bool:
+        """Return True if THIS strategy has an unclosed BUY for the underlying today.
+
+        Use this when enforcing "one live trade per strategy at a time" — if the
+        bot ever runs more than one strategy concurrently again, each strategy's
+        open position must not block the others. Includes virtual_rejected rows
+        so a rejected trade still blocks fresh entries until it's resolved.
+        """
+        today = today_ist()
+        with get_connection() as conn:
+            row = conn.execute("""
+                SELECT 1 FROM trades
+                WHERE strategy = ? AND underlying = ?
+                  AND side = 'BUY' AND closed_at IS NULL
+                  AND timestamp >= ?
+                LIMIT 1
+            """, (strategy, underlying, f"{today}T00:00:00")).fetchone()
+        return row is not None
+
     def close_open_underlying_today(self, underlying: str, close_reason: str = "manual") -> int:
         """Mark all unclosed BUY rows for this underlying today as manually closed. Returns rows updated."""
         today = today_ist()
