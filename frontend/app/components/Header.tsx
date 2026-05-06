@@ -17,14 +17,38 @@ export default function Header({ mode, connected, botStatus, onBotToggle, errorC
   const router = useRouter();
   const [menuOpen, setMenuOpen]     = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
-  const [lots, setLots]             = useState(1);
+  const [lots, setLots]             = useState<number | null>(null);
+  const [vixAtOpen, setVixAtOpen]   = useState<number | null>(null);
+  const [vixAutoLots, setVixAutoLots] = useState<number | null>(null);
 
-  // Sync lots from WebSocket settings (live updates as auto-lots fires at 9:30)
+  // Source of truth for `lots`:
+  // 1) `settings` prop from parent (Home page passes WebSocket data) — preferred
+  // 2) Direct fetch of /api/settings on mount — used by pages that don't
+  //    thread `settings` (PPnL, Backtest, Debug, Strategies). Without this
+  //    the dropdown would show 1 by default and look out of sync with the
+  //    user's actual value.
   useEffect(() => {
     if (settings?.min_lots !== undefined) {
       setLots(settings.min_lots);
+      if (settings.vix_at_open !== undefined) setVixAtOpen(settings.vix_at_open);
+      if (settings.vix_auto_lots !== undefined) setVixAutoLots(settings.vix_auto_lots);
     }
-  }, [settings?.min_lots]);
+  }, [settings?.min_lots, settings?.vix_at_open, settings?.vix_auto_lots]);
+
+  useEffect(() => {
+    if (lots !== null) return;  // already populated from prop
+    const token = localStorage.getItem("aq_token");
+    if (!token) return;
+    fetch(`${API_URL}/api/settings`, { headers: { Authorization: `Bearer ${token}` } })
+      .then(r => r.ok ? r.json() : null)
+      .then(j => {
+        if (!j) return;
+        if (j.min_lots !== undefined) setLots(j.min_lots);
+        if (j.vix_at_open !== undefined) setVixAtOpen(j.vix_at_open);
+        if (j.vix_auto_lots !== undefined) setVixAutoLots(j.vix_auto_lots);
+      })
+      .catch(() => { /* keep null → render hides VIX badge, dropdown stays disabled */ });
+  }, [lots]);
 
   async function saveLots(n: number) {
     setLots(n);
@@ -122,9 +146,10 @@ export default function Header({ mode, connected, botStatus, onBotToggle, errorC
             <div className="flex items-center gap-1.5">
               <span className="text-[10px] font-bold text-gray-400 hidden sm:inline">LOTS</span>
               <select
-                value={lots}
+                value={lots ?? 1}
+                disabled={lots === null}
                 onChange={e => saveLots(Number(e.target.value))}
-                className="text-xs font-bold border border-gray-200 rounded-lg px-2 py-1.5 bg-white text-gray-700 cursor-pointer focus:outline-none focus:border-indigo-400"
+                className="text-xs font-bold border border-gray-200 rounded-lg px-2 py-1.5 bg-white text-gray-700 cursor-pointer focus:outline-none focus:border-indigo-400 disabled:opacity-50"
               >
                 {[1, 2, 3, 4, 5].map(n => (
                   <option key={n} value={n}>{n} {n === 1 ? "Lot" : "Lots"}</option>
@@ -132,20 +157,20 @@ export default function Header({ mode, connected, botStatus, onBotToggle, errorC
               </select>
             </div>
             {/* VIX auto-lots indicator */}
-            {settings?.vix_at_open != null && (
+            {vixAtOpen != null && (
               <div className="flex items-center gap-1 hidden sm:flex">
                 <span
                   className="text-[9px] font-bold px-1.5 py-0.5 rounded-full"
                   style={
-                    settings.vix_at_open >= 30 ? { background: "#fee2e2", color: "#b91c1c" } :
-                    settings.vix_at_open >= 25 ? { background: "#fef3c7", color: "#b45309" } :
-                    settings.vix_at_open >= 20 ? { background: "#fef9c3", color: "#854d0e" } :
-                                                  { background: "#dcfce7", color: "#15803d" }
+                    vixAtOpen >= 30 ? { background: "#fee2e2", color: "#b91c1c" } :
+                    vixAtOpen >= 25 ? { background: "#fef3c7", color: "#b45309" } :
+                    vixAtOpen >= 20 ? { background: "#fef9c3", color: "#854d0e" } :
+                                       { background: "#dcfce7", color: "#15803d" }
                   }
                 >
-                  VIX {settings.vix_at_open.toFixed(1)}
+                  VIX {vixAtOpen.toFixed(1)}
                 </span>
-                {lots === settings.vix_auto_lots ? (
+                {lots === vixAutoLots ? (
                   <span className="text-[9px] font-semibold text-indigo-500">AUTO</span>
                 ) : (
                   <span className="text-[9px] font-semibold text-orange-500">OVERRIDE</span>
