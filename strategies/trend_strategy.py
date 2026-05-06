@@ -513,6 +513,73 @@ class TrendStrategy:
         _log_err("get_option_ltp", msg, symbol=symbol, detail=option_type)
         return None, atm_strike, None, expiry
 
+    def _record_rejected_trade(self, *, decision: dict, option_symbol: str,
+                               option_type: str, atm_strike: int, side: str,
+                               quantity: int, option_ltp: float, current_price: float,
+                               expiry, rejection_reason: str,
+                               extra: dict | None = None) -> dict:
+        """Persist a rejected entry as a virtual_rejected OPEN row.
+
+        Used for BOTH preflight rejections (insufficient funds, lot-size errors,
+        invalid contract) and post-place rejections from Angel One. Without this,
+        the bot fires fresh entry attempts every 5 min because nothing in the
+        trades table reflects the failed attempt — so has_open_underlying_today
+        returns False and the duplicate guard never triggers.
+
+        Returns the order dict for the caller to return upward.
+        """
+        underlying = decision.get("symbol", "NIFTY")
+        _entry_price = option_ltp if option_ltp and option_ltp > 0 else current_price
+        _atr_raw = decision.get("atr") or 20.0
+        _atr = min(_atr_raw, 50) if _atr_raw > 0 else 20.0
+        _sl_dist = max(round(_atr / 2, 1), 5.0)
+
+        synthetic_order_id = (
+            (extra or {}).get("order_id")
+            or f"REJECTED-{self.strategy_name}-{_now_ist().strftime('%Y%m%d%H%M%S%f')}"
+        )
+        order = {
+            **(extra or {}),
+            "order_id":     synthetic_order_id,
+            "symbol":       option_symbol,
+            "underlying":   underlying,
+            "option_type":  option_type,
+            "strike":       atm_strike,
+            "side":         side,
+            "quantity":     quantity,
+            "strategy":     self.strategy_name,
+            "status":       "OPEN",          # OPEN so duplicate guard triggers
+            "pnl":          0,
+            "price":        _entry_price,
+            "lot_size":     quantity,
+            "sl_price":     round(_entry_price - _sl_dist, 1) if side == "BUY" else round(_entry_price + _sl_dist, 1),
+            "tp_price":     round(_entry_price + _sl_dist * self.rr_ratio, 1) if side == "BUY" else round(_entry_price - _sl_dist * self.rr_ratio, 1),
+            "close_reason": rejection_reason,
+            "mode":         "virtual_rejected",
+            "score":        decision.get("score"),
+            "expiry":       expiry.isoformat() if expiry and hasattr(expiry, "isoformat") else (str(expiry) if expiry else None),
+            "timestamp":    _now_ist().isoformat(),
+        }
+        rejected_decision = {
+            **decision,
+            "reasoning":  f"REJECTED: {rejection_reason}",
+            "confidence": 0.0,
+            "risk_level": "REJECTED",
+        }
+        self.memory.log_trade(order, rejected_decision)
+        logger.warning(
+            "[%s] Recorded virtual_rejected: %s %s strike=%s qty=%d reason=%s",
+            self.strategy_name, side, option_type, atm_strike, quantity, rejection_reason,
+        )
+        return {
+            "status":   "REJECTED",
+            "symbol":   option_symbol,
+            "side":     side,
+            "quantity": quantity,
+            "reason":   rejection_reason,
+            "virtual":  True,
+        }
+
     def _execute(self, decision: dict, indicators: dict) -> dict:
         symbol        = decision["symbol"]
         side          = decision["action"]
@@ -552,15 +619,22 @@ class TrendStrategy:
                     log_failures=True,
                 )
                 if not preflight.get("ok"):
-                    logger.error("[%s] Live preflight failed for %s: %s", self.strategy_name, option_symbol, preflight.get("error"))
-                    return {
-                        "status": "REJECTED",
-                        "symbol": option_symbol,
-                        "side": side,
-                        "quantity": quantity,
-                        "reason": preflight.get("error"),
-                        "preflight": preflight,
-                    }
+                    logger.error("[%s] Live preflight failed for %s: %s",
+                                 self.strategy_name, option_symbol, preflight.get("error"))
+                    # Record so the duplicate guard blocks subsequent 5-min cycles
+                    return self._record_rejected_trade(
+                        decision=decision,
+                        option_symbol=option_symbol,
+                        option_type=option_type,
+                        atm_strike=atm_strike,
+                        side=side,
+                        quantity=quantity,
+                        option_ltp=option_ltp,
+                        current_price=current_price,
+                        expiry=expiry,
+                        rejection_reason=preflight.get("error", "preflight rejected"),
+                        extra={"preflight": preflight},
+                    )
             order = self.broker.place_order(
                 option_symbol, side, quantity, price=option_ltp,
                 exchange="NFO", product="MIS", order_type="MARKET",
@@ -766,43 +840,24 @@ class TrendStrategy:
             broken = self.records.check_trade(order)
             if broken:
                 logger.info("ALL-TIME RECORD BROKEN: %s", broken)
-        elif order.get("status") == "REJECTED":
-            # ── Record rejected trades so they appear on the dashboard ─────────
-            # Angel One returns REJECTED (e.g. insufficient funds, lot-size error,
-            # session expired). We track them as virtual OPEN trades so they block
-            # new entries until their virtual SL or TP is hit.
+        elif order.get("status") == "REJECTED" and side == "BUY":
+            # Angel One rejected the entry order (insufficient funds, lot-size error,
+            # session expired, etc.). Persist as virtual_rejected so the duplicate
+            # guard blocks subsequent 5-min cycles and the trade is visible on PPnL.
             rejection_reason = order.get("reason", "rejected by broker")
-            logger.error("[%s] Order rejected for %s: %s", self.strategy_name, order.get("symbol"), rejection_reason)
-            
-            _entry_price = option_ltp or current_price
-            _atr_raw = decision.get("atr") or 20.0
-            _atr = min(_atr_raw, 50) if _atr_raw > 0 else 20.0
-            _sl_dist = max(round(_atr / 2, 1), 5.0)
-
-            _rejected_order = {
-                **order,
-                "underlying":  symbol if side == "BUY" else (pos or {}).get("underlying", symbol),
-                "option_type": option_type,
-                "strike":      atm_strike,
-                "strategy":    self.strategy_name,
-                "status":      "OPEN",  # Keep OPEN so it blocks new entries!
-                "pnl":         0,
-                "price":       _entry_price,
-                "sl_price":    round(_entry_price - _sl_dist, 1),
-                "tp_price":    round(_entry_price + _sl_dist * self.rr_ratio, 1),
-                "close_reason": rejection_reason,
-                "mode":        "virtual_rejected", # Mark as virtual
-                # generate a synthetic order_id so INSERT OR IGNORE doesn't silently
-                # drop it if order_id is None (Angel One returns None on rejection)
-                "order_id": order.get("order_id") or f"REJECTED-{self.strategy_name}-{_now_ist().strftime('%Y%m%d%H%M%S%f')}",
-            }
-            _rejected_decision = {
-                **decision,
-                "reasoning": f"REJECTED: {rejection_reason}",
-                "confidence": 0.0,
-                "risk_level": "REJECTED",
-            }
-            self.memory.log_trade(_rejected_order, _rejected_decision)
+            return self._record_rejected_trade(
+                decision=decision,
+                option_symbol=order.get("symbol", option_symbol),
+                option_type=option_type,
+                atm_strike=atm_strike,
+                side=side,
+                quantity=quantity,
+                option_ltp=option_ltp,
+                current_price=current_price,
+                expiry=expiry,
+                rejection_reason=rejection_reason,
+                extra={"order_id": order.get("order_id")},
+            )
 
         return order
 
