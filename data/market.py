@@ -130,9 +130,15 @@ def _get_intraday_df(symbol: str, interval: str):
         if _at_open:
             logger.debug("_get_intraday_df: too few bars at open for %s %s — waiting for 9:35", symbol, interval)
         else:
-            msg = "fetch_intraday_df returned insufficient data"
-            logger.error("_get_intraday_df: %s for %s %s", msg, symbol, interval)
-            _log_err("fetch_intraday_df", msg, symbol=symbol, detail=interval)
+            # Transient: Angel One returned None or <3 bars (rate-limit hiccup,
+            # token blip, brief network issue). _api gets reset inside fetcher
+            # so the next call re-logs in. Don't spam the dashboard error log
+            # with these — they self-recover and add noise. Real exceptions
+            # below DO get logged so genuine failures stay visible.
+            logger.warning(
+                "_get_intraday_df: %s %s returned <3 bars (transient — will retry)",
+                symbol, interval,
+            )
             _intraday_cache[key] = None
             _intraday_cache_ts[key] = now
     except Exception as e:

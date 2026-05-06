@@ -406,12 +406,29 @@ class BotRunner:
             logger.debug("_atr_fast_check: %s", e)
 
     async def _position_guardian(self):
-        """Runs every 60s — checks SL/TP on open positions between 5m candle ticks.
-        Only activates when the exchange SL-M order was not placed (fallback in-process SL)."""
+        """Runs every 60s — fast SL/TP check for open positions between 5m candles.
+
+        Skips entirely when no position is open. Without this guard the poll
+        triggered a full run_watchlist every minute even on quiet days, which
+        caused a flood of fetch_intraday_df calls (~60/hr extra), some of
+        which inevitably hit Angel One rate limits and returned <3 bars,
+        polluting the broker error log with "insufficient data" entries.
+        """
         if self.paused or not _is_market_hours():
             return
         if self._atr_strategy is None:
             return
+        # Skip if no live or virtual_rejected position exists for this strategy.
+        # When a position is open, run_watchlist → run_once → _manage_position
+        # picks up the SL/TP check naturally. When none exists the cycle is just
+        # noise (and an Angel One rate-limit risk).
+        try:
+            if not self.memory.has_open_for_strategy(
+                self._atr_strategy.strategy_name, "NIFTY"
+            ):
+                return
+        except Exception:
+            pass   # fall through to run_watchlist on memory error
         try:
             loop = asyncio.get_event_loop()
             await loop.run_in_executor(None, self._atr_strategy.run_watchlist)
