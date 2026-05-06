@@ -476,6 +476,93 @@ def health():
     from zoneinfo import ZoneInfo
     return {"status": "ok", "time": datetime.now(ZoneInfo("Asia/Kolkata")).isoformat()}
 
+
+_mongo_status_cache: dict = {"result": None, "checked_at": 0.0}
+_MONGO_STATUS_TTL = 30   # re-check Mongo connectivity at most every 30s
+
+
+@app.get("/api/mongo/status")
+def mongo_status(user: str = Depends(get_current_user)):
+    """Mongo mirror health + per-collection counts.
+
+    Cached 30s so dashboard polling doesn't spam pymongo with count_documents().
+    Returns enabled=False whenever Mongo is unreachable / unconfigured — the
+    bot keeps working fine in that case (SQLite is the primary store).
+    """
+    import time as _t
+    now = _t.monotonic()
+    if (
+        _mongo_status_cache["result"] is not None
+        and now - _mongo_status_cache["checked_at"] < _MONGO_STATUS_TTL
+    ):
+        return _mongo_status_cache["result"]
+
+    from core import mongo as _mongo
+    db = _mongo.get_db()
+    if db is None:
+        result = {
+            "enabled":  False,
+            "db_name":  os.environ.get("MONGODB_DB_NAME") or None,
+            "url_host": _mask_mongo_host(os.environ.get("MONGODB_URL")),
+            "error":    "MONGODB_URL/MONGODB_DB_NAME missing or first connect failed",
+            "checked_at": datetime.now().isoformat(),
+        }
+    else:
+        try:
+            counts = {}
+            for col in ("trades", "signal_log", "daily_journals",
+                        "option_snapshots", "records", "weekly_reviews"):
+                try:
+                    counts[col] = db[col].estimated_document_count()
+                except Exception as _ce:
+                    counts[col] = f"err: {_ce}"
+            # Most-recent timestamps for the spotcheck columns
+            latest = {}
+            try:
+                t = db.trades.find_one(sort=[("timestamp", -1)], projection={"timestamp": 1, "_id": 0})
+                latest["latest_trade_ts"] = (t or {}).get("timestamp")
+            except Exception:
+                latest["latest_trade_ts"] = None
+            try:
+                s = db.option_snapshots.find_one(sort=[("timestamp", -1)],
+                                                 projection={"timestamp": 1, "_id": 0})
+                latest["latest_snapshot_ts"] = (s or {}).get("timestamp")
+            except Exception:
+                latest["latest_snapshot_ts"] = None
+
+            result = {
+                "enabled":  True,
+                "db_name":  db.name,
+                "url_host": _mask_mongo_host(os.environ.get("MONGODB_URL")),
+                "counts":   counts,
+                **latest,
+                "checked_at": datetime.now().isoformat(),
+            }
+        except Exception as e:
+            result = {
+                "enabled":  False,
+                "db_name":  None,
+                "error":    f"ping/count failed: {e}",
+                "checked_at": datetime.now().isoformat(),
+            }
+
+    _mongo_status_cache["result"]    = result
+    _mongo_status_cache["checked_at"] = now
+    return result
+
+
+def _mask_mongo_host(url: str | None) -> str | None:
+    """Show only the cluster hostname — never expose user/password."""
+    if not url:
+        return None
+    try:
+        # mongodb+srv://user:pass@cluster.xxxx.mongodb.net/?... → cluster.xxxx.mongodb.net
+        from urllib.parse import urlparse
+        h = urlparse(url).hostname
+        return h
+    except Exception:
+        return None
+
 _token_cache: dict = {"result": None, "checked_at": 0.0}
 _TOKEN_CACHE_TTL = 300  # re-check token liveness every 5 minutes
 
