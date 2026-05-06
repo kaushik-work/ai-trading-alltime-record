@@ -751,6 +751,11 @@ class TrendStrategy:
             option_symbol = pos.get("symbol") or symbol
 
             if pos.get("is_virtual"):
+                # Virtual position from a prior rejected entry. NEVER call broker —
+                # there's no real position on Angel One, sending SELL would be a
+                # naked short. Synthesize the exit and close the DB row.
+                if quantity <= 0:
+                    return {"status": "SKIPPED", "reason": "virtual position has zero quantity"}
                 logger.info("[%s] Processing virtual exit for %s", self.strategy_name, option_symbol)
                 _, _, exit_ltp, expiry = self._get_option_ltp(
                     pos.get("underlying", symbol), option_type, current_price, strike=int(atm_strike)
@@ -758,11 +763,13 @@ class TrendStrategy:
                 if exit_ltp is None:
                     return {"status": "SKIPPED", "reason": "option LTP unavailable at virtual exit"}
                 order = {
-                    "status": "COMPLETE",
-                    "order_id": f"VIRTUAL-EXIT-{self.strategy_name}-{_now_ist().strftime('%Y%m%d%H%M%S%f')}",
-                    "price": exit_ltp,
-                    "timestamp": _now_ist().isoformat(),
-                    "expiry": pos.get("expiry") or (expiry.isoformat() if expiry else None)
+                    "status":     "COMPLETE",
+                    "order_id":   f"VIRTUAL-EXIT-{self.strategy_name}-{_now_ist().strftime('%Y%m%d%H%M%S%f')}",
+                    "price":      exit_ltp,
+                    "timestamp":  _now_ist().isoformat(),
+                    "expiry":     pos.get("expiry") or (expiry.isoformat() if expiry else None),
+                    "mode":       "virtual_rejected",   # so round-trips on PPnL show as virtual, not live
+                    "close_reason": decision.get("reasoning", "virtual exit"),
                 }
                 entry_px = float(pos.get("avg_price") or 0)
                 if entry_px > 0 and exit_ltp > 0:

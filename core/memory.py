@@ -158,7 +158,10 @@ class TradeMemory:
                 decision.get("confidence", 0),
                 decision.get("risk_level"),
                 order.get("timestamp", now_ist().isoformat()),
-                "paper" if config.IS_PAPER else "live",
+                # Honor explicit "mode" on the order (e.g. virtual_rejected) so
+                # rejected entries and their virtual exits aren't misclassified
+                # as live/paper trades on the PPnL dashboard.
+                order.get("mode") or ("paper" if config.IS_PAPER else "live"),
                 order.get("strategy"),
                 order.get("underlying"),
                 order.get("option_type"),
