@@ -14,7 +14,40 @@ services:
       - app_journals:/app/journals
     restart: unless-stopped
 
-# api handles everything — ATR Intraday + C-ICT both run inside api via BotRunner
+  # ── 5-min option chain snapshot collector ──────────────────────────────────
+  # Runs 24/7 on the droplet (no Windows / laptop dependency).
+  # Daily routine inside the container: wait for 09:10 IST, collect every 5 min
+  # until 15:35 IST, write CSV (db/oi_snapshots/) AND mirror each snapshot to
+  # MongoDB (option_snapshots collection) for queryable historical premium data.
+  # The script auto-exits on weekends/holidays; the wrapper restarts it daily
+  # at 09:00 IST so we don't need to script docker restart externally.
+  collector:
+    build: .
+    command: >
+      sh -c '
+        while true; do
+          # Sleep until next 09:00 IST.  IST = UTC+5:30, so 09:00 IST = 03:30 UTC.
+          NOW=$$(date -u +%H%M)
+          if [ "$$NOW" -ge "0330" ] && [ "$$NOW" -lt "1005" ]; then
+            python scripts/collect_option_snapshots.py --symbol NIFTY --interval 5 || true
+          else
+            # Wait 60s then re-check (cheap loop, no cron needed)
+            sleep 60
+          fi
+        done
+      '
+    env_file: .env
+    volumes:
+      - ./.env:/app/.env
+      - app_data:/app/db
+      - app_logs:/app/logs
+    restart: unless-stopped
+    depends_on:
+      - api
+
+# api handles all live trading via BotRunner (ATR Intraday only).
+# collector is independent — its only job is to capture historical option premium
+# data for backtest realism.
 volumes:
   app_data:
   app_logs:

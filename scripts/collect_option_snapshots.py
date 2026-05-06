@@ -156,6 +156,7 @@ def take_snapshot(af: AngelFetcher, token_map: list, expiry: date, out_file: Pat
     }
     ts = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
     rows = 0
+    mongo_docs = []
     with open(out_file, "a", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         for t in token_map:
@@ -163,16 +164,36 @@ def take_snapshot(af: AngelFetcher, token_map: list, expiry: date, out_file: Pat
             ltp = float(q.get("ltp", 0) or 0)
             if ltp <= 0:
                 continue
+            bid    = float(q.get("bidPrice",    0) or 0)
+            ask    = float(q.get("askPrice",    0) or 0)
+            volume = int(  q.get("tradeVolume", 0) or 0)
+            oi     = int(  q.get("opnInterest", 0) or 0)
             w.writerow([
-                ts, SYMBOL, expiry, t["strike"], t["option_type"],
-                ltp,
-                float(q.get("bidPrice",    0) or 0),
-                float(q.get("askPrice",    0) or 0),
-                int(  q.get("tradeVolume", 0) or 0),
-                int(  q.get("opnInterest", 0) or 0),
-                round(spot, 2),
+                ts, SYMBOL, str(expiry), t["strike"], t["option_type"],
+                ltp, bid, ask, volume, oi, round(spot, 2),
             ])
+            mongo_docs.append({
+                "timestamp":    ts,
+                "date":         today_str,
+                "symbol":       SYMBOL,
+                "expiry":       str(expiry),
+                "strike":       t["strike"],
+                "option_type":  t["option_type"],
+                "ltp":          ltp,
+                "bid":          bid,
+                "ask":          ask,
+                "volume":       volume,
+                "oi":           oi,
+                "spot":         round(spot, 2),
+            })
             rows += 1
+    # Mirror snapshot batch to Mongo (fire-and-forget — never blocks CSV write)
+    if mongo_docs:
+        try:
+            from core import mongo as _mongo
+            _mongo.mirror_option_snapshot(mongo_docs)
+        except Exception as e:
+            log.debug("mongo mirror failed (non-fatal): %s", e)
     return rows
 
 
