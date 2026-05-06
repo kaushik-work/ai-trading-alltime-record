@@ -261,21 +261,12 @@ class TrendStrategy:
             )
             return None
 
-        # Daily trade cap — hard stop after MAX_DAILY_TRADES round trips.
-        # Prevents re-entry loops: SL hit → re-enter → SL hit → re-enter → ...
-        max_trades = getattr(config, "MAX_DAILY_TRADES", 2)
-        today_trades = self.memory.get_today_trades()
-        today_buys = sum(
-            1 for t in today_trades
-            if t.get("strategy") == self.strategy_name and t.get("side") == "BUY"
-        )
-        if today_buys >= max_trades:
-            logger.info(
-                "[%s] Daily trade cap reached (%d/%d entries today). No more entries.",
-                self.strategy_name, today_buys, max_trades,
-            )
-            return None
-
+        # No daily trade cap — the only entry block is the duplicate guard
+        # above (one live or virtual_rejected trade per strategy at a time).
+        # After SL/TP closes a position, the next 5-min cycle is free to fire
+        # a fresh entry if the score still warrants it. The per-strategy daily
+        # loss limit (PER_STRATEGY_DAILY_LOSS_PCT) and combined kill switch
+        # (MAX_DAILY_LOSS) at the top of run_once provide the only hard stops.
         return self._confirm_and_execute(symbol, current_price, indicators, intraday, scored, portfolio)
 
     # ── Position management ────────────────────────────────────────────────────
