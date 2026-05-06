@@ -52,7 +52,7 @@ export default function MongoBadge() {
     <span
       className="relative flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full cursor-help"
       style={ok
-        ? { background: "#ecfeff", color: "#0e7490" }
+        ? { background: "#f0fdf4", color: "#15803d" }
         : { background: "#fee2e2", color: "#dc2626" }
       }
       onMouseEnter={() => setHover(true)}
@@ -60,7 +60,7 @@ export default function MongoBadge() {
     >
       <span
         className="w-1.5 h-1.5 rounded-full inline-block"
-        style={{ background: ok ? "#06b6d4" : "#ef4444" }}
+        style={{ background: ok ? "#22c55e" : "#ef4444" }}
       />
       {ok ? "MONGO" : "MONGO ✗"}
 
