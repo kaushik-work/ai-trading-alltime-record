@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useWebSocket } from "./hooks/useWebSocket";
 import Header from "./components/Header";
+import MongoBadge from "./components/MongoBadge";
 import NiftyChart from "./components/NiftyChart";
 
 const _API    = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -213,6 +214,8 @@ export default function Home() {
                     </span>
                   )
                 )}
+                {/* Mongo mirror health (hover for db name + collection counts) */}
+                <MongoBadge />
               </div>
               <p className="text-xs text-gray-400">Updates every 5 seconds via WebSocket</p>
             </div>
