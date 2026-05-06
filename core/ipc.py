@@ -29,9 +29,30 @@ def flag_exists(name: str) -> bool:
     return (FLAGS_DIR / name).exists()
 
 
+# Flag files that MUST survive bot restart (persistent state).
+# Anything not in this set is treated as a transient signal and wiped on startup.
+_PERSISTENT_FLAGS = {
+    "market_holidays.json",   # frontend-added NSE holidays
+    "event_blocks.json",      # custom Budget / RBI MPC dates
+    "event_unblocks.json",    # force-allow overrides
+    "settings.json",          # min_lots, vix_at_open, vix_auto_lots
+    "day_bias.json",          # today's BULLISH/BEARISH note
+    "sl_orders.json",         # live exchange SL-M order IDs (per strategy)
+    "tp_orders.json",         # live exchange TP order IDs (per strategy)
+    "watch_zones.json",       # pre-market zones from 9 AM briefing
+}
+
+
 def clear_all_flags() -> None:
-    """Clear transient flags on bot startup."""
+    """Clear ONLY transient flags (pause / resume / force_trade) on bot startup.
+
+    Persistent state (holidays, settings, SL/TP order tracking, day bias, etc.)
+    survives container restarts. Wiping live SL/TP order IDs would orphan
+    exchange orders during a mid-position restart — never do that.
+    """
     for f in FLAGS_DIR.iterdir():
+        if f.name in _PERSISTENT_FLAGS:
+            continue
         f.unlink(missing_ok=True)
 
 
