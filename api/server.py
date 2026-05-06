@@ -458,19 +458,6 @@ def signal_log_endpoint(date: str = None, limit: int = 200, user: str = Depends(
     return {"rows": rows, "count": len(rows)}
 
 
-@app.get("/api/paper-comparison")
-def paper_comparison(user: str = Depends(get_current_user)):
-    """Buyer vs seller paper trade results for every signal that fired."""
-    from core.bot_runner import get_runner
-    runner = get_runner()
-    ps = runner._paper_seller
-    return {
-        "open":    ps.get_open_positions(),
-        "closed":  ps.get_all_trades(),
-        "summary": ps.get_summary(),
-    }
-
-
 @app.get("/api/health")
 def health():
     from zoneinfo import ZoneInfo
