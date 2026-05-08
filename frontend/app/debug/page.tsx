@@ -295,10 +295,81 @@ function ActionBadge({ action }: { action: string }) {
   );
 }
 
+/* ── Score-key → human label + group, in scoring order from signal_scorer.py ─ */
+const SCORE_KEY_META: Record<string, { label: string; group: string }> = {
+  // 1. Trend (sections 1-3)
+  sma50_trend:    { label: "Price vs SMA50",      group: "Trend" },
+  sma20_trend:    { label: "Price vs SMA20",      group: "Trend" },
+  ema9_momentum:  { label: "Price vs EMA9",       group: "Trend" },
+  // 2. Momentum (sections 4-5)
+  rsi:            { label: "RSI",                 group: "Momentum" },
+  macd:           { label: "MACD",                group: "Momentum" },
+  // 3. Volume / Volatility (sections 6, 7, 10)
+  volume:         { label: "Volume vs avg",       group: "Vol/Volatility" },
+  bollinger:      { label: "Bollinger Bands",     group: "Vol/Volatility" },
+  atr_filter:     { label: "ATR vol filter",      group: "Vol/Volatility" },
+  // 4. Patterns (section 8)
+  patterns:       { label: "Candlestick patterns",group: "Patterns" },
+  // 5. Option Chain — section 9 + 9c (the focus the user asked about)
+  pcr:            { label: "PCR sentiment",       group: "Option Chain" },
+  oc_bias:        { label: "OC bias (CE/PE favored)", group: "Option Chain" },
+  ce_wall:        { label: "Near CE wall (resistance)", group: "Option Chain" },
+  pe_wall:        { label: "Near PE wall (support)",    group: "Option Chain" },
+  oi_delta:       { label: "OI shift (buyers leaving)", group: "Option Chain" },
+  oi_delta_hedge: { label: "OI shift (hedging)",  group: "Option Chain" },
+  herd_danger:    { label: "🔴 Herd danger (contrarian)", group: "Option Chain" },
+  // 6. Intraday levels (section 11)
+  vwap:           { label: "VWAP",                group: "Intraday Levels" },
+  orb:            { label: "ORB breakout",        group: "Intraday Levels" },
+  trend_15m:      { label: "15m trend",           group: "Intraday Levels" },
+  rsi_15m:        { label: "15m RSI",             group: "Intraday Levels" },
+  pdh_pdl:        { label: "PDH / PDL",           group: "Intraday Levels" },
+  // 7. S/R structure (section 12)
+  sr_resistance:        { label: "At resistance (CE block)",   group: "S/R Structure" },
+  sr_support:           { label: "At support (CE bounce)",     group: "S/R Structure" },
+  sr_breakdown:         { label: "Breaking down (CE block)",   group: "S/R Structure" },
+  sr_breakup:           { label: "Breaking up (CE go)",        group: "S/R Structure" },
+  sr_downtrend:         { label: "Downtrend (CE counter)",     group: "S/R Structure" },
+  sr_uptrend_sell:      { label: "Uptrend (PE counter)",       group: "S/R Structure" },
+  sr_at_support_sell:   { label: "At support (PE counter)",    group: "S/R Structure" },
+  sr_breakup_sell:      { label: "Breaking up (PE counter)",   group: "S/R Structure" },
+  sr_resistance_sell:   { label: "At resistance (PE go)",      group: "S/R Structure" },
+  sr_breakdown_sell:    { label: "Breaking down (PE go)",      group: "S/R Structure" },
+};
+
+const GROUP_ORDER = [
+  "Trend", "Momentum", "Vol/Volatility", "Patterns",
+  "Option Chain", "Intraday Levels", "S/R Structure",
+];
+
+const GROUP_COLORS: Record<string, string> = {
+  "Trend":           "#3b82f6",
+  "Momentum":        "#8b5cf6",
+  "Vol/Volatility":  "#06b6d4",
+  "Patterns":        "#f59e0b",
+  "Option Chain":    "#ef4444",   // user specifically asked to highlight this
+  "Intraday Levels": "#10b981",
+  "S/R Structure":   "#6366f1",
+};
+
 function AtrScoreDisplay({ s, color }: { s: any; color: string }) {
   const score = s.score ?? 0;
+  const breakdown: Record<string, number> = s.breakdown ?? {};
+
+  // Group entries by category and compute per-group totals
+  const groups: Record<string, { entries: [string, number][]; total: number }> = {};
+  for (const [k, v] of Object.entries(breakdown)) {
+    if (typeof v !== "number") continue;
+    const meta = SCORE_KEY_META[k] ?? { label: k, group: "Other" };
+    if (!groups[meta.group]) groups[meta.group] = { entries: [], total: 0 };
+    groups[meta.group].entries.push([k, v]);
+    groups[meta.group].total += v;
+  }
+  const orderedGroups = [...GROUP_ORDER, "Other"].filter(g => groups[g]);
+
   return (
     <div>
+      {/* Score bar */}
       <div className="mb-3">
         <div className="flex justify-between text-xs mb-1">
           <span className="text-gray-500">Signal Score</span>
@@ -317,10 +388,69 @@ function AtrScoreDisplay({ s, color }: { s: any; color: string }) {
           <span>-10 (SELL)</span><span>0</span><span>+10 (BUY)</span>
         </div>
       </div>
-      <div className="text-xs text-gray-500">
+      <div className="text-xs text-gray-500 mb-3">
         Direction: <b>{s.direction ?? "—"}</b> · Threshold: <b>±{s.threshold ?? 7}</b> · Will trade: <b>{s.will_trade ? "YES" : "NO"}</b>
       </div>
-      {s.note && <div className="text-[10px] text-gray-400 mt-1">{s.note}</div>}
+
+      {/* Score breakdown — grouped, with group totals.  Option Chain row is
+          color-coded red so the user can see the magnitude of OI/PCR/herd
+          influence at a glance. */}
+      {orderedGroups.length > 0 && (
+        <div className="mt-3 border-t border-gray-100 pt-3 space-y-2.5">
+          <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wide">
+            Score Breakdown — how each section voted
+          </div>
+          {orderedGroups.map(g => {
+            const { entries, total } = groups[g];
+            const gColor = GROUP_COLORS[g] || "#6b7280";
+            const totalColor = total > 0 ? "#16a34a" : total < 0 ? "#dc2626" : "#6b7280";
+            return (
+              <div key={g} className="bg-gray-50 rounded-lg p-2.5">
+                <div className="flex items-center justify-between mb-1.5">
+                  <div className="flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ background: gColor }} />
+                    <span className="text-xs font-bold text-gray-700">{g}</span>
+                  </div>
+                  <span className="text-xs font-bold" style={{ color: totalColor }}>
+                    {total > 0 ? "+" : ""}{total}
+                  </span>
+                </div>
+                <div className="flex flex-wrap gap-1.5">
+                  {entries.map(([k, v]) => {
+                    const meta = SCORE_KEY_META[k] ?? { label: k, group: g };
+                    const pillColor = v > 0 ? "#16a34a" : v < 0 ? "#dc2626" : "#6b7280";
+                    const pillBg    = v > 0 ? "#dcfce7" : v < 0 ? "#fee2e2" : "#f3f4f6";
+                    return (
+                      <span key={k}
+                            className="text-[10px] px-2 py-0.5 rounded font-medium"
+                            style={{ background: pillBg, color: pillColor }}
+                            title={k}>
+                        {meta.label}: {v > 0 ? "+" : ""}{v}
+                      </span>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Latest signal log lines */}
+      {Array.isArray(s.signals) && s.signals.length > 0 && (
+        <div className="mt-3 border-t border-gray-100 pt-3">
+          <div className="text-[10px] font-bold text-gray-400 uppercase tracking-wide mb-1">
+            Signals fired this cycle
+          </div>
+          <ul className="text-[10px] text-gray-500 space-y-0.5">
+            {s.signals.slice(0, 5).map((sig: string, i: number) => (
+              <li key={i} className="truncate">· {sig}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {s.note && <div className="text-[10px] text-gray-400 mt-2">{s.note}</div>}
     </div>
   );
 }

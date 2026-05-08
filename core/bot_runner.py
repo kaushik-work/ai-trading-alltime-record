@@ -244,6 +244,12 @@ class BotRunner:
                     "score": score, "direction": direction, "action": direction,
                     "threshold": threshold, "will_trade": will_trade,
                     "atr": atr_for_paper,
+                    # Per-section point contributions (e.g. {"sma50_trend": 2,
+                    # "rsi": 2, "pcr": 1, "oc_bias": 2, "herd_danger": -3, ...}).
+                    # The frontend Signal Radar groups these to show how much
+                    # option chain / patterns / etc contribute to the score.
+                    "breakdown": dict(sc.get("breakdown") or {}),
+                    "signals":   list(sc.get("signals") or [])[:12],
                     "note": "ATR technical analysis only (sections 1–11)",
                 }
                 self.last_scores["ATR Intraday"] = entry

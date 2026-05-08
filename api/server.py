@@ -649,6 +649,8 @@ def bot_debug(user: str = Depends(get_current_user)):
                 result["strategies"][strat_name] = {
                     "score": sc["score"], "direction": sc["action"], "action": sc["action"],
                     "threshold": sc["threshold"], "will_trade": abs(sc["score"]) >= sc["threshold"],
+                    "breakdown": dict(sc.get("breakdown") or {}),
+                    "signals":   list(sc.get("signals") or [])[:12],
                     "note": f"live fetch (bot cycle not yet run) | mode={score_mode}",
                 }
             except Exception as e:
