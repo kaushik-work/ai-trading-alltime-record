@@ -24,7 +24,7 @@ export default function Header({ mode, connected, botStatus, onBotToggle, errorC
   // Source of truth for `lots`:
   // 1) `settings` prop from parent (Home page passes WebSocket data) — preferred
   // 2) Direct fetch of /api/settings on mount — used by pages that don't
-  //    thread `settings` (PPnL, Backtest, Debug, Strategies). Without this
+  //    thread `settings` (PPnL, Debug, Strategies, etc). Without this
   //    the dropdown would show 1 by default and look out of sync with the
   //    user's actual value.
   useEffect(() => {
@@ -242,10 +242,6 @@ export default function Header({ mode, connected, botStatus, onBotToggle, errorC
                 className="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2">
                 <span>📡</span> Signal Radar
               </button>
-              <button onClick={() => { router.push("/option-chain"); setMenuOpen(false); }}
-                className="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2">
-                <span>📈</span> Option Chain
-              </button>
               <button onClick={() => { router.push("/pnl"); setMenuOpen(false); }}
                 className="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2">
                 <span>💰</span> PPnL
@@ -253,10 +249,6 @@ export default function Header({ mode, connected, botStatus, onBotToggle, errorC
               <button onClick={() => { router.push("/strategies"); setMenuOpen(false); }}
                 className="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2">
                 <span>📋</span> Strategies
-              </button>
-              <button onClick={() => { router.push("/backtest"); setMenuOpen(false); }}
-                className="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2">
-                <span>📊</span> Backtest
               </button>
               <button onClick={() => { router.push("/journal"); setMenuOpen(false); }}
                 className="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2">
@@ -273,10 +265,6 @@ export default function Header({ mode, connected, botStatus, onBotToggle, errorC
                     {errorCount}
                   </span>
                 )}
-              </button>
-              <button onClick={() => { router.push("/event-blocks"); setMenuOpen(false); }}
-                className="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2">
-                <span>📅</span> Event Blocks
               </button>
               <button onClick={() => { router.push("/market-holidays"); setMenuOpen(false); }}
                 className="w-full text-left px-4 py-2.5 text-sm text-gray-700 hover:bg-gray-50 flex items-center gap-2">
