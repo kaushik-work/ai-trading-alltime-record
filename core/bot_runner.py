@@ -190,6 +190,11 @@ class BotRunner:
         # Position guardian — every 60s during market hours: checks SL/TP on open positions
         # independent of strategy cycle. Catches fast moves between 5m candle ticks.
         self.scheduler.add_job(self._position_guardian, "interval", seconds=60, id="position_guardian")
+        # Daily Angel One token refresh — 08:30 IST, before any market activity.
+        # The auth cache in AngelFetcher only verifies "same calendar day" which
+        # doesn't catch the ~24h JWT expiry. This forces a clean re-login every
+        # morning so all subsequent API calls have a guaranteed-fresh token.
+        self.scheduler.add_job(self._daily_token_refresh, "cron", hour=8, minute=30, id="daily_token_refresh")
 
         self.scheduler.start()
         logger.info(
@@ -608,6 +613,35 @@ class BotRunner:
             logger.info("Day bias reset to NEUTRAL for tomorrow.")
         except Exception as e:
             logger.error("Bias reset failed: %s", e)
+
+    async def _daily_token_refresh(self):
+        """Force a fresh Angel One TOTP login at 08:30 IST every day.
+
+        AngelFetcher's auth cache only verifies "same calendar day" — it does
+        NOT detect the ~24h JWT expiry that Angel One enforces. Without this
+        morning refresh, a long-running container (2+ days uptime) ends up
+        using a stale JWT silently: every market-data and option-LTP call
+        returns None, virtual SL/TP can never fire, and EOD square-off has
+        nothing to close.
+
+        This job invalidates the cache and runs _ensure_logged_in() so the
+        first 09:15 cycle has a guaranteed-fresh session.
+        """
+        try:
+            from data.angel_fetcher import AngelFetcher
+            af = AngelFetcher.get()
+            with af._lock:
+                af._api = None
+                af._login_date = None
+                af._failed_at = None
+            loop = asyncio.get_event_loop()
+            ok = await loop.run_in_executor(None, af._ensure_logged_in)
+            if ok:
+                logger.info("Daily token refresh: new Angel One session ready for today.")
+            else:
+                logger.error("Daily token refresh: _ensure_logged_in returned False — check ANGEL_* env vars")
+        except Exception as e:
+            logger.error("Daily token refresh failed: %s", e, exc_info=True)
 
     async def _vix_auto_lots_set(self):
         """Fetch India VIX at 9:30 IST and auto-set min_lots for the day.

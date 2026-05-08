@@ -276,13 +276,28 @@ class TrendStrategy:
                           portfolio: dict) -> Optional[dict]:
         avg_price = position.get("avg_price", position.get("average_price", current_price))
         quantity  = position.get("quantity", 0)
-        option_price = current_price
         option_type = position.get("option_type", "CE")
         strike = position.get("atm_strike") or position.get("strike")
+        # Fetch live option premium for SL/TP comparison.
+        # CRITICAL: do NOT fall back to NIFTY spot if LTP fetch fails — spot is
+        # ~24,000 while option premium is ~₹150, so a None LTP would silently
+        # park option_price at NIFTY spot, never tripping SL or TP, and the
+        # position would dangle until EOD. Skip this cycle and try again next.
+        live_ltp: Optional[float] = None
         if strike:
             _, _, live_ltp, _ = self._get_option_ltp(symbol, option_type, current_price, strike=int(strike))
-            if live_ltp:
-                option_price = live_ltp
+        if not live_ltp or live_ltp <= 0:
+            logger.warning(
+                "[%s] Position %s: option LTP unavailable (token expired? rate-limited?) — "
+                "skipping SL/TP check this cycle. EOD square-off will still close.",
+                self.strategy_name, position.get("symbol", symbol),
+            )
+            # Allow EOD square-off to still proceed below (uses stored prices, no fetch needed)
+            if not self._must_square_off():
+                return None
+            option_price = float(avg_price)   # for the EOD path only
+        else:
+            option_price = live_ltp
         pnl_pct = ((option_price - avg_price) / avg_price) * 100 if avg_price else 0
 
         logger.info("Position %s | qty=%d avg=₹%.2f now=₹%.2f pnl=%.2f%%",
@@ -1014,7 +1029,15 @@ class TrendStrategy:
     # ── Square-off all open positions ─────────────────────────────────────────
 
     def square_off_all(self) -> dict:
-        """Called at INTRADAY_EXIT_BY — close every open position."""
+        """Called at INTRADAY_EXIT_BY — close every open position.
+
+        Two passes:
+          1. Real Angel One positions (broker.get_positions) — exit each via
+             _force_exit which goes through normal SELL flow.
+          2. virtual_rejected DB rows — close them in-place. These never had
+             a real Angel One position; if we don't reconcile here they stay
+             OPEN forever and tomorrow's duplicate guard blocks fresh entries.
+        """
         positions = self.broker.get_positions()
         results = {}
         for symbol, pos in positions.items():
@@ -1035,6 +1058,25 @@ class TrendStrategy:
                     results[symbol] = result
                 except Exception as e:
                     logger.error("Square-off failed for %s: %s", symbol, e)
+
+        # Pass 2: close any virtual_rejected DB rows so they don't dangle.
+        # These are entries Angel One rejected — no real position to sell, but
+        # the OPEN row in trades still blocks tomorrow's duplicate guard.
+        try:
+            for underlying in ("NIFTY",):
+                rows = self.memory.close_virtual_rejected_today(underlying, self.strategy_name)
+                if rows:
+                    logger.warning(
+                        "[%s] Square-off: closed %d virtual_rejected row(s) for %s",
+                        self.strategy_name, rows, underlying,
+                    )
+                    results[f"virtual_{underlying}"] = {"status": "CLOSED",
+                                                        "rows": rows,
+                                                        "reason": "EOD virtual close"}
+        except Exception as e:
+            logger.error("[%s] Square-off virtual_rejected sweep failed: %s",
+                         self.strategy_name, e)
+
         ipc.clear_sl_orders(self.strategy_name)
         ipc.clear_tp_orders(self.strategy_name)
         self._sl_orders.clear()

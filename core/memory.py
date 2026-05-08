@@ -270,6 +270,47 @@ class TradeMemory:
             """, (strategy, underlying, f"{today}T00:00:00")).fetchone()
         return row is not None
 
+    def close_virtual_rejected_today(self, underlying: str, strategy: str) -> int:
+        """Close any open virtual_rejected rows for this strategy + underlying today.
+
+        Used by the EOD square-off path: real positions get closed via the
+        broker; virtual_rejected entries (Angel One rejected the order, no
+        actual position exists) need to be closed directly in the DB so they
+        don't block tomorrow's duplicate guard. Returns rows updated.
+
+        Mirrors the closure to Mongo so the dashboard reflects EOD state.
+        """
+        today = today_ist()
+        closed_at = now_ist().isoformat()
+        with get_connection() as conn:
+            # Fetch the rows we're about to close so we can mirror each to Mongo
+            rows_before = conn.execute("""
+                SELECT order_id FROM trades
+                WHERE strategy = ? AND underlying = ?
+                  AND mode = 'virtual_rejected'
+                  AND side = 'BUY' AND closed_at IS NULL
+                  AND timestamp >= ?
+            """, (strategy, underlying, f"{today}T00:00:00")).fetchall()
+            cur = conn.execute("""
+                UPDATE trades
+                SET closed_at = ?, exit_remark = 'virtual EOD close (no real position)'
+                WHERE strategy = ? AND underlying = ?
+                  AND mode = 'virtual_rejected'
+                  AND side = 'BUY' AND closed_at IS NULL
+                  AND timestamp >= ?
+            """, (closed_at, strategy, underlying, f"{today}T00:00:00"))
+            rows = cur.rowcount
+        # Mongo mirror
+        if rows and rows_before:
+            try:
+                from core import mongo
+                for r in rows_before:
+                    if r["order_id"]:
+                        mongo.mirror_trade_close(r["order_id"], 0.0, closed_at)
+            except Exception:
+                pass
+        return rows
+
     def close_open_underlying_today(self, underlying: str, close_reason: str = "manual") -> int:
         """Mark all unclosed BUY rows for this underlying today as manually closed. Returns rows updated."""
         today = today_ist()
