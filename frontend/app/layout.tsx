@@ -1,9 +1,16 @@
 import type { Metadata } from "next";
 import "./globals.css";
 
+// Favicon is auto-wired by Next.js App Router convention:
+//   frontend/app/icon.svg       → <link rel="icon" type="image/svg+xml">
+//   frontend/app/apple-icon.svg → <link rel="apple-touch-icon">
+// Both files are copies of the brand logo from frontend/public/tgc-logo-svg.svg.
 export const metadata: Metadata = {
-  title: "Dashboard",
-  description: "NIFTY — ATR Intraday",
+  title: {
+    default:  "The Gaint Company — Trading Bot",
+    template: "%s · The Gaint Company",
+  },
+  description: "NIFTY ATR Intraday — automated options trading dashboard",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
