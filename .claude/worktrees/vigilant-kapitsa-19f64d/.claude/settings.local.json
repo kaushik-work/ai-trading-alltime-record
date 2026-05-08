@@ -5,7 +5,10 @@
       "Bash(.venv/Scripts/python.exe -c ' *)",
       "Bash(.venv/Scripts/python.exe -m pip install pymongo)",
       "Bash(timeout 5 grep -rn \"load_dotenv\\\\|dotenv_values\" --include=\"*.py\" --exclude-dir=.venv --exclude-dir=__pycache__ --exclude-dir=node_modules .)",
-      "Bash(.venv/Scripts/python.exe -c \"from api.server import app; routes=[r.path for r in app.routes if 'paper' in r.path]; print\\('paper routes:', routes\\)\")"
+      "Bash(.venv/Scripts/python.exe -c \"from api.server import app; routes=[r.path for r in app.routes if 'paper' in r.path]; print\\('paper routes:', routes\\)\")",
+      "Bash(.venv/Scripts/python.exe scripts/reset_for_fresh_start.py)",
+      "Bash(cp frontend/public/tgc-logo-svg.svg frontend/app/icon.svg)",
+      "Bash(cp frontend/public/tgc-logo-svg.svg frontend/app/apple-icon.svg)"
     ]
   }
 }
