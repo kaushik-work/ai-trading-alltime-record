@@ -29,16 +29,23 @@ logger = logging.getLogger(__name__)
 LOGS_DIR    = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
 OUTPUT_FILE = os.path.join(LOGS_DIR, "paper_comparison.json")
 
-LOT_SIZE = 65
-LOTS     = 3
+# Paper Comparison MUST mirror the live strategy's exit rules so the
+# question being answered is "what if I took this signal as buyer vs seller
+# using MY actual strategy?", not some arbitrary fixed-fraction simulation.
+#
+# Live ATR Intraday rules (strategies/trend_strategy.py):
+#   SL distance  = max(min(5m ATR, 50) / 2, 5.0)      # in option-premium pts
+#   BUYER  SL    = entry_premium - SL_dist
+#   BUYER  TP    = entry_premium + SL_dist * RR_RATIO  (RR_RATIO = 3.0)
+#   SELLER SL    = entry_premium + SL_dist             # mirrored
+#   SELLER TP    = entry_premium - SL_dist * RR_RATIO  # mirrored
+#   Quantity     = LOT_SIZE × min_lots (min_lots from settings.json)
 
-# Buyer SL/TP — as fraction of entry premium
-BUYER_SL_FRAC = 0.50   # option drops to 50% of entry → stop out
-BUYER_TP_FRAC = 2.00   # option doubles → take profit
-
-# Seller SL/TP — as fraction of entry premium
-SELLER_SL_FRAC = 2.00  # sold option doubles → stop out (pay to buy back)
-SELLER_TP_FRAC = 0.35  # sold option decays to 35% → take profit
+LOT_SIZE_DEFAULT = 65    # NIFTY lot size; pulled from config at signal time
+RR_RATIO         = 3.0   # mirror config.ATR_RR_RATIO
+ATR_FALLBACK     = 20.0  # used only when no ATR is supplied (rare)
+ATR_CAP          = 50.0  # same cap the live strategy applies
+SL_DIST_FLOOR    = 5.0   # minimum SL distance in premium points
 
 
 def _now_ist() -> str:
@@ -79,6 +86,7 @@ class PaperSeller:
         Opens a new paper comparison trade if:
           - signal.will_trade is True
           - No open position already exists for this strategy
+          - signal.atr is supplied (so we mirror the live strategy's SL/TP exactly)
         """
         if not signal.get("will_trade"):
             return
@@ -87,17 +95,21 @@ class PaperSeller:
 
         direction = signal.get("direction", "HOLD")
         score     = signal.get("score", 0)
+        atr       = float(signal.get("atr") or 0)
         if direction not in ("BUY", "SELL"):
             return
 
-        pos = self._open_position(strategy, direction, score)
+        pos = self._open_position(strategy, direction, score, atr=atr)
         if pos:
             self._open[strategy] = pos
             logger.info(
-                "PaperSeller: opened %s | %s | buyer=%s@₹%.0f seller=%s@₹%.0f",
+                "PaperSeller: opened %s | %s | buyer=%s@₹%.0f (SL=%.0f TP=%.0f) "
+                "seller=%s@₹%.0f (SL=%.0f TP=%.0f)",
                 strategy, direction,
-                pos["buyer"]["option_type"], pos["buyer"]["entry_premium"],
+                pos["buyer"]["option_type"],  pos["buyer"]["entry_premium"],
+                pos["buyer"]["sl"],           pos["buyer"]["tp"],
                 pos["seller"]["option_type"], pos["seller"]["entry_premium"],
+                pos["seller"]["sl"],          pos["seller"]["tp"],
             )
 
     def mark_to_market(self):
@@ -164,9 +176,12 @@ class PaperSeller:
 
     # ── Internal ──────────────────────────────────────────────────────────────
 
-    def _open_position(self, strategy: str, direction: str, score: int) -> Optional[dict]:
+    def _open_position(self, strategy: str, direction: str, score: int,
+                       atr: float = 0.0) -> Optional[dict]:
         try:
             from data.angel_fetcher import AngelFetcher
+            from core import ipc
+            import config as _cfg
             af = AngelFetcher.get()
 
             nifty_ltp = af.get_index_ltp("NIFTY")
@@ -192,16 +207,32 @@ class PaperSeller:
                 )
                 return None
 
+            # Mirror live strategy SL/TP exactly:
+            # SL_dist (premium points) = max(min(ATR, 50) / 2, 5)
+            atr_eff   = min(atr, ATR_CAP) if atr and atr > 0 else ATR_FALLBACK
+            sl_dist   = max(round(atr_eff / 2, 1), SL_DIST_FLOOR)
+            rr_ratio  = getattr(_cfg, "ATR_RR_RATIO", RR_RATIO)
+
+            # Lot sizing — match the live bot's runtime min_lots, not a constant.
+            # If min_lots was 2 today (VIX elevated), paper should use 2 too.
+            lot_size  = _cfg.LOT_SIZES.get("NIFTY", LOT_SIZE_DEFAULT)
+            min_lots  = ipc.read_settings().get("min_lots", _cfg.MIN_LOTS)
+            quantity  = lot_size * max(1, int(min_lots))
+
             return {
                 "id":            f"{strategy}-{datetime.now(IST).strftime('%Y%m%d%H%M%S')}",
                 "strategy":      strategy,
                 "direction":     direction,
                 "score":         score,
+                "atr":           round(atr_eff, 2),
+                "sl_dist":       sl_dist,
+                "rr_ratio":      rr_ratio,
                 "strike":        strike,
                 "expiry":        expiry,
                 "nifty_entry":   round(nifty_ltp, 2),
-                "lot_size":      LOT_SIZE,
-                "lots":          LOTS,
+                "lot_size":      lot_size,
+                "lots":          int(min_lots),
+                "quantity":      quantity,
                 "entry_time":    _now_ist(),
                 "exit_time":     None,
                 "status":        "OPEN",
@@ -211,8 +242,10 @@ class PaperSeller:
                     "symbol":          buyer_sym or "",
                     "entry_premium":   round(buyer_ltp, 2),
                     "current_premium": round(buyer_ltp, 2),
-                    "sl":  round(buyer_ltp  * BUYER_SL_FRAC, 2),
-                    "tp":  round(buyer_ltp  * BUYER_TP_FRAC, 2),
+                    # Mirror live strategy: option drops by sl_dist → SL,
+                    # option rises by sl_dist × rr → TP.
+                    "sl":  round(buyer_ltp - sl_dist, 1),
+                    "tp":  round(buyer_ltp + sl_dist * rr_ratio, 1),
                     "pnl": 0.0,
                     "status":          "OPEN",
                     "exit_premium":    None,
@@ -224,8 +257,10 @@ class PaperSeller:
                     "symbol":          seller_sym or "",
                     "entry_premium":   round(seller_ltp, 2),
                     "current_premium": round(seller_ltp, 2),
-                    "sl":  round(seller_ltp * SELLER_SL_FRAC, 2),
-                    "tp":  round(seller_ltp * SELLER_TP_FRAC, 2),
+                    # Mirrored: option RISES by sl_dist → seller's SL (paying more
+                    # to buy back); option DECAYS by sl_dist × rr → seller's TP.
+                    "sl":  round(seller_ltp + sl_dist, 1),
+                    "tp":  round(seller_ltp - sl_dist * rr_ratio, 1),
                     "pnl": 0.0,
                     "status":          "OPEN",
                     "exit_premium":    None,
@@ -238,8 +273,12 @@ class PaperSeller:
             return None
 
     def _update_position(self, af, strategy: str, pos: dict):
-        expiry = pos["expiry"]
-        strike = pos["strike"]
+        expiry   = pos["expiry"]
+        strike   = pos["strike"]
+        # Use the per-position quantity captured at entry (live min_lots × lot_size).
+        # Old code used module-level LOT_SIZE × LOTS = 195, which silently broke
+        # P&L when min_lots wasn't 3.
+        quantity = pos.get("quantity") or (pos.get("lot_size", LOT_SIZE_DEFAULT) * pos.get("lots", 1))
 
         buyer_side  = pos["buyer"]
         seller_side = pos["seller"]
@@ -258,17 +297,22 @@ class PaperSeller:
             if buyer_ltp:
                 buyer_side["current_premium"] = round(buyer_ltp, 2)
                 buyer_side["pnl"] = round(
-                    (buyer_ltp - buyer_side["entry_premium"]) * LOT_SIZE * LOTS, 2
+                    (buyer_ltp - buyer_side["entry_premium"]) * quantity, 2
                 )
-                # Check SL/TP
+                # Check SL/TP — close at the SL/TP threshold (not the bar's LTP)
+                # so PnL reflects the rule, not random tick noise above/below.
                 if buyer_ltp <= buyer_side["sl"]:
+                    exit_p = buyer_side["sl"]
                     buyer_side["status"]       = "CLOSED"
-                    buyer_side["exit_premium"] = round(buyer_ltp, 2)
+                    buyer_side["exit_premium"] = round(exit_p, 2)
                     buyer_side["exit_reason"]  = "SL"
+                    buyer_side["pnl"] = round((exit_p - buyer_side["entry_premium"]) * quantity, 2)
                 elif buyer_ltp >= buyer_side["tp"]:
+                    exit_p = buyer_side["tp"]
                     buyer_side["status"]       = "CLOSED"
-                    buyer_side["exit_premium"] = round(buyer_ltp, 2)
+                    buyer_side["exit_premium"] = round(exit_p, 2)
                     buyer_side["exit_reason"]  = "TP"
+                    buyer_side["pnl"] = round((exit_p - buyer_side["entry_premium"]) * quantity, 2)
 
         if seller_side["status"] == "OPEN":
             _, seller_ltp = af.get_option_ltp("NIFTY", strike, seller_side["option_type"], expiry)
@@ -276,17 +320,21 @@ class PaperSeller:
                 seller_side["current_premium"] = round(seller_ltp, 2)
                 # Seller profits when option DECAYS (entry - current)
                 seller_side["pnl"] = round(
-                    (seller_side["entry_premium"] - seller_ltp) * LOT_SIZE * LOTS, 2
+                    (seller_side["entry_premium"] - seller_ltp) * quantity, 2
                 )
-                # Check SL/TP
+                # Check SL/TP at the threshold price
                 if seller_ltp >= seller_side["sl"]:
+                    exit_p = seller_side["sl"]
                     seller_side["status"]       = "CLOSED"
-                    seller_side["exit_premium"] = round(seller_ltp, 2)
+                    seller_side["exit_premium"] = round(exit_p, 2)
                     seller_side["exit_reason"]  = "SL"
+                    seller_side["pnl"] = round((seller_side["entry_premium"] - exit_p) * quantity, 2)
                 elif seller_ltp <= seller_side["tp"]:
+                    exit_p = seller_side["tp"]
                     seller_side["status"]       = "CLOSED"
-                    seller_side["exit_premium"] = round(seller_ltp, 2)
+                    seller_side["exit_premium"] = round(exit_p, 2)
                     seller_side["exit_reason"]  = "TP"
+                    seller_side["pnl"] = round((seller_side["entry_premium"] - exit_p) * quantity, 2)
 
         # If both sides now closed, finalize
         if buyer_side["status"] != "OPEN" and seller_side["status"] != "OPEN":
@@ -294,8 +342,9 @@ class PaperSeller:
 
     def _close_position(self, af, strategy: str, pos: dict, reason: str):
         """Force-close both sides (used for EOD)."""
-        expiry = pos["expiry"]
-        strike = pos["strike"]
+        expiry   = pos["expiry"]
+        strike   = pos["strike"]
+        quantity = pos.get("quantity") or (pos.get("lot_size", LOT_SIZE_DEFAULT) * pos.get("lots", 1))
 
         for side_key, option_type in [("buyer", pos["buyer"]["option_type"]),
                                        ("seller", pos["seller"]["option_type"])]:
@@ -308,13 +357,9 @@ class PaperSeller:
             side["exit_premium"] = round(exit_prem, 2)
             side["exit_reason"]  = reason
             if side_key == "buyer":
-                side["pnl"] = round(
-                    (exit_prem - side["entry_premium"]) * LOT_SIZE * LOTS, 2
-                )
+                side["pnl"] = round((exit_prem - side["entry_premium"]) * quantity, 2)
             else:
-                side["pnl"] = round(
-                    (side["entry_premium"] - exit_prem) * LOT_SIZE * LOTS, 2
-                )
+                side["pnl"] = round((side["entry_premium"] - exit_prem) * quantity, 2)
 
         self._finalize(strategy, pos)
 

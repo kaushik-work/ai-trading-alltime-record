@@ -220,7 +220,10 @@ function TradeRow({ pos, isOpen }: { pos: any; isOpen: boolean }) {
             <span className="text-xs font-bold text-blue-700 uppercase tracking-wide">Buyer</span>
             <span className="text-xs text-gray-400">
               {buyer.option_type} · Entry ₹{buyer.entry_premium?.toFixed(0)}
-              {buyer.current_premium !== buyer.entry_premium
+              {/* Closed → show exit; Open → show last MTM tick */}
+              {!isOpen && buyer.exit_premium != null
+                ? ` → ₹${buyer.exit_premium?.toFixed(0)}`
+                : isOpen && buyer.current_premium !== buyer.entry_premium
                 ? ` → ₹${buyer.current_premium?.toFixed(0)}`
                 : ""}
             </span>
@@ -245,7 +248,9 @@ function TradeRow({ pos, isOpen }: { pos: any; isOpen: boolean }) {
             <span className="text-xs font-bold text-purple-700 uppercase tracking-wide">Seller</span>
             <span className="text-xs text-gray-400">
               SELL {seller.option_type} · Collected ₹{seller.entry_premium?.toFixed(0)}
-              {seller.current_premium !== seller.entry_premium
+              {!isOpen && seller.exit_premium != null
+                ? ` → ₹${seller.exit_premium?.toFixed(0)}`
+                : isOpen && seller.current_premium !== seller.entry_premium
                 ? ` → ₹${seller.current_premium?.toFixed(0)}`
                 : ""}
             </span>

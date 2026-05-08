@@ -230,9 +230,20 @@ class BotRunner:
                 threshold  = sc.get("threshold", 6)
                 direction  = sc.get("action", "HOLD")
                 will_trade = abs(score) >= threshold
+                # Pull ATR from the live cycle's intraday indicators so the paper
+                # seller can mirror the live SL/TP formula exactly.
+                atr_for_paper = 0.0
+                try:
+                    intraday = self._atr_strategy.market.get_intraday_indicators("NIFTY") or {}
+                    atr_for_paper = float(
+                        intraday.get("atr_5m") or sc.get("breakdown", {}).get("atr_filter", 0) or 0
+                    )
+                except Exception:
+                    atr_for_paper = 0.0
                 entry = {
                     "score": score, "direction": direction, "action": direction,
                     "threshold": threshold, "will_trade": will_trade,
+                    "atr": atr_for_paper,
                     "note": "ATR technical analysis only (sections 1–11)",
                 }
                 self.last_scores["ATR Intraday"] = entry
