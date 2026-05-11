@@ -46,6 +46,14 @@ PER_STRATEGY_DAILY_LOSS_PCT = 3.0    # each strategy pauses independently at 3% 
 #   - PER_STRATEGY_DAILY_LOSS_PCT (3%) pauses this strategy
 #   - MAX_DAILY_LOSS (₹6,250) pauses everything
 #   - MAX_OPEN_POSITIONS (1) belt-and-suspenders broker-level gate
+#
+# Broker-rejection cooldown — if Angel One silently rejects N entries today
+# (silent rejection / insufficient funds / contract issue), auto-pause this
+# strategy for the rest of the day. The underlying cause is almost always
+# operational (unfunded account, expired session, lot-size mismatch) and
+# won't fix itself; spamming retries every 5 min wastes API quota and
+# pollutes the trade log with cosmetic virtual_rejected rows.
+MAX_REJECTIONS_PER_DAY = 2
 
 # ── Lot Sizes (NSE) ────────────────────────────────────────────────────────────
 # Verify current lot sizes at NSE or Angel One contract specs

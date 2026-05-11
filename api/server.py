@@ -108,6 +108,60 @@ def _latest_order_issue() -> dict | None:
     return None
 
 
+_account_cache: dict = {"data": None, "checked_at": 0.0}
+_ACCOUNT_CACHE_TTL = 60   # rmsLimit hits Angel One — cache 60s
+
+
+def _get_account_status(today_round_trips: list) -> dict:
+    """Return a compact account-status block for the dashboard top strip.
+
+    Surfaces three things prominently:
+      - available_cash    cash that can fund a new trade today (₹)
+      - is_unfunded       True if balance < a meaningful threshold
+      - rejections_today  count of virtual_rejected entries today
+      - cooldown_hit      True if the bot has auto-paused due to too many rejections
+
+    Cached 60s so we don't hammer rmsLimit on every WebSocket tick.
+    """
+    import time as _t
+    now = _t.monotonic()
+    if _account_cache["data"] is not None and now - _account_cache["checked_at"] < _ACCOUNT_CACHE_TTL:
+        cached = dict(_account_cache["data"])
+    else:
+        cached = {"available_cash": None, "is_unfunded": False, "error": None}
+        try:
+            from core.broker import get_broker
+            broker = get_broker()
+            summary = broker.get_portfolio_summary() or {}
+            bal = float(summary.get("balance") or 0)
+            cached["available_cash"] = bal
+            # < ₹5000 is effectively unfunded for 1 lot NIFTY option buying
+            cached["is_unfunded"]    = bal < 5000
+        except Exception as e:
+            cached["error"] = str(e)
+        _account_cache["data"]       = cached
+        _account_cache["checked_at"] = now
+
+    # Rejection counters come from today's trades — not cached because they
+    # mutate fast and the data is cheap to compute.
+    rejections = sum(
+        1 for t in today_round_trips
+        if (t.get("mode") == "virtual_rejected")
+    )
+    try:
+        from core.bot_runner import get_runner
+        is_paused = get_runner()._atr_strategy.paused if get_runner()._atr_strategy else False
+    except Exception:
+        is_paused = False
+
+    return {
+        **cached,
+        "rejections_today": rejections,
+        "cooldown_hit":     rejections >= config.MAX_REJECTIONS_PER_DAY if hasattr(config, "MAX_REJECTIONS_PER_DAY") else False,
+        "strategy_paused":  is_paused,
+    }
+
+
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _build_snapshot() -> dict:
@@ -276,6 +330,7 @@ def _build_snapshot() -> dict:
         "latest_order_issue": _latest_order_issue(),
         "open_positions": open_pos,
         "settings": ipc.read_settings(),
+        "account": _get_account_status(today_round_trips),
         "equity_curve": equity_curve[-100:],  # last 100 points
         "records": [
             {"description": r["description"], "value": r["value"],

@@ -243,8 +243,27 @@ class AngelOneBroker:
         lot_ok = quantity > 0 and quantity % lot == 0
         add_check("lot_size", lot_ok, f"Quantity {quantity} {'matches' if lot_ok else 'must be multiple of'} lot size {lot}")
 
+        # Cash balance is CRITICAL: if available margin is below an estimated
+        # need for this trade, Angel One will silently reject the order
+        # ("order placed but no orderid returned"). Better to fail preflight
+        # here than to let the bot fire-and-virtual-SL all day.
+        # Estimated need = price × quantity (premium paid). Add a small buffer
+        # for charges/slippage. INTRADAY (MIS) margin is roughly this much
+        # for option buying — option selling needs ~10x more, but we only
+        # buy options today.
         balance = self.get_portfolio_summary().get("balance", 0)
-        add_check("cash_balance", balance > 0, f"Available cash ₹{balance:,.2f}", critical=False)
+        est_need = float(price or 0) * int(quantity or 0)
+        if est_need <= 0:
+            # No price → can't estimate need; fall back to a non-zero check
+            add_check("cash_balance", balance > 0,
+                      f"Available cash ₹{balance:,.2f}", critical=True)
+        else:
+            add_check(
+                "cash_balance",
+                balance >= est_need,
+                f"Available cash ₹{balance:,.2f} vs required ~₹{est_need:,.0f}",
+                critical=True,
+            )
 
         resolved_symbol = tradingsymbol
         resolved_price = float(price or 0)

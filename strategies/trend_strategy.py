@@ -145,6 +145,30 @@ class TrendStrategy:
         if self.paused:
             return None
 
+        # Same-day rejection cooldown — if Angel One has rejected N entries
+        # today (silent rejection, insufficient funds, contract issues, etc.)
+        # stop trying. Otherwise the bot spams 50+ virtual_rejected rows in a
+        # session for the same broker-side reason that won't fix itself.
+        try:
+            max_rejections = getattr(config, "MAX_REJECTIONS_PER_DAY", 2)
+            today_trades = self.memory.get_today_trades()
+            today_rejections = sum(
+                1 for t in today_trades
+                if t.get("strategy") == self.strategy_name
+                and t.get("mode") == "virtual_rejected"
+                and t.get("side") == "BUY"
+            )
+            if today_rejections >= max_rejections:
+                logger.warning(
+                    "[%s] %d broker rejections today (cap=%d). Auto-pausing this "
+                    "strategy until tomorrow — check Angel One funds / margins.",
+                    self.strategy_name, today_rejections, max_rejections,
+                )
+                self.pause()
+                return None
+        except Exception as _e:
+            logger.debug("[%s] Rejection-cooldown check skipped: %s", self.strategy_name, _e)
+
         portfolio = self.broker.get_portfolio_summary()
 
         # ── Per-strategy daily loss — pauses THIS strategy only ───────────────
