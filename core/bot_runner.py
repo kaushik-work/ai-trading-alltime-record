@@ -190,11 +190,17 @@ class BotRunner:
         # Position guardian — every 60s during market hours: checks SL/TP on open positions
         # independent of strategy cycle. Catches fast moves between 5m candle ticks.
         self.scheduler.add_job(self._position_guardian, "interval", seconds=60, id="position_guardian")
-        # Daily Angel One token refresh — 08:30 IST, before any market activity.
-        # The auth cache in AngelFetcher only verifies "same calendar day" which
-        # doesn't catch the ~24h JWT expiry. This forces a clean re-login every
-        # morning so all subsequent API calls have a guaranteed-fresh token.
-        self.scheduler.add_job(self._daily_token_refresh, "cron", hour=8, minute=30, id="daily_token_refresh")
+        # Daily Angel One token refresh — runs at 08:30, 12:00, and 14:00 IST.
+        # Angel One JWTs live ~24 hours from issue. A single 08:30 refresh
+        # isn't enough: a token issued at 11:00 yesterday will expire at
+        # 11:00 today — mid-session. So we re-login mid-day too. Each
+        # refresh also re-downloads the instrument master in case it went
+        # stale (expired contracts get pruned, new ones appear after expiry).
+        for h, m in [(8, 30), (12, 0), (14, 0)]:
+            self.scheduler.add_job(
+                self._daily_token_refresh, "cron", hour=h, minute=m,
+                id=f"token_refresh_{h:02d}{m:02d}",
+            )
 
         self.scheduler.start()
         logger.info(
@@ -632,17 +638,19 @@ class BotRunner:
             logger.error("Bias reset failed: %s", e)
 
     async def _daily_token_refresh(self):
-        """Force a fresh Angel One TOTP login at 08:30 IST every day.
+        """Force a fresh Angel One TOTP login + re-fetch instrument master.
 
-        AngelFetcher's auth cache only verifies "same calendar day" — it does
-        NOT detect the ~24h JWT expiry that Angel One enforces. Without this
-        morning refresh, a long-running container (2+ days uptime) ends up
-        using a stale JWT silently: every market-data and option-LTP call
-        returns None, virtual SL/TP can never fire, and EOD square-off has
-        nothing to close.
+        AngelFetcher's auth cache only verifies "same calendar day", but
+        Angel One actually rotates JWTs ~24h from issue (so a token created
+        at 11:00 yesterday dies at 11:00 today, mid-session). This job runs
+        multiple times per day (08:30, 12:00, 14:00 IST) to ensure no API
+        call goes through a stale JWT.
 
-        This job invalidates the cache and runs _ensure_logged_in() so the
-        first 09:15 cycle has a guaranteed-fresh session.
+        It ALSO invalidates the instrument master cache. The master file gets
+        pruned of expired contracts overnight and new strikes appear after
+        each weekly expiry; without the re-fetch, a long-running container
+        ends up with a stale instrument list where weekly options can't be
+        resolved by strike anymore.
         """
         try:
             from data.angel_fetcher import AngelFetcher
@@ -651,14 +659,19 @@ class BotRunner:
                 af._api = None
                 af._login_date = None
                 af._failed_at = None
+                # Force re-download of NFO instrument master
+                af._instruments = None
+                af._instruments_date = None
             loop = asyncio.get_event_loop()
             ok = await loop.run_in_executor(None, af._ensure_logged_in)
             if ok:
-                logger.info("Daily token refresh: new Angel One session ready for today.")
+                # Trigger master re-download by calling _nfo_instruments() once
+                await loop.run_in_executor(None, af._nfo_instruments)
+                logger.info("Token refresh: fresh Angel One session + instrument master loaded.")
             else:
-                logger.error("Daily token refresh: _ensure_logged_in returned False — check ANGEL_* env vars")
+                logger.error("Token refresh: _ensure_logged_in returned False — check ANGEL_* env vars")
         except Exception as e:
-            logger.error("Daily token refresh failed: %s", e, exc_info=True)
+            logger.error("Token refresh failed: %s", e, exc_info=True)
 
     async def _vix_auto_lots_set(self):
         """Fetch India VIX at 9:30 IST and auto-set min_lots for the day.

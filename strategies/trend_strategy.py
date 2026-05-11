@@ -465,27 +465,34 @@ class TrendStrategy:
             from data.angel_fetcher import AngelFetcher
             expiry = AngelFetcher.nearest_weekly_expiry()
 
-            # Walk strikes: ITM raises premium, OTM lowers it
-            # CE: ITM = lower strike, OTM = higher strike
-            # PE: ITM = higher strike, OTM = lower strike
+            # Bulk-fetch all 21 candidate strikes in ONE getMarketData call
+            # instead of 21 sequential ltpData calls (which hits rate limit).
             step = 50
-            best_sym, best_strike, best_ltp = None, atm_strike, None
+            candidates = [atm_strike + d * i * step for i in range(11)
+                          for d in ([0] if i == 0 else [-1, 1])]
+            quotes = AngelFetcher.get().get_option_ltps_bulk(
+                symbol, candidates, option_type, expiry,
+            )
+            if not quotes:
+                logger.warning("[%s] Bulk LTP fetch returned 0 strikes for %s %s exp=%s",
+                               self.strategy_name, symbol, option_type, expiry)
+            else:
+                target_mid = (min_prem + max_prem) / 2
+                # Prefer strikes whose premium falls in the target band, in
+                # order of distance from the requested ATM. If none in band,
+                # fall back to the closest-to-mid quote.
+                in_band = [(s, q) for s, q in quotes.items() if min_prem <= q[1] <= max_prem]
+                if in_band:
+                    in_band.sort(key=lambda kv: abs(kv[0] - atm_strike))
+                    strike, (tsym, ltp) = in_band[0]
+                    logger.info("Strike found in range: %s %d%s @ ₹%.2f", symbol, strike, option_type, ltp)
+                    return tsym, strike, ltp, expiry
 
-            for i in range(11):  # ATM + up to 10 strikes either direction
-                for direction in ([0] if i == 0 else [-1, 1]):
-                    candidate = atm_strike + direction * i * step
-                    tsym, ltp = AngelFetcher.get().get_option_ltp(symbol, candidate, option_type, expiry)
-                    if not ltp or ltp <= 0:
-                        continue
-                    logger.info("Strike search: %s %d%s @ ₹%.2f", symbol, candidate, option_type, ltp)
-                    if min_prem <= ltp <= max_prem:
-                        logger.info("Strike found in range: %s %d%s @ ₹%.2f", symbol, candidate, option_type, ltp)
-                        return tsym, candidate, ltp, expiry
-                    # track best seen so far (closest to range)
-                    if best_ltp is None or abs(ltp - (min_prem + max_prem) / 2) < abs(best_ltp - (min_prem + max_prem) / 2):
-                        best_sym, best_strike, best_ltp = tsym, candidate, ltp
-
-            if best_ltp:
+                # No strike in band — return the one closest to the mid premium
+                best_strike, (best_sym, best_ltp) = min(
+                    quotes.items(),
+                    key=lambda kv: abs(kv[1][1] - target_mid),
+                )
                 logger.warning(
                     "No strike in ₹%d–₹%d range for %s %s — using closest: %d @ ₹%.2f",
                     min_prem, max_prem, symbol, option_type, best_strike, best_ltp,

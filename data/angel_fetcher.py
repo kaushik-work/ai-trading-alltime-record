@@ -505,11 +505,17 @@ class AngelFetcher:
                 tradingsymbol=spot["tradingsymbol"],
                 symboltoken=spot["token"],
             )
+            # Detect token-expiry-in-body and retry once with a fresh session.
+            if self._is_auth_failure(resp):
+                if self._ensure_logged_in():
+                    resp = self._api.ltpData(
+                        exchange=spot["exchange"],
+                        tradingsymbol=spot["tradingsymbol"],
+                        symboltoken=spot["token"],
+                    )
             if resp and resp.get("status") and resp.get("data"):
                 ltp = float(resp["data"].get("ltp", 0))
                 return ltp if ltp > 0 else None
-            if resp and resp.get("errorCode") == "AG8001":
-                self._invalidate_token()
         except Exception as e:
             logger.warning("AngelFetcher.get_index_ltp %s: %s", symbol, e)
         return None
@@ -575,6 +581,36 @@ class AngelFetcher:
         if days_to_thu == 0 and (now.hour > 15 or (now.hour == 15 and now.minute >= 30)):
             days_to_thu = 7
         return today + timedelta(days=days_to_thu)
+
+    def _is_auth_failure(self, resp) -> bool:
+        """Detect token-expiry / unauthorized in an Angel One response body.
+
+        Angel One returns auth errors as HTTP 200 with a body like:
+            {"success": False, "errorCode": "AG8001", "message": "Invalid Token"}
+        — NOT as an exception. Without this check, ltpData / getMarketData /
+        ltpData calls silently return None for the rest of the day after the
+        24-hour JWT expires, even though _ensure_logged_in() thinks we're
+        still logged in (it only checks the calendar date, not actual token
+        validity). When this helper detects an auth failure it invalidates
+        the cached _api so the NEXT call hits _ensure_logged_in() and forces
+        a fresh TOTP re-login.
+        """
+        if not resp or not isinstance(resp, dict):
+            return False
+        ec  = str(resp.get("errorCode", "") or "")
+        msg = str(resp.get("message", "") or "").lower()
+        if (ec == "AG8001"
+            or "invalid token" in msg
+            or "unauthorized" in msg
+            or "session expired" in msg):
+            logger.warning(
+                "Angel One auth failure detected in response (errorCode=%s msg=%s) "
+                "— invalidating session so next call re-logs in",
+                ec, resp.get("message"),
+            )
+            self._invalidate_token()
+            return True
+        return False
 
     def get_option_ltp(self, symbol: str, strike: int, option_type: str, expiry: date):
         """
@@ -658,6 +694,14 @@ class AngelFetcher:
             tradingsymbol = match["symbol"]
             token = match["token"]
             resp = self._api.ltpData(exchange="NFO", tradingsymbol=tradingsymbol, symboltoken=token)
+
+            # Detect token expiry returned in response body (not as exception).
+            # If detected, _api is invalidated → next call re-logs in. Retry
+            # this single call once with the fresh session.
+            if self._is_auth_failure(resp):
+                if self._ensure_logged_in():
+                    resp = self._api.ltpData(exchange="NFO", tradingsymbol=tradingsymbol, symboltoken=token)
+
             if not resp or not resp.get("status") or not resp.get("data"):
                 logger.warning("get_option_ltp: LTP API failed for %s", tradingsymbol)
                 return tradingsymbol, None
@@ -676,6 +720,72 @@ class AngelFetcher:
         """Look up Angel One symboltoken for a given NFO tradingsymbol."""
         match = next((i for i in self._nfo_instruments() if i.get("symbol") == tradingsymbol), None)
         return match["token"] if match else None
+
+    def get_option_ltps_bulk(self, symbol: str, strikes: list[int],
+                             option_type: str, expiry: date) -> dict[int, tuple[str, float]]:
+        """Fetch LTPs for many strikes in ONE API call via getMarketData.
+
+        Returns {strike: (tradingsymbol, ltp)} for every strike that resolved.
+
+        Why this exists: the strategy's strike-search walks ATM ± 10 strikes
+        looking for a premium in the target band. Doing that as 21 sequential
+        ltpData calls hammers Angel One's per-second rate limit, causing
+        roughly half the requests to return AB1004/silent-None during quiet
+        periods — and the bot then falsely reports "Option LTP unavailable".
+        getMarketData has a generous bulk allowance (the collector uses it to
+        fetch 34 strikes every 5 min all session, ~2500 calls/day, no errors).
+        """
+        if not self._ensure_logged_in():
+            return {}
+        try:
+            instruments = self._nfo_instruments()
+            def _master_strike(i) -> int:
+                return int(float(i.get("strike", 0))) // 100
+
+            # Resolve strike → instrument row in the master.
+            resolved: dict[int, dict] = {}
+            for strike in strikes:
+                m = next((
+                    i for i in instruments
+                    if i.get("name") == symbol
+                    and _master_strike(i) == strike
+                    and i.get("instrumenttype") == "OPTIDX"
+                    and i.get("symbol", "").endswith(option_type)
+                    and _parse_expiry(i.get("expiry", "")) == expiry
+                ), None)
+                if m:
+                    resolved[strike] = m
+            if not resolved:
+                return {}
+
+            tokens = [m["token"] for m in resolved.values()]
+            resp = self._api.getMarketData("LTP", {"NFO": tokens})
+            if self._is_auth_failure(resp):
+                if self._ensure_logged_in():
+                    resp = self._api.getMarketData("LTP", {"NFO": tokens})
+            if not resp or not resp.get("status"):
+                logger.warning("get_option_ltps_bulk: getMarketData failed: %s", resp)
+                return {}
+
+            # Build {token: ltp} from the fetched array
+            quotes_by_token: dict[str, float] = {}
+            for row in resp.get("data", {}).get("fetched", []):
+                tok = str(row.get("symbolToken"))
+                ltp = float(row.get("ltp", 0) or 0)
+                if tok and ltp > 0:
+                    quotes_by_token[tok] = ltp
+
+            # Map back: strike → (tradingsymbol, ltp)
+            out: dict[int, tuple[str, float]] = {}
+            for strike, m in resolved.items():
+                tok = str(m["token"])
+                if tok in quotes_by_token:
+                    out[strike] = (m["symbol"], quotes_by_token[tok])
+            return out
+        except Exception as e:
+            logger.warning("get_option_ltps_bulk %s %s exp=%s: %s",
+                           symbol, option_type, expiry, e)
+            return {}
 
     def get_trade_book(self) -> list:
         """Fetch today's executed trades from Angel One tradeBook API.
