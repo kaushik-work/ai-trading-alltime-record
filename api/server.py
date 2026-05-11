@@ -875,8 +875,15 @@ def update_settings(body: dict, user: str = Depends(get_current_user)):
     min_lots = body.get("min_lots")
     if min_lots is not None:
         min_lots = int(min_lots)
-        if min_lots < 1 or min_lots > 10:
-            raise HTTPException(status_code=400, detail="min_lots must be between 1 and 10")
+        # Cap upper bound at config.MAX_LOTS so a stray dashboard click can't
+        # blow past the user-configured live limit. Bump MAX_LOTS in config.py
+        # to raise this ceiling.
+        upper = max(1, int(getattr(config, "MAX_LOTS", 10)))
+        if min_lots < 1 or min_lots > upper:
+            raise HTTPException(
+                status_code=400,
+                detail=f"min_lots must be between 1 and {upper} (config.MAX_LOTS)",
+            )
     patch = {}
     if min_lots is not None:
         patch["min_lots"] = min_lots

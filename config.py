@@ -60,7 +60,12 @@ MAX_REJECTIONS_PER_DAY = 2
 LOT_SIZES = {
     "NIFTY": 65,   # revised Feb 2026
 }
-MIN_LOTS = 3   # default 3 lots — overridable from dashboard header
+MIN_LOTS = 1   # default 1 lot for live baseline — overridable from dashboard header
+# Hard upper cap on lots, applied AFTER the VIX auto-lots calculation.
+# VIX auto-lots at 9:30 IST tries to scale lots with volatility; this cap
+# prevents it from pushing min_lots above MAX_LOTS regardless of VIX regime.
+# Bump this when comfortable scaling position size up.
+MAX_LOTS = 1
 
 # ── Intraday Timing ────────────────────────────────────────────────────────────
 TRADING_TYPE          = "intraday"

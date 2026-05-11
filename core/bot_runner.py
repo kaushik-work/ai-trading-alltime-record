@@ -38,15 +38,21 @@ def _calc_vix_lots(vix: float) -> int:
 
     Per Mu Hat research: VIX spikes (>30) are historically the best entry
     windows — returns +32.5% avg over next 3M. So we don't block, we scale down.
+
+    The returned value is clamped to [1, config.MAX_LOTS] so a "calm VIX"
+    can never bump lots above the user-configured upper cap. Set MAX_LOTS=1
+    while baselining; raise once the strategy has proven itself in live.
     """
     if vix is None or vix < 20:
-        return 3   # calm / normal vol — full size
+        base = 3   # calm / normal vol — full size if cap allows
     elif vix < 25:
-        return 2   # elevated
+        base = 2   # elevated
     elif vix < 40:
-        return 1   # high / spike — trade light, stay in
+        base = 1   # high / spike — trade light, stay in
     else:
-        return 1   # extreme panic — minimum, don't block
+        base = 1   # extreme panic — minimum, don't block
+    max_allowed = max(1, int(getattr(config, "MAX_LOTS", 3)))
+    return max(1, min(base, max_allowed))
 
 
 def _is_event_blocked() -> bool:
