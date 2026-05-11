@@ -137,30 +137,35 @@ export default function Home() {
               <div className="flex flex-wrap items-center gap-1.5">
                 <h2 className="text-base font-bold text-gray-900 w-full sm:w-auto mb-1 sm:mb-0">Live Trade Feed</h2>
                 {/* Bot active/inactive indicator */}
+                {/* Bot scheduler state — distinct from trading mode and broker session. */}
                 {botStatus === "running" ? (
                   <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
-                        style={{ background: "#dcfce7", color: "#15803d" }}>
+                        style={{ background: "#dcfce7", color: "#15803d" }}
+                        title="The bot scheduler is running cycles">
                     <span className="w-1.5 h-1.5 rounded-full animate-pulse inline-block"
                           style={{ background: "#22c55e" }} />
-                    BOT ACTIVE
+                    BOT RUNNING
                   </span>
                 ) : botStatus === "market_closed" ? (
                   <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
-                        style={{ background: "#f3f4f6", color: "#6b7280" }}>
+                        style={{ background: "#f3f4f6", color: "#6b7280" }}
+                        title="NSE is closed — bot scheduler is idle">
                     <span className="w-1.5 h-1.5 rounded-full inline-block"
                           style={{ background: "#9ca3af" }} />
                     MARKET CLOSED
                   </span>
                 ) : botStatus === "paused" ? (
                   <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
-                        style={{ background: "#fef3c7", color: "#b45309" }}>
+                        style={{ background: "#fef3c7", color: "#b45309" }}
+                        title="Bot paused — click Resume in BrainFry to restart">
                     <span className="w-1.5 h-1.5 rounded-full inline-block"
                           style={{ background: "#f59e0b" }} />
                     BOT PAUSED
                   </span>
                 ) : botStatus === "stopped" ? (
                   <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
-                        style={{ background: "#fee2e2", color: "#dc2626" }}>
+                        style={{ background: "#fee2e2", color: "#dc2626" }}
+                        title="Bot scheduler is not running">
                     <span className="w-1.5 h-1.5 rounded-full inline-block"
                           style={{ background: "#ef4444" }} />
                     BOT STOPPED
@@ -191,26 +196,34 @@ export default function Home() {
                     </button>
                   </div>
                 )}
-                {/* Mode badge */}
+                {/* Trading mode — REAL MONEY vs PAPER. Red bg is intentional
+                    on REAL MONEY as a visual "watch out, real funds at stake" cue. */}
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full"
+                      title={mode === "live"
+                        ? "Live trading — orders go to Angel One with real funds"
+                        : "Paper trading — orders simulated, no real money"}
                       style={mode === "live"
                         ? { background: "#fee2e2", color: "#dc2626" }
                         : { background: "#dbeafe", color: "#1d4ed8" }}>
-                  {mode === "live" ? "● LIVE" : "● PAPER"}
+                  {mode === "live" ? "💰 REAL MONEY" : "📝 PAPER MODE"}
                 </span>
-                {/* Angel One session badge */}
+                {/* Angel One broker session — separate from trading mode.
+                    "ANGEL" instead of "TOKEN LIVE" so it doesn't share the
+                    word 'live' with the bot/mode chips. */}
                 {data && (
                   tokenLive ? (
                     <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
+                          title="Angel One broker session is valid"
                           style={{ background: "#f0fdf4", color: "#15803d" }}>
                       <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ background: "#22c55e" }} />
-                      TOKEN LIVE{tokenSetAt ? ` ${new Date(tokenSetAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}` : ""}
+                      ANGEL ✓{tokenSetAt ? ` ${new Date(tokenSetAt).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}` : ""}
                     </span>
                   ) : (
                     <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
+                          title="Angel One session expired — click Session in BrainFry to refresh"
                           style={{ background: "#fee2e2", color: "#dc2626" }}>
                       <span className="w-1.5 h-1.5 rounded-full inline-block" style={{ background: "#ef4444" }} />
-                      TOKEN EXPIRED
+                      ANGEL ✗ EXPIRED
                     </span>
                   )
                 )}
