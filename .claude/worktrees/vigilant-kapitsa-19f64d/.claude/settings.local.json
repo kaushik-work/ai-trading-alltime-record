@@ -8,7 +8,21 @@
       "Bash(.venv/Scripts/python.exe -c \"from api.server import app; routes=[r.path for r in app.routes if 'paper' in r.path]; print\\('paper routes:', routes\\)\")",
       "Bash(.venv/Scripts/python.exe scripts/reset_for_fresh_start.py)",
       "Bash(cp frontend/public/tgc-logo-svg.svg frontend/app/icon.svg)",
-      "Bash(cp frontend/public/tgc-logo-svg.svg frontend/app/apple-icon.svg)"
+      "Bash(cp frontend/public/tgc-logo-svg.svg frontend/app/apple-icon.svg)",
+      "Bash(grep -n \"min_lots\\\\|\\\\\\\\[1, 2, 3, 4, 5\\\\\\\\]\" frontend/app/components/Header.tsx)",
+      "Bash(timeout 5 grep -rln \"vix\\\\|VIX\" --include=\"*.py\" --include=\"*.tsx\" --include=\"*.ts\" --exclude-dir=node_modules --exclude-dir=.venv --exclude-dir=__pycache__ .)",
+      "Bash(timeout 5 grep -n \"vix\\\\|VIX\" config.py core/ipc.py core/paper_seller.py)",
+      "Bash(timeout 5 grep -n \"vix\\\\|VIX\" core/bot_runner.py)",
+      "Bash(timeout 5 grep -n \"vix\\\\|VIX\" core/journal.py core/brain.py)",
+      "Bash(timeout 5 grep -n \"vix\\\\|VIX\" core/brain.py)",
+      "Bash(timeout 5 grep -n \"vix\\\\|VIX\\\\|indiaVix\\\\|vixBlocked\\\\|anyOverride\\\\|toggleVixOverride\\\\|vixOverrideSaving\" frontend/app/page.tsx frontend/app/components/Header.tsx frontend/app/debug/page.tsx)",
+      "Bash(timeout 5 grep -rln \"paper_seller\\\\|PaperSeller\\\\|paper-comparison\\\\|paper_comparison\\\\|on_signal\\\\|get_paper_seller\" --include=\"*.py\" --include=\"*.tsx\" --include=\"*.ts\" --exclude-dir=node_modules --exclude-dir=.venv --exclude-dir=__pycache__ .)",
+      "Bash(timeout 5 grep -n \"paper_seller\\\\|PaperSeller\\\\|paper-comparison\\\\|paper_comparison\\\\|get_paper_seller\\\\|on_signal\\\\|_paper_monitor\" core/bot_runner.py api/server.py)",
+      "Bash(timeout 5 grep -n \"PaperMon\\\\|BotRunner started\" core/bot_runner.py)",
+      "Bash(timeout 5 grep -n \"paper-comparison\\\\|Paper Comparison\" frontend/app/components/Header.tsx frontend/app/signal-history/page.tsx scripts/reset_for_fresh_start.py)",
+      "Bash(timeout 5 grep -n \"paper\\\\|Paper\\\\|tab ==\" frontend/app/signal-history/page.tsx)",
+      "Bash(timeout 5 grep -cn \"paper\\\\|Paper\" frontend/app/signal-history/page.tsx)",
+      "Bash(timeout 5 grep -n \"REAL MONEY\\\\|PAPER MODE\\\\|mode === \" frontend/app/page.tsx)"
     ]
   }
 }
