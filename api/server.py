@@ -1078,19 +1078,6 @@ def run_backtest(body: dict, user: str = Depends(get_current_user)):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/paper-comparison")
-def paper_comparison(user: str = Depends(get_current_user)):
-    """Returns all paper buyer vs seller trades with P&L comparison."""
-    from core.bot_runner import get_runner
-    runner = get_runner()
-    ps = runner._paper_seller
-    return {
-        "summary":        ps.get_summary(),
-        "open_positions": ps.get_open_positions(),
-        "trades":         ps.get_all_trades(),
-    }
-
-
 _chart_cache: dict = {"data": None, "ts": 0.0}
 _CHART_CACHE_TTL = 300   # 5 minutes
 

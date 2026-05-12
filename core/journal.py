@@ -92,7 +92,6 @@ def generate_ai_review(journal: dict, recent_journals: list) -> str:
     date_str  = journal.get("date", "?")
     summary   = journal.get("summary", {})
     trades    = journal.get("trades", [])
-    vix_ctx   = journal.get("vix_context", {})
     breakdown = journal.get("strategy_breakdown", {})
     nifty     = journal.get("nifty_day", {})
 
@@ -116,10 +115,6 @@ def generate_ai_review(journal: dict, recent_journals: list) -> str:
         )
     else:
         nifty_line = "NIFTY data unavailable"
-
-    vix        = vix_ctx.get("india_vix")
-    vix_str    = f"{vix:.1f}" if vix else "N/A"
-    vix_status = "ELEVATED — blocked trading" if vix_ctx.get("blocked_by_vix") else "normal"
 
     trade_lines = []
     for t in trades:
@@ -160,7 +155,6 @@ def generate_ai_review(journal: dict, recent_journals: list) -> str:
 
 DATE: {date_str} ({weekday}){" — NIFTY EXPIRY DAY" if is_expiry else ""}
 NIFTY: {nifty_line}
-India VIX: {vix_str} ({vix_status})
 
 TODAY'S TRADES ({summary.get('completed_trades', 0)} trades | {summary.get('wins', 0)}W/{summary.get('losses', 0)}L | ₹{summary.get('total_pnl', 0):+.0f}):
 {trades_block}
@@ -178,13 +172,13 @@ Write a 350-400 word review. Use this exact structure:
 [Reference specific trades by time and price. Explain WHY — market condition, signal, timing]
 
 **What Failed**
-[Root cause — market direction mismatch, signal noise, bad timing window, VIX? Be specific, not generic]
+[Root cause — market direction mismatch, signal noise, bad timing window? Be specific, not generic]
 
 **Pattern of the Day**
 [One non-obvious pattern from today's numbers — something not visible without reading the data]
 
 **Tomorrow's Adjustment**
-[One concrete change directly supported by today's data: a time filter, VIX gate, strategy priority. Not "be more careful"]
+[One concrete change directly supported by today's data: a time filter, score threshold, strategy priority. Not "be more careful"]
 
 **Verdict**
 [One sentence. Honest.]
@@ -205,32 +199,6 @@ No filler. No "it's important to note that...". The reader is a serious algorith
 
 def _journal_path(date_str: str) -> str:
     return os.path.join(config.JOURNALS_DIR, f"{date_str}.json")
-
-
-def _collect_vix_context() -> dict:
-    """Collect today's India VIX level for the journal.
-
-    The bot uses VIX to scale lot sizes (see BotRunner._vix_auto_lots_set), not
-    as a hard trade gate, so this is informational only.
-    """
-    try:
-        from data.angel_fetcher import AngelFetcher
-        vix = AngelFetcher.get().fetch_vix()
-    except Exception:
-        vix = None
-
-    return {
-        "india_vix":      vix,
-        "blocked_by_vix": False,
-        "learning":       _analyse_vix_decision(vix),
-    }
-
-
-def _analyse_vix_decision(vix) -> str:
-    """Human-readable VIX summary for the journal."""
-    if vix is None:
-        return "VIX data unavailable today."
-    return f"India VIX today: {vix:.1f} (used for auto-lot sizing at 9:30 IST)."
 
 
 def _analyse_day_bias(day_bias: dict, trades_list: list) -> dict:
@@ -340,9 +308,6 @@ def save_daily_journal(date_str: Optional[str] = None) -> str:
             "losses": len(strat_trades) - strat_wins,
         }
 
-    # VIX context + per-strategy override analysis
-    vix_context = _collect_vix_context()
-
     # Day bias analysis — was trader's directional call correct?
     day_bias    = ipc.read_day_bias()
     bias_review = _analyse_day_bias(day_bias, trades_list)
@@ -362,7 +327,6 @@ def save_daily_journal(date_str: Optional[str] = None) -> str:
             "win_rate":         win_rate,
         },
         "strategy_breakdown": strategy_breakdown,
-        "vix_context":  vix_context,
         "bias_review":  bias_review,
         "nifty_day":    nifty_day,
         "trades":       trades_list,

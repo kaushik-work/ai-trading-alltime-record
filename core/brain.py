@@ -79,10 +79,10 @@ THETA (time decay — the enemy of option buyers):
   - This is why retail option buyers lose money: they fight theta every single day.
 
 VEGA (implied volatility sensitivity):
-  - VIX drives IV. High VIX = expensive premiums — need a bigger spot move to profit.
-  - Low VIX = cheap premiums but small expected moves — theta kills buyers anyway.
+  - IV drives option premium pricing. Expensive premiums need bigger spot moves to profit.
+  - Cheap premiums correlate with small expected moves — theta still kills buyers.
   - IV crush post-events (budget, RBI, elections): premium halves even if direction right.
-  - NEVER buy options on known event days — see VIX/Event section below.
+  - NEVER buy options on known event days — see Event section below.
 
 GAMMA:
   - Rate of change of delta. Highest at ATM, near expiry.

@@ -180,8 +180,8 @@ export default function DebugPage() {
               </div>
             </div>
 
-            {/* Token + VIX status row */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4 md:mb-6">
+            {/* Token status row */}
+            <div className="grid grid-cols-1 gap-3 mb-4 md:mb-6">
               {/* Angel One session */}
               <div className="bg-white rounded-xl border border-gray-200 p-4">
                 <div className="text-[10px] text-gray-400 uppercase font-semibold mb-1">Angel One Session</div>
@@ -197,22 +197,6 @@ export default function DebugPage() {
                     <span className="w-2.5 h-2.5 rounded-full bg-red-500 inline-block flex-shrink-0" />
                     <span className="text-sm font-bold text-red-500">Expired — click Session button</span>
                   </div>
-                )}
-              </div>
-
-              {/* India VIX */}
-              <div className="bg-white rounded-xl border border-gray-200 p-4" style={data.vix_blocked ? { borderColor: "#fed7aa" } : {}}>
-                <div className="text-[10px] text-gray-400 uppercase font-semibold mb-1">India VIX</div>
-                {data.india_vix != null ? (
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-bold text-gray-800">{data.india_vix.toFixed(1)}</span>
-                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full"
-                          style={{ background: data.vix_blocked ? "#ffedd5" : "#dcfce7", color: data.vix_blocked ? "#ea580c" : "#15803d" }}>
-                      {data.vix_blocked ? `BLOCKED (threshold ${data.vix_threshold})` : "TRADEABLE"}
-                    </span>
-                  </div>
-                ) : (
-                  <span className="text-sm text-gray-400">—</span>
                 )}
               </div>
             </div>

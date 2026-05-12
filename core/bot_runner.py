@@ -33,28 +33,6 @@ def _is_market_hours() -> bool:
     return dtime(9, 15) <= t <= dtime(15, 30)
 
 
-def _calc_vix_lots(vix: float) -> int:
-    """Return recommended lots based on India VIX at market open.
-
-    Per Mu Hat research: VIX spikes (>30) are historically the best entry
-    windows — returns +32.5% avg over next 3M. So we don't block, we scale down.
-
-    The returned value is clamped to [1, config.MAX_LOTS] so a "calm VIX"
-    can never bump lots above the user-configured upper cap. Set MAX_LOTS=1
-    while baselining; raise once the strategy has proven itself in live.
-    """
-    if vix is None or vix < 20:
-        base = 3   # calm / normal vol — full size if cap allows
-    elif vix < 25:
-        base = 2   # elevated
-    elif vix < 40:
-        base = 1   # high / spike — trade light, stay in
-    else:
-        base = 1   # extreme panic — minimum, don't block
-    max_allowed = max(1, int(getattr(config, "MAX_LOTS", 3)))
-    return max(1, min(base, max_allowed))
-
-
 def _is_event_blocked() -> bool:
     """Return True if today is blocked (config or runtime) and not explicitly unblocked."""
     today_str = now_ist().date().isoformat()
@@ -123,14 +101,10 @@ class BotRunner:
         self._atr_strategy = None   # lazy-init TrendStrategy (ATR Intraday, atr_only mode)
         self.last_heartbeat: Optional[str] = None   # ISO string, IST
         self.last_scores: dict = {}                 # strategy → last signal scores
-        self.last_vix: Optional[float] = None       # India VIX, updated each cycle
-        self.last_vix_regime: str = "UNKNOWN"       # VIX regime string
         self.last_day_bias: dict = ipc.read_day_bias()  # cached; updated by set_bias API
         self.last_option_chain: dict = {}
         self.last_angel_trades: list = []               # Angel One tradeBook, synced every 5m
         self.last_zones: list = []                      # today's watch zones (pre-market briefing)
-        from core.paper_seller import get_paper_seller
-        self._paper_seller = get_paper_seller()
         self._zone_entry_fired_today: bool = False      # zone reversal: one entry per day max
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
@@ -165,15 +139,11 @@ class BotRunner:
             self._atr_fast_check, "cron", minute="2-59/5", second=30,
             id="atr_fast_check",
         )
-        # Paper monitor — 25s after 5m close (after strategies have placed orders)
+        # Option chain refresh — every 15m. (Used to also fetch India VIX
+        # but the VIX-based logic was retired as untested/unreliable.)
         self.scheduler.add_job(
-            self._paper_monitor, "cron", minute="*/5", second=25,
-            id="paper_monitor",
-        )
-        # VIX + option chain refresh — every 15m
-        self.scheduler.add_job(
-            self._vix_refresh, "cron", minute="*/15", second=20,
-            id="vix_refresh",
+            self._option_chain_refresh, "cron", minute="*/15", second=20,
+            id="option_chain_refresh",
         )
         # Force trade fast-poll — every 30s, no-op unless flag file exists
         self.scheduler.add_job(
@@ -189,8 +159,8 @@ class BotRunner:
         self.scheduler.add_job(self._reset_day_bias, "cron", hour=20, minute=0, id="bias_reset")
         # Angel One trade book sync — every 5 minutes during market hours
         self.scheduler.add_job(self._sync_angel_trades, "cron", minute="*/5", second=45, id="angel_sync")
-        # VIX auto-lots — fetch VIX at 9:30 IST and set min_lots for the day
-        self.scheduler.add_job(self._vix_auto_lots_set, "cron", hour=9, minute=30, id="vix_auto_lots")
+        # (VIX auto-lots scheduling retired — min_lots is now driven by
+        # config.MIN_LOTS + dashboard dropdown only, no VIX-based auto-scaling.)
         # Pre-market zone briefing — 9:00 AM, before session starts
         self.scheduler.add_job(self._zone_briefing, "cron", hour=9, minute=0, id="zone_briefing")
         # Position guardian — every 60s during market hours: checks SL/TP on open positions
@@ -211,7 +181,7 @@ class BotRunner:
         self.scheduler.start()
         logger.info(
             "BotRunner started — ATR(5m+5s) "
-            "PaperMon(5m+25s) VIX(15m+20s) ForcePoll(30s) PosGuard(60s)"
+            "OCRefresh(15m+20s) ForcePoll(30s) PosGuard(60s)"
         )
 
     def stop(self):
@@ -265,7 +235,6 @@ class BotRunner:
                     "note": "ATR technical analysis only (sections 1–11)",
                 }
                 self.last_scores["ATR Intraday"] = entry
-                self._paper_seller.on_signal("ATR Intraday", entry)
 
                 # ── Persist every evaluation to signal_log ────────────────────
                 try:
@@ -470,30 +439,17 @@ class BotRunner:
             logger.debug("position_guardian: %s", e)
 
 
-    # ── VIX regime refresh (every 15 min) ────────────────────────────────────
+    # ── Option chain refresh (every 15 min) ──────────────────────────────────
 
-    async def _vix_refresh(self):
+    async def _option_chain_refresh(self):
+        """Pull a fresh option-chain snapshot for the dashboard panel + scorer.
+        VIX fetching has been removed — the VIX-based logic was retired."""
         if not _is_market_hours():
             return
         try:
-            from strategies.vix_filter import get_live_regime
-            loop = asyncio.get_event_loop()
-            regime, vix = await loop.run_in_executor(None, get_live_regime)
-            self.last_vix = vix
-            self.last_vix_regime = regime
-            self.last_scores["VIX-Regime"] = {
-                "score": 0, "direction": "HOLD", "action": "HOLD",
-                "threshold": 0, "will_trade": False,
-                "regime": regime,
-                "vix": vix,
-                "note": f"India VIX={vix:.2f} → {regime}" if vix else f"VIX unavailable → {regime}",
-            }
-            logger.info("VIX refresh: regime=%s vix=%.2f", regime, vix or 0)
-        except Exception as e:
-            logger.error("VIX refresh: %s", e)
-        try:
             from data.option_chain import OptionChainFetcher
-            oc = OptionChainFetcher.get().fetch("NIFTY")
+            loop = asyncio.get_event_loop()
+            oc = await loop.run_in_executor(None, OptionChainFetcher.get().fetch, "NIFTY")
             if oc and not oc.get("error"):
                 self.last_option_chain = oc
         except Exception as e:
@@ -532,17 +488,6 @@ class BotRunner:
         logger.info("force_trade_poll: flag detected — running ATR cycle immediately")
         await self._atr_cycle()
 
-    # ── Paper seller monitor (every 5 min) ───────────────────────────────────
-
-    async def _paper_monitor(self):
-        if not _is_market_hours():
-            return
-        try:
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, self._paper_seller.mark_to_market)
-        except Exception as e:
-            logger.error("Paper monitor: %s", e)
-
     # ── EOD square-off ────────────────────────────────────────────────────────
 
     async def _eod_squareoff(self):
@@ -550,8 +495,6 @@ class BotRunner:
         loop = asyncio.get_event_loop()
         if self._atr_strategy:
             await loop.run_in_executor(None, self._atr_strategy.square_off_all)
-        # Close all paper comparison positions at EOD
-        await loop.run_in_executor(None, self._paper_seller.eod_close)
 
     async def _save_journal(self):
         """Save daily journal JSON at 15:20 (after EOD square-off)."""
@@ -678,29 +621,6 @@ class BotRunner:
                 logger.error("Token refresh: _ensure_logged_in returned False — check ANGEL_* env vars")
         except Exception as e:
             logger.error("Token refresh failed: %s", e, exc_info=True)
-
-    async def _vix_auto_lots_set(self):
-        """Fetch India VIX at 9:30 IST and auto-set min_lots for the day.
-
-        Uses _calc_vix_lots() to map VIX level to a recommended position size.
-        Writes to settings.json so the header dropdown reflects it immediately.
-        User can override the dropdown at any time — this just sets the default.
-        """
-        try:
-            from data.angel_fetcher import AngelFetcher
-            loop = asyncio.get_event_loop()
-            vix = await loop.run_in_executor(None, AngelFetcher.get().fetch_vix)
-            if vix is None:
-                logger.warning("VIX auto-lots: could not fetch India VIX at open — skipping")
-                return
-            recommended = _calc_vix_lots(vix)
-            ipc.write_settings({"min_lots": recommended, "vix_at_open": round(vix, 2), "vix_auto_lots": recommended})
-            logger.info(
-                "VIX auto-lots: India VIX=%.2f → %d lot%s set for today",
-                vix, recommended, "s" if recommended != 1 else "",
-            )
-        except Exception as e:
-            logger.error("VIX auto-lots failed: %s", e)
 
     async def _zone_briefing(self):
         """Pre-market zone briefing at 9:00 AM IST.

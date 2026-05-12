@@ -61,10 +61,8 @@ LOT_SIZES = {
     "NIFTY": 65,   # revised Feb 2026
 }
 MIN_LOTS = 1   # default 1 lot for live baseline — overridable from dashboard header
-# Hard upper cap on lots, applied AFTER the VIX auto-lots calculation.
-# VIX auto-lots at 9:30 IST tries to scale lots with volatility; this cap
-# prevents it from pushing min_lots above MAX_LOTS regardless of VIX regime.
-# Bump this when comfortable scaling position size up.
+# Hard upper cap on lots — caps the value accepted by the /api/settings
+# endpoint and any future auto-scaling. Bump when comfortable scaling up.
 MAX_LOTS = 1
 
 # ── Intraday Timing ────────────────────────────────────────────────────────────

@@ -34,9 +34,6 @@ export default function Home() {
   const prices            = data?.prices            ?? {};
   const strategySummary   = data?.strategy_summary  ?? {};
   const todayJournal      = data?.today_journal     ?? [];
-  const indiaVix          = null;
-  const vixBlocked        = false;
-  const anyOverride       = false;
   const tokenStatus       = data?.token_set_at       ?? null;
   const tokenLive         = tokenStatus?.live        ?? false;
   const tokenSetAt        = tokenStatus?.set_at      ?? null;
@@ -46,7 +43,6 @@ export default function Home() {
   const optionChain       = data?.option_chain      ?? null;
 
   const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-  const vixOverrideSaving = false;
   const [biasSaving, setBiasSaving]   = useState(false);
   const [lotsSaving, setLotsSaving]   = useState(false);
   const [lotsValue, setLotsValue]     = useState<number>(1);
@@ -68,10 +64,6 @@ export default function Home() {
       setBiasNote(dayBiasData.note);
     }
   }, [dayBiasData.note, biasEdit]);
-
-  async function toggleVixOverride() {
-    return;
-  }
 
   async function saveBias(bias: string, note: string) {
     setBiasSaving(true);
@@ -171,41 +163,19 @@ export default function Home() {
                     BOT STOPPED
                   </span>
                 ) : null}
-                {/* India VIX badge + override toggle */}
-                {indiaVix !== null && (
-                  <div className="flex items-center gap-1">
-                    <span className="flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full"
-                          style={vixBlocked
-                            ? { background: "#fee2e2", color: "#dc2626" }
-                            : anyOverride
-                            ? { background: "#fef3c7", color: "#b45309" }
-                            : { background: "#f0fdf4", color: "#15803d" }}>
-                      VIX {indiaVix.toFixed(1)}
-                      {vixBlocked  && <span className="ml-0.5">⛔</span>}
-                      {anyOverride && <span className="ml-0.5">⚡</span>}
-                    </span>
-                    <button
-                      onClick={toggleVixOverride}
-                      disabled={vixOverrideSaving}
-                      title={anyOverride ? "VIX gate bypassed — click to restore" : "VIX gate active — click to bypass"}
-                      className="text-[10px] font-bold px-2 py-0.5 rounded-full border transition-all disabled:opacity-50"
-                      style={anyOverride
-                        ? { background: "#fef3c7", color: "#b45309", borderColor: "#f59e0b" }
-                        : { background: "#f3f4f6", color: "#6b7280", borderColor: "#d1d5db" }}>
-                      {anyOverride ? "VIX Override ON" : "VIX Override OFF"}
-                    </button>
-                  </div>
-                )}
-                {/* Trading mode — REAL MONEY vs PAPER. Red bg is intentional
-                    on REAL MONEY as a visual "watch out, real funds at stake" cue. */}
+                {/* Trading mode — bot is always intended to be live. The
+                    paper variant only appears when TRADING_MODE=paper or
+                    Angel One creds are missing (MockBroker fallback). If
+                    you ever see the yellow warning chip in production,
+                    something's wrong with the .env or broker session. */}
                 <span className="text-[10px] font-bold px-2 py-0.5 rounded-full"
                       title={mode === "live"
                         ? "Live trading — orders go to Angel One with real funds"
-                        : "Paper trading — orders simulated, no real money"}
+                        : "Bot is NOT trading live — check TRADING_MODE in .env"}
                       style={mode === "live"
                         ? { background: "#fee2e2", color: "#dc2626" }
-                        : { background: "#dbeafe", color: "#1d4ed8" }}>
-                  {mode === "live" ? "💰 REAL MONEY" : "📝 PAPER MODE"}
+                        : { background: "#fef3c7", color: "#b45309" }}>
+                  {mode === "live" ? "💰 LIVE TRADING" : "⚠ NOT LIVE"}
                 </span>
                 {/* Angel One broker session — separate from trading mode.
                     "ANGEL" instead of "TOKEN LIVE" so it doesn't share the

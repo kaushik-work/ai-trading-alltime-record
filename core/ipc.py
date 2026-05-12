@@ -35,7 +35,7 @@ _PERSISTENT_FLAGS = {
     "market_holidays.json",   # frontend-added NSE holidays
     "event_blocks.json",      # custom Budget / RBI MPC dates
     "event_unblocks.json",    # force-allow overrides
-    "settings.json",          # min_lots, vix_at_open, vix_auto_lots
+    "settings.json",          # min_lots and any future runtime settings
     "day_bias.json",          # today's BULLISH/BEARISH note
     "sl_orders.json",         # live exchange SL-M order IDs (per strategy)
     "tp_orders.json",         # live exchange TP order IDs (per strategy)
@@ -215,9 +215,7 @@ def is_market_holiday(date_str: str) -> tuple[bool, str]:
 SETTINGS_FILE = FLAGS_DIR / "settings.json"
 
 _SETTINGS_DEFAULTS = {
-    "min_lots": 3,
-    "vix_at_open": None,   # India VIX fetched at 9:30 AM IST
-    "vix_auto_lots": None, # bot-recommended lots based on VIX at open
+    "min_lots": 1,
 }
 
 
