@@ -39,7 +39,7 @@ def _is_cloud_host() -> bool:
 
     Override for special cases: set ENABLE_LOCAL_SCHEDULERS=1 in the
     environment (rare — only if intentionally debugging schedules on a
-    laptop with TRADING_MODE=paper).
+    laptop — be VERY careful, this enables live trading from a laptop).
     """
     if os.environ.get("ENABLE_LOCAL_SCHEDULERS") == "1":
         return True
@@ -563,8 +563,6 @@ class BotRunner:
         placed or Windows-bot trades are visible in the P&L dashboard.
         For each SELL: if our DB shows that symbol open, compute real PnL and close.
         """
-        if config.IS_PAPER:
-            return
         try:
             from data.angel_fetcher import AngelFetcher
             loop = asyncio.get_event_loop()

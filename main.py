@@ -129,7 +129,7 @@ def main():
     print(f"""
 ╔══════════════════════════════════════════════════════════╗
 ║         AI Trading Bot — All-Time Record                 ║
-║  Mode   : {'PAPER (Simulation)      ' if config.IS_PAPER else 'LIVE TRADING            '}                ║
+║  Mode   : LIVE TRADING                                    ║
 ║  Phase  : {config.TRADING_PHASE} | Intraday NIFTY & BANKNIFTY           ║
 ║  Budget : Rs.{config.STARTING_BUDGET:,} | Target A: Rs.1.5L | Target B: Rs.15L ║
 ║  Window : {config.INTRADAY_START} - {config.INTRADAY_EXIT_BY} IST | SL:{config.STOP_LOSS_PCT}% TP:{config.TAKE_PROFIT_PCT}%              ║

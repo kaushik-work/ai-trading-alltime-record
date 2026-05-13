@@ -31,13 +31,9 @@ def create_token(username: str) -> str:
 
 
 def _assert_secure_auth_config() -> None:
-    """Fail closed in live mode if dashboard auth still uses defaults."""
-    try:
-        import config
-        live = not config.IS_PAPER
-    except Exception:
-        live = os.getenv("TRADING_MODE") == "live"
-    if live and (
+    """Fail closed if dashboard auth still uses the placeholder defaults.
+    The bot is always live now, so this check always applies."""
+    if (
         SECRET_KEY == "tradingbot-secret-change-in-prod"
         or DASHBOARD_PASS == "crazyheadworks"
     ):

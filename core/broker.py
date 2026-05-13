@@ -12,7 +12,6 @@ _POSITIONS_CACHE_TTL = 30  # seconds — avoids hitting Angel One rate limit
 logger = logging.getLogger(__name__)
 
 _BROKER_INSTANCE = None
-_BROKER_MODE = None
 
 # Angel One product type mapping
 _PRODUCT_MAP = {
@@ -45,124 +44,11 @@ _ORDER_TYPE_MAP = {
 }
 
 
-class MockBroker:
-    """Paper trading broker — simulates order execution without real money."""
-
-    def __init__(self):
-        self.positions = {}
-        self.orders = []
-        self.balance = float(config.STARTING_BUDGET)
-        self.pnl = 0.0
-        logger.info("Paper trading mode active. Virtual balance: ₹%.2f", self.balance)
-
-    def get_quote(self, symbol: str) -> dict:
-        """Fetch live spot price from Angel One even in paper mode."""
-        from data.angel_fetcher import AngelFetcher
-        try:
-            price = AngelFetcher.get().get_index_ltp(symbol)
-            if price and price > 0:
-                return {"symbol": symbol, "last_price": price, "timestamp": now_ist().isoformat()}
-            from core.angel_error_log import log_error as _log_err
-            _log_err("get_quote", "LTP returned 0", symbol=symbol)
-        except Exception as e:
-            logger.warning("MockBroker.get_quote: Angel One LTP failed for %s: %s", symbol, e)
-            from core.angel_error_log import log_error as _log_err
-            _log_err("get_quote", str(e), symbol=symbol)
-        return {"symbol": symbol, "last_price": 0, "timestamp": now_ist().isoformat()}
-
-    def place_order(self, symbol: str, side: str, quantity: int,
-                    order_type: str = "MARKET", price: float = 0,
-                    exchange: str = "NFO", product: str = "MIS",
-                    variety: str = "regular", validity: str = "DAY",
-                    trigger_price: float | None = None, tag: str | None = None) -> dict:
-        paper_order_id = f"PAPER-{now_ist().strftime('%Y%m%d%H%M%S%f')}-{len(self.orders)+1:03d}"
-        order = {
-            "order_id": paper_order_id,
-            "symbol": symbol,
-            "side": side,
-            "quantity": quantity,
-            "order_type": order_type,
-            "exchange": exchange,
-            "product": product,
-            "variety": variety,
-            "validity": validity,
-            "trigger_price": trigger_price,
-            "tag": tag,
-            "price": price or self.get_quote(symbol)["last_price"],
-            "status": "COMPLETE",
-            "timestamp": now_ist().isoformat(),
-        }
-        self.orders.append(order)
-
-        filled_price = order["price"]
-
-        if side == "BUY":
-            premium_cost = min(filled_price * quantity, float(config.MAX_TRADE_AMOUNT))
-            if premium_cost > self.balance:
-                order["status"] = "REJECTED"
-                logger.warning("Order rejected: insufficient balance for %s (need ₹%.0f, have ₹%.0f)",
-                               symbol, premium_cost, self.balance)
-                return order
-            self.balance -= premium_cost
-            self.positions[symbol] = self.positions.get(symbol, {
-                "quantity": 0, "avg_price": 0, "premium_cost": 0,
-                "exchange": exchange, "product": product,
-            })
-            pos = self.positions[symbol]
-            total_qty = pos["quantity"] + quantity
-            pos["avg_price"] = ((pos["avg_price"] * pos["quantity"]) + filled_price * quantity) / total_qty
-            pos["quantity"] = total_qty
-            pos["premium_cost"] = pos.get("premium_cost", 0) + premium_cost
-
-        elif side == "SELL":
-            pos = self.positions.get(symbol)
-            if not pos or pos["quantity"] < quantity:
-                order["status"] = "REJECTED"
-                logger.warning("Order rejected: insufficient position for %s", symbol)
-                return order
-            pnl = (filled_price - pos["avg_price"]) * quantity
-            self.pnl += pnl
-            close_ratio = quantity / pos["quantity"]
-            returned_premium = pos.get("premium_cost", 0) * close_ratio
-            self.balance += returned_premium + pnl
-            order["pnl"] = round(pnl, 2)
-            order["avg_buy_price"] = pos["avg_price"]
-            pos["quantity"] -= quantity
-            pos["premium_cost"] = pos.get("premium_cost", 0) - returned_premium
-            if pos["quantity"] == 0:
-                del self.positions[symbol]
-
-        logger.info("[PAPER] %s %d %s @ ₹%.2f | Balance: ₹%.2f", side, quantity, symbol, filled_price, self.balance)
-        return order
-
-    def get_positions(self) -> dict:
-        return self.positions
-
-    def get_unrealized_pnl_pct(self, symbol: str, current_price: float) -> float:
-        pos = self.positions.get(symbol)
-        if not pos or pos["avg_price"] == 0:
-            return 0.0
-        return ((current_price - pos["avg_price"]) / pos["avg_price"]) * 100
-
-    def get_portfolio_summary(self) -> dict:
-        return {
-            "balance": round(self.balance, 2),
-            "pnl": round(self.pnl, 2),
-            "open_positions": len(self.positions),
-            "total_orders": len(self.orders),
-        }
-
-    def cancel_order(self, order_id: str, variety: str = "regular") -> bool:
-        logger.info("[PAPER] cancel_order %s (no-op in paper mode)", order_id)
-        return True
-
-    def preflight_order(self, **kwargs) -> dict:
-        return {
-            "ok": True,
-            "mode": "paper",
-            "checks": [{"name": "paper_mode", "ok": True, "detail": "Paper broker accepts simulated orders"}],
-            "resolved": kwargs,
-        }
+# MockBroker (paper-trading simulator) removed entirely. The bot is
+# live-trading-only via AngelOneBroker. If Angel One credentials are
+# missing or the session fails to establish, AngelOneBroker.__init__
+# raises RuntimeError and the bot refuses to start — no silent
+# fallback to simulation.
 
 
 class AngelOneBroker:
@@ -503,10 +389,8 @@ class AngelOneBroker:
 
 
 def get_broker():
-    """Factory — returns paper or live broker based on config."""
-    global _BROKER_INSTANCE, _BROKER_MODE
-    mode = "paper" if config.IS_PAPER else "live"
-    if _BROKER_INSTANCE is None or _BROKER_MODE != mode:
-        _BROKER_INSTANCE = MockBroker() if config.IS_PAPER else AngelOneBroker()
-        _BROKER_MODE = mode
+    """Return the live Angel One broker singleton. There is no paper variant."""
+    global _BROKER_INSTANCE
+    if _BROKER_INSTANCE is None:
+        _BROKER_INSTANCE = AngelOneBroker()
     return _BROKER_INSTANCE

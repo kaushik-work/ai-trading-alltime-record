@@ -50,7 +50,7 @@ class TrendStrategy:
         self.broker = get_broker()
         self.memory = TradeMemory()
         self.records = RecordTracker()
-        self.market = get_market_data(self.broker if not config.IS_PAPER else None)
+        self.market = get_market_data(self.broker)
         self.stop_loss_pct = config.STOP_LOSS_PCT
         self.rr_ratio = getattr(config, "ATR_RR_RATIO", 3.0)
         self.take_profit_pct = config.STOP_LOSS_PCT * self.rr_ratio
@@ -58,9 +58,8 @@ class TrendStrategy:
         self._sl_orders: dict[str, str] = self._load_sl_orders()
         self._tp_orders: dict[str, str] = self._load_tp_orders()
         logger.info(
-            "TrendStrategy[%s] initialized | score_mode=%s | Trading: %s | Phase: %s | Budget: ₹%s",
+            "TrendStrategy[%s] initialized | score_mode=%s | LIVE | Phase: %s | Budget: ₹%s",
             strategy_name, score_mode,
-            "PAPER" if config.IS_PAPER else "LIVE",
             config.TRADING_PHASE,
             f"{config.STARTING_BUDGET:,}",
         )
@@ -458,20 +457,6 @@ class TrendStrategy:
 
     # ── Order execution ────────────────────────────────────────────────────────
 
-    def _estimate_paper_option_ltp(self, symbol: str, option_type: str,
-                                   spot_price: float, strike: int) -> tuple[str, float]:
-        """Paper-only premium model so simulations can proceed without live NFO quotes."""
-        intrinsic = max(0.0, spot_price - strike) if option_type == "CE" else max(0.0, strike - spot_price)
-        distance = abs(spot_price - strike)
-        base_time_value = max(18.0, spot_price * 0.0035)
-        time_value = max(8.0, base_time_value - distance * 0.45)
-        premium = round(intrinsic * 0.55 + time_value, 2)
-        return "", max(1.0, premium)
-
-    def _paper_option_symbol(self, symbol: str, expiry: date, strike: int, option_type: str) -> str:
-        expiry_str = expiry.isoformat() if hasattr(expiry, "isoformat") else str(expiry)
-        return f"{symbol}-{expiry_str}-{strike}{option_type}"
-
     def _get_option_ltp(self, symbol: str, option_type: str, current_price: float,
                         strike: int = None) -> tuple[str | None, int, float | None, date | None]:
         """Find the strike whose live premium is in [MIN_OPTION_PREMIUM, MAX_OPTION_PREMIUM].
@@ -525,30 +510,6 @@ class TrendStrategy:
 
         except Exception as e:
             logger.warning("Option LTP fetch failed for %s %s: %s", symbol, option_type, e)
-
-        if config.IS_PAPER:
-            # Paper mode: find the strike whose model premium is in range
-            best_strike, best_prem = atm_strike, None
-            for i in range(11):
-                for direction in ([0] if i == 0 else [-1, 1]):
-                    candidate = atm_strike + direction * i * step
-                    _, prem = self._estimate_paper_option_ltp(symbol, option_type, current_price, candidate)
-                    if min_prem <= prem <= max_prem:
-                        best_strike, best_prem = candidate, prem
-                        break
-                    if best_prem is None or abs(prem - (min_prem + max_prem) / 2) < abs(best_prem - (min_prem + max_prem) / 2):
-                        best_strike, best_prem = candidate, prem
-                if best_prem and min_prem <= best_prem <= max_prem:
-                    break
-            if expiry is None:
-                try:
-                    from data.angel_fetcher import AngelFetcher
-                    expiry = AngelFetcher.nearest_weekly_expiry()
-                except Exception:
-                    expiry = today_ist()
-            paper_symbol = self._paper_option_symbol(symbol, expiry, best_strike, option_type)
-            logger.info("Paper strike in range: %s @ ₹%.2f", paper_symbol, best_prem)
-            return paper_symbol, best_strike, best_prem, expiry
 
         msg = f"Option LTP unavailable for {symbol} {option_type}"
         logger.error(msg + " — skipping trade")
@@ -643,7 +604,7 @@ class TrendStrategy:
                     self.strategy_name, option_symbol, option_type, option_ltp,
                 )
                 return {"status": "SKIPPED", "reason": f"premium ₹{option_ltp:.2f} too low (min ₹5)"}
-            if not config.IS_PAPER and hasattr(self.broker, "preflight_order"):
+            if hasattr(self.broker, "preflight_order"):
                 preflight = self.broker.preflight_order(
                     symbol=symbol,
                     side=side,
@@ -690,7 +651,7 @@ class TrendStrategy:
             # Fetch actual fill price from Angel One — MARKET orders fill at ask,
             # which can be ₹5-15 above LTP. Using LTP for SL/TP makes SL too tight.
             _entry_price = option_ltp  # fallback if fill price unavailable
-            if order.get("status") in ("COMPLETE", "PLACED") and not config.IS_PAPER:
+            if order.get("status") in ("COMPLETE", "PLACED"):
                 order_id_for_fill = order.get("order_id")
                 if order_id_for_fill and hasattr(self.broker, "get_fill_price"):
                     actual_fill = self.broker.get_fill_price(order_id_for_fill)
@@ -734,7 +695,7 @@ class TrendStrategy:
                 self.strategy_name, _entry_price, _atr, _sl_dist,
                 order["sl_price"], order["tp_price"], self.rr_ratio,
             )
-            if order.get("status") in ("COMPLETE", "PLACED") and not config.IS_PAPER:
+            if order.get("status") in ("COMPLETE", "PLACED"):
                 sl_trigger = order["sl_price"]
                 try:
                     sl_ord = self.broker.place_order(
@@ -816,7 +777,7 @@ class TrendStrategy:
             else:
                 # Cancel both SL-M and TP LIMIT before placing normal exit
                 # to avoid double-sell / naked short on exchange.
-                if not config.IS_PAPER:
+                if True:  # live trading only
                     self._cancel_sl_order(option_symbol)
                     self._cancel_tp_order(option_symbol)
     
@@ -825,7 +786,7 @@ class TrendStrategy:
                 )
                 if exit_ltp is None:
                     return {"status": "SKIPPED", "reason": "option LTP unavailable at exit"}
-                if not config.IS_PAPER and hasattr(self.broker, "preflight_order"):
+                if hasattr(self.broker, "preflight_order"):
                     preflight = self.broker.preflight_order(
                         symbol=pos.get("underlying", symbol),
                         side=side,

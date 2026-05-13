@@ -315,7 +315,7 @@ def _build_snapshot() -> dict:
         "day_bias": runner.last_day_bias,
         "option_chain": runner.last_option_chain,
         "watch_zones":  runner.last_zones,
-        "mode": "paper" if config.IS_PAPER else "live",
+        "mode": "live",   # paper trading was removed — always live now
         "pnl": {
             "total": round(total_pnl, 2),
             "today": round(today_pnl, 2),

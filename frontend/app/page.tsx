@@ -163,20 +163,9 @@ export default function Home() {
                     BOT STOPPED
                   </span>
                 ) : null}
-                {/* Trading mode — bot is always intended to be live. The
-                    paper variant only appears when TRADING_MODE=paper or
-                    Angel One creds are missing (MockBroker fallback). If
-                    you ever see the yellow warning chip in production,
-                    something's wrong with the .env or broker session. */}
-                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full"
-                      title={mode === "live"
-                        ? "Live trading — orders go to Angel One with real funds"
-                        : "Bot is NOT trading live — check TRADING_MODE in .env"}
-                      style={mode === "live"
-                        ? { background: "#fee2e2", color: "#dc2626" }
-                        : { background: "#fef3c7", color: "#b45309" }}>
-                  {mode === "live" ? "💰 LIVE TRADING" : "⚠ NOT LIVE"}
-                </span>
+                {/* Trading mode badge removed — bot is live-trading only.
+                    Operational status is now conveyed by BOT RUNNING and
+                    ANGEL ✓ chips. If those are green, you're trading live. */}
                 {/* Angel One broker session — separate from trading mode.
                     "ANGEL" instead of "TOKEN LIVE" so it doesn't share the
                     word 'live' with the bot/mode chips. */}

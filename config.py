@@ -3,9 +3,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# ── Secrets (env only — never hardcode) ───────────────────────────────────────
-TRADING_MODE         = os.getenv("TRADING_MODE", "live")    # "paper" | "live"
-IS_PAPER             = TRADING_MODE == "paper"
+# ── Mode ──────────────────────────────────────────────────────────────────────
+# Live trading only. Paper trading + MockBroker were removed entirely; the
+# TRADING_MODE env var is no longer read. IS_PAPER is kept as a constant
+# False for any legacy call site that imports it.
+IS_PAPER = False
 
 # ── Angel One SmartAPI ────────────────────────────────────────────────────────
 ANGEL_API_KEY        = os.getenv("ANGEL_API_KEY", "")

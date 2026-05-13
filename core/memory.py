@@ -161,7 +161,9 @@ class TradeMemory:
                 # Honor explicit "mode" on the order (e.g. virtual_rejected) so
                 # rejected entries and their virtual exits aren't misclassified
                 # as live/paper trades on the PPnL dashboard.
-                order.get("mode") or ("paper" if config.IS_PAPER else "live"),
+                # Honor explicit order["mode"] (e.g. virtual_rejected). Default
+                # to "live" — paper trading was removed from the bot.
+                order.get("mode") or "live",
                 order.get("strategy"),
                 order.get("underlying"),
                 order.get("option_type"),

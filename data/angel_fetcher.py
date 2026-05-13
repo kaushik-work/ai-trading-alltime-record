@@ -490,7 +490,7 @@ class AngelFetcher:
             logger.warning("AngelFetcher.fetch_vix_historical_df: %s", e)
             return None
 
-    # ── Index LTP (for MockBroker paper trading) ──────────────────────────────
+    # ── Index LTP (NIFTY / BANKNIFTY spot price) ──────────────────────────────
 
     def get_index_ltp(self, symbol: str) -> Optional[float]:
         """Return live spot price for NIFTY/BANKNIFTY."""
