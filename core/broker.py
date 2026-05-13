@@ -51,6 +51,41 @@ _ORDER_TYPE_MAP = {
 # fallback to simulation.
 
 
+def _extract_order_id(resp) -> str | None:
+    """Pull the order-id out of Angel One placeOrder's response, regardless
+    of shape. smartapi-python returns different structures across versions:
+
+        1. {"status": True, "data": {"orderid": "NXXX"}}      ← canonical
+        2. {"status": True, "data": "NXXX"}                   ← string in data
+        3. "NXXX"                                              ← raw string
+        4. {"status": True, "orderid": "NXXX"}                ← top-level
+
+    Returns the orderid string if any of those shapes matches, else None.
+    Critical: an early version of this code only handled shape (1) and
+    treated the rest as "silent rejection", which threw away real successful
+    orders and prevented downstream SL/TP placement.
+    """
+    # Shape 3: raw string return
+    if isinstance(resp, str):
+        return resp.strip() or None
+    if not isinstance(resp, dict):
+        return None
+    # Shape 4: orderid at top level
+    top_oid = resp.get("orderid") or resp.get("orderId") or resp.get("uniqueorderid")
+    if isinstance(top_oid, str) and top_oid.strip():
+        return top_oid.strip()
+    data = resp.get("data")
+    # Shape 2: data is the orderid string directly
+    if isinstance(data, str):
+        return data.strip() or None
+    # Shape 1: data is a dict with orderid inside
+    if isinstance(data, dict):
+        oid = data.get("orderid") or data.get("orderId") or data.get("uniqueorderid")
+        if isinstance(oid, str) and oid.strip():
+            return oid.strip()
+    return None
+
+
 class AngelOneBroker:
     """Live broker using Angel One SmartAPI (https://smartapi.angelbroking.com/)."""
 
@@ -237,15 +272,27 @@ class AngelOneBroker:
                 params["triggerprice"] = str(trigger_price)
 
             resp = self._api.placeOrder(params)
-            _data = (resp.get("data") or {}) if isinstance(resp, dict) else {}
-            order_id = _data.get("orderid") if isinstance(_data, dict) else None
+
+            # ── Robust orderid extraction ─────────────────────────────────────
+            # smartapi-python's placeOrder returns the orderid in different
+            # shapes across versions / endpoints — we've observed:
+            #   1. {"status": True, "data": {"orderid": "NXXX"}}        ← dict
+            #   2. {"status": True, "data": "NXXX"}                     ← string in data
+            #   3. "NXXX"                                                ← raw string return
+            #   4. {"status": True, "orderid": "NXXX"}                  ← top-level
+            # Previous code only handled (1) and treated (2)–(4) as "silent
+            # rejection", causing real successful orders to be marked REJECTED
+            # in our DB and preventing the SL/TP from being placed downstream.
+            order_id = _extract_order_id(resp)
+
             if not order_id:
-                # Covers both explicit rejections (status:False) and silent rejections
-                # (status:True but data:None — Angel One silently rejects bad SL params)
+                # No orderid in ANY known shape — log the raw response so we
+                # can spot new shapes Angel One introduces in future SDK versions.
                 msg = ""
                 if isinstance(resp, dict):
                     msg = resp.get("message") or resp.get("errorcode") or ""
-                raise RuntimeError(msg or "order placed but no orderid returned (silent rejection)")
+                logger.error("[LIVE/ANGEL] could not parse orderid from response: %r", resp)
+                raise RuntimeError(msg or f"order placed but no orderid returned (raw: {resp!r})")
             logger.info("[LIVE/ANGEL] %s %d %s@%s | Order ID: %s", side, quantity, symbol, exchange, order_id)
             return {
                 "order_id": order_id, "symbol": symbol, "side": side, "quantity": quantity,
