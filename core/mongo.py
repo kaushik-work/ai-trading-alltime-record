@@ -97,6 +97,18 @@ def _ensure_indexes(db) -> None:
         db.daily_journals.create_index([("date", ASCENDING)], unique=True)
         db.option_snapshots.create_index([("timestamp", DESCENDING)])
         db.option_snapshots.create_index([("date", ASCENDING), ("symbol", ASCENDING)])
+        # Unique compound index — bulletproofs against accidental double-runners
+        # (e.g. laptop NiftyDailyRunner firing alongside the droplet collector
+        # would otherwise produce duplicate docs per (date, symbol, timestamp,
+        # strike, option_type)). pymongo's insert_many(ordered=False) will
+        # gracefully skip duplicate-key errors and continue inserting the rest.
+        db.option_snapshots.create_index(
+            [("date", ASCENDING), ("symbol", ASCENDING),
+             ("timestamp", ASCENDING), ("strike", ASCENDING),
+             ("option_type", ASCENDING)],
+            unique=True,
+            name="unique_snapshot",
+        )
         db.records.create_index([("description", ASCENDING)], unique=True)
         db.weekly_reviews.create_index([("week", ASCENDING)], unique=True)
     except Exception as e:
