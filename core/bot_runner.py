@@ -11,6 +11,8 @@ Strategy:
 
 import asyncio
 import logging
+import os
+import platform
 from datetime import datetime, date, time as dtime
 from core.utils import now_ist
 from zoneinfo import ZoneInfo
@@ -24,6 +26,25 @@ from core.memory import TradeMemory
 from core import ipc
 
 logger = logging.getLogger(__name__)
+
+
+def _is_cloud_host() -> bool:
+    """True only when running on a Linux server (the droplet).
+
+    Production scheduling — Angel One orders, option chain collection,
+    daily token refresh, EOD square-off — must only fire from the
+    DigitalOcean droplet. Running the same code locally on a Windows or
+    macOS laptop during development would otherwise duplicate everything
+    and cause real-money trades from a dev machine.
+
+    Override for special cases: set ENABLE_LOCAL_SCHEDULERS=1 in the
+    environment (rare — only if intentionally debugging schedules on a
+    laptop with TRADING_MODE=paper).
+    """
+    if os.environ.get("ENABLE_LOCAL_SCHEDULERS") == "1":
+        return True
+    return platform.system() == "Linux"
+
 
 def _is_market_hours() -> bool:
     now = datetime.now(IST)
@@ -111,6 +132,24 @@ class BotRunner:
 
     def start(self):
         ipc.clear_all_flags()
+
+        # ── OS gate ────────────────────────────────────────────────────────────
+        # Scheduled jobs (ATR cycle, EOD square-off, token refresh, option-chain
+        # fetch, etc.) MUST only fire from the DigitalOcean droplet. If this
+        # code is running on a Windows or macOS laptop — e.g. someone runs
+        # `uvicorn api.server:app` locally for frontend dev — we skip the
+        # entire scheduler. The API stays up so the dashboard works, but no
+        # cron jobs trigger trades or duplicate the cloud's snapshot writes.
+        if not _is_cloud_host():
+            logger.warning(
+                "BotRunner: scheduled jobs DISABLED (platform=%s, not Linux). "
+                "API will serve dashboard reads but no cycles, trades, "
+                "token-refresh, or option-chain snapshots will fire. "
+                "Set ENABLE_LOCAL_SCHEDULERS=1 to override (only for "
+                "deliberate local debugging in paper mode).",
+                platform.system(),
+            )
+            return
 
         # Warm up Angel One login so first cycle doesn't pay the auth cost
         try:

@@ -20,6 +20,8 @@ Usage:
 import argparse
 import csv
 import logging
+import os
+import platform
 import sys
 import time
 from datetime import date, datetime, time as dtime, timedelta
@@ -34,6 +36,22 @@ p.add_argument("--interval", type=int, default=5, help="snapshot interval minute
 p.add_argument("--strikes",  type=int, default=8, help="ATM +/- N strikes")
 p.add_argument("--dry-run",  action="store_true", help="skip market hours check")
 args = p.parse_args()
+
+# ── OS gate ──────────────────────────────────────────────────────────────────
+# This collector is the canonical option-chain snapshot writer and lives in
+# the droplet's `collector` container. Running it on a Windows / macOS laptop
+# (e.g. via Task Scheduler or a cron) AT THE SAME TIME as the droplet causes
+# duplicate Mongo writes and competing Angel One API calls. Refuse to run
+# anywhere except Linux unless explicitly overridden.
+if platform.system() != "Linux" and os.environ.get("ENABLE_LOCAL_SCHEDULERS") != "1":
+    print(
+        f"collect_option_snapshots: REFUSING to run on {platform.system()}. "
+        f"This script is intended for the cloud droplet only.\n"
+        f"If you really need to run it locally for debugging, set "
+        f"ENABLE_LOCAL_SCHEDULERS=1 and prefer TRADING_MODE=paper.\n"
+        f"Otherwise: disable the Windows Task Scheduler entry that launched this."
+    )
+    sys.exit(0)
 
 IST          = ZoneInfo("Asia/Kolkata")
 BASE         = Path(__file__).parent.parent
