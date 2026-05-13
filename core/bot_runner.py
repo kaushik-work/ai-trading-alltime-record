@@ -570,10 +570,24 @@ class BotRunner:
             self.last_angel_trades = angel_trades
 
             # ── Import missing BUY trades ─────────────────────────────────────
+            # Skip rows with qty=0 or price=0. Angel One's tradeBook sometimes
+            # echoes cancelled / rejected / placeholder orders with zero values
+            # — importing those as OPEN positions creates phantom entries that
+            # block tomorrow's duplicate guard and pollute PPnL.
             buys = [t for t in angel_trades if t["side"] == "BUY"]
             for buy in buys:
                 symbol   = buy["symbol"]
                 order_id = buy["order_id"]
+                qty      = int(buy.get("quantity") or 0)
+                price    = float(buy.get("price") or 0)
+                if qty <= 0 or price <= 0:
+                    logger.warning(
+                        "angel_sync: skipping zero-value tradeBook entry "
+                        "(order=%s symbol=%s qty=%s price=%s) — likely cancelled "
+                        "or rejected upstream",
+                        order_id, symbol, qty, price,
+                    )
+                    continue
                 existing = self.memory.get_open_trade_for_symbol(symbol)
                 if existing and existing.get("order_id") == order_id:
                     continue  # already in DB
@@ -581,8 +595,8 @@ class BotRunner:
                     "order_id":  order_id,
                     "symbol":    symbol,
                     "side":      "BUY",
-                    "quantity":  buy["quantity"],
-                    "price":     buy["price"],
+                    "quantity":  qty,
+                    "price":     price,
                     "pnl":       0,
                     "status":    "OPEN",
                     "timestamp": now_ist().isoformat(),
@@ -591,18 +605,21 @@ class BotRunner:
                 decision = {"reasoning": f"imported from Angel One trade book: {symbol}", "confidence": 1.0, "risk_level": "UNKNOWN"}
                 self.memory.log_trade(order, decision)
                 logger.info("angel_sync: imported BUY %s qty=%d @ ₹%.2f (order %s)",
-                            symbol, buy["quantity"], buy["price"], order_id)
+                            symbol, qty, price, order_id)
 
             # ── Close matched SELL trades ─────────────────────────────────────
             sells = [t for t in angel_trades if t["side"] == "SELL"]
             for sell in sells:
-                symbol = sell["symbol"]
+                symbol      = sell["symbol"]
+                sell_price  = float(sell.get("price") or 0)
+                sell_qty    = int(sell.get("quantity") or 0)
+                if sell_price <= 0 or sell_qty <= 0:
+                    continue   # skip cancelled / placeholder sell rows
                 open_trade = self.memory.get_open_trade_for_symbol(symbol)
                 if not open_trade:
                     continue
                 buy_price  = float(open_trade.get("price") or 0)
-                sell_price = sell["price"]
-                qty        = int(open_trade.get("quantity") or sell["quantity"])
+                qty        = int(open_trade.get("quantity") or sell_qty)
                 pnl        = round((sell_price - buy_price) * qty, 2)
                 order_id   = open_trade.get("order_id", "")
                 self.memory.close_trade(order_id, pnl)
