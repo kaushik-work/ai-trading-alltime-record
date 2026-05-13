@@ -128,15 +128,22 @@ def _get_account_status(today_round_trips: list) -> dict:
     if _account_cache["data"] is not None and now - _account_cache["checked_at"] < _ACCOUNT_CACHE_TTL:
         cached = dict(_account_cache["data"])
     else:
-        cached = {"available_cash": None, "is_unfunded": False, "error": None}
+        cached = {"available_cash": None, "net_value": None, "locked_cash": None,
+                  "is_unfunded": False, "error": None}
         try:
             from core.broker import get_broker
             broker = get_broker()
             summary = broker.get_portfolio_summary() or {}
-            bal = float(summary.get("balance") or 0)
-            cached["available_cash"] = bal
+            # balance == available_cash (truly free, per the post-fix logic in
+            # core/broker.py). net is total account value, may include pledged
+            # margin / unsettled funds / position MTM that can't fund new BUYs.
+            avail = float(summary.get("available_cash") or summary.get("balance") or 0)
+            net   = float(summary.get("net") or 0)
+            cached["available_cash"] = avail
+            cached["net_value"]      = net
+            cached["locked_cash"]    = max(0.0, net - avail)  # what's NOT free
             # < ₹5000 is effectively unfunded for 1 lot NIFTY option buying
-            cached["is_unfunded"]    = bal < 5000
+            cached["is_unfunded"]    = avail < 5000
         except Exception as e:
             cached["error"] = str(e)
         _account_cache["data"]       = cached

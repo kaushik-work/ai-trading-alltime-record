@@ -463,12 +463,25 @@ class AngelOneBroker:
             rms = self._api.rmsLimit()
             if rms and rms.get("status") and rms.get("data"):
                 d = rms["data"]
-                net = float(d.get("net", 0) or 0)
-                available = float(d.get("availablecash", 0) or d.get("net", 0) or 0)
-                balance = net if net > 0 else available
+                net            = float(d.get("net", 0) or 0)
+                available_cash = float(d.get("availablecash", 0) or 0)
+                # CRITICAL: balance used for trade decisions (preflight cash check,
+                # _calc_quantity position sizing) MUST be availablecash, not net.
+                # net includes pledged collateral, MTM PnL of holdings, unsettled
+                # funds and other locked amounts that Angel One won't let us spend
+                # on a fresh MIS option BUY. Fall back to net only if Angel One
+                # didn't return availablecash at all (very rare; usually 0 is the
+                # accurate answer in that case anyway).
+                balance = available_cash if available_cash > 0 else net
                 positions = self.get_positions()
                 pnl = sum(float(p.get("unrealised", 0) or 0) for p in positions.values())
-                result = {"balance": round(balance, 2), "pnl": round(pnl, 2), "open_positions": len(positions)}
+                result = {
+                    "balance":        round(balance, 2),
+                    "available_cash": round(available_cash, 2),
+                    "net":            round(net, 2),
+                    "pnl":            round(pnl, 2),
+                    "open_positions": len(positions),
+                }
                 _portfolio_cache["result"] = result
                 _portfolio_cache["ts"] = _time.time()
                 return result
