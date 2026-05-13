@@ -22,7 +22,14 @@
       "Bash(timeout 5 grep -n \"paper-comparison\\\\|Paper Comparison\" frontend/app/components/Header.tsx frontend/app/signal-history/page.tsx scripts/reset_for_fresh_start.py)",
       "Bash(timeout 5 grep -n \"paper\\\\|Paper\\\\|tab ==\" frontend/app/signal-history/page.tsx)",
       "Bash(timeout 5 grep -cn \"paper\\\\|Paper\" frontend/app/signal-history/page.tsx)",
-      "Bash(timeout 5 grep -n \"REAL MONEY\\\\|PAPER MODE\\\\|mode === \" frontend/app/page.tsx)"
+      "Bash(timeout 5 grep -n \"REAL MONEY\\\\|PAPER MODE\\\\|mode === \" frontend/app/page.tsx)",
+      "Bash(timeout 5 grep -rln \"IS_PAPER\\\\|MockBroker\\\\|TRADING_MODE\\\\|config\\\\.IS_PAPER\\\\|is_paper\\\\|paper.*trade\\\\|paper_trade\" --include=\"*.py\" --include=\"*.tsx\" --include=\"*.ts\" --exclude-dir=node_modules --exclude-dir=.venv --exclude-dir=__pycache__ .)",
+      "Bash(timeout 5 grep -n \"IS_PAPER\\\\|MockBroker\\\\|TRADING_MODE\\\\|is_paper\" config.py core/broker.py)",
+      "Bash(timeout 5 grep -n \"_BROKER_MODE\\\\|_BROKER_INSTANCE\" core/broker.py)",
+      "Bash(timeout 5 grep -n \"IS_PAPER\\\\|MockBroker\\\\|TRADING_MODE\\\\|config\\\\.IS_PAPER\\\\|is_paper\" core/bot_runner.py core/memory.py data/angel_fetcher.py strategies/trend_strategy.py api/server.py main.py)",
+      "Bash(timeout 5 grep -n \"_estimate_paper_option_ltp\\\\|_paper_option_symbol\" strategies/trend_strategy.py)",
+      "Bash(timeout 5 grep -n \"config.IS_PAPER\" strategies/trend_strategy.py)",
+      "Bash(timeout 5 grep -rn \"IS_PAPER\\\\|MockBroker\\\\|TRADING_MODE\" --include=\"*.py\" --include=\"*.tsx\" --include=\"*.ts\" --exclude-dir=node_modules --exclude-dir=.venv --exclude-dir=__pycache__ .)"
     ]
   }
 }
