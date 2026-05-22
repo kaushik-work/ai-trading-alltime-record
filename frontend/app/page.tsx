@@ -6,6 +6,7 @@ import Header from "./components/Header";
 import MongoBadge from "./components/MongoBadge";
 import ShadowBadge from "./components/ShadowBadge";
 import NiftyChart from "./components/NiftyChart";
+import StrategyExplainer from "./components/StrategyExplainer";
 
 const _API   = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const WS_URL = _API.replace(/^http/, "ws") + "/ws";
@@ -87,6 +88,9 @@ export default function Home() {
 
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-5xl mx-auto p-3 md:p-5">
+
+          {/* Strategy explainer — what's running */}
+          <StrategyExplainer />
 
           {/* Live NIFTY chart */}
           <div className="mb-5">
