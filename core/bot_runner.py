@@ -1,46 +1,53 @@
 """
-BotRunner — runs ATR Intraday strategy inside the FastAPI process.
+BotRunner — runs the Q5 multi-strategy SHADOW executor inside FastAPI.
 
-Uses APScheduler (AsyncIOScheduler) so it shares FastAPI's event loop.
-The WebSocket loop in server.py already broadcasts _build_snapshot() every 5 s,
-so bot_runner only needs to write trades to TradeMemory — no separate broadcast needed.
+Uses APScheduler (AsyncIOScheduler) so it shares FastAPI's event loop. The
+WebSocket loop in server.py broadcasts state every 5s — bot_runner just
+drives the schedulers.
 
-Strategy:
-  ATR Intraday — AishDoc multi-signal, Claude AI scoring, -10 to +10 (via watchlist)
+What this bot does:
+  • Polls 3 independent shadow signals every 30 s during market hours:
+      q5_straddle_level  q5_straddle_mom3  q5_pcr_mom3
+  • Opens / closes SIMULATED trades only (Mongo collection shadow_trades).
+    NO real Angel One orders are placed by this process.
+  • Refreshes the Angel One JWT three times a day (08:30 / 12:00 / 14:00 IST).
+  • Refreshes the option-chain panel for the dashboard every 15 min.
+  • Writes a daily journal at 15:20 IST summarising shadow performance.
+
+What this bot does NOT do:
+  • Trade ATR Intraday or any other real-money strategy (removed).
+  • Hold any live positions in the broker account.
+  • Manage SL/TP for live trades (no live trades exist).
+
+Hard rules:
+  • Linux-only (`_is_cloud_host`) — refuses to schedule on macOS/Windows.
+  • Market-hours-only — every job no-ops outside 09:15–15:30 IST.
 """
+
+from __future__ import annotations
 
 import asyncio
 import logging
 import os
 import platform
-from datetime import datetime, date, time as dtime
-from core.utils import now_ist
-from zoneinfo import ZoneInfo
+from datetime import datetime, time as dtime
 from typing import Optional
-
-
-IST = ZoneInfo("Asia/Kolkata")
+from zoneinfo import ZoneInfo
 
 import config
-from core.memory import TradeMemory
 from core import ipc
+from core.memory import TradeMemory
+from core.utils import now_ist
 
+IST = ZoneInfo("Asia/Kolkata")
 logger = logging.getLogger(__name__)
 
 
+# ── Helpers ──────────────────────────────────────────────────────────────────
+
 def _is_cloud_host() -> bool:
-    """True only when running on a Linux server (the droplet).
-
-    Production scheduling — Angel One orders, option chain collection,
-    daily token refresh, EOD square-off — must only fire from the
-    DigitalOcean droplet. Running the same code locally on a Windows or
-    macOS laptop during development would otherwise duplicate everything
-    and cause real-money trades from a dev machine.
-
-    Override for special cases: set ENABLE_LOCAL_SCHEDULERS=1 in the
-    environment (rare — only if intentionally debugging schedules on a
-    laptop — be VERY careful, this enables live trading from a laptop).
-    """
+    """True only on Linux (the droplet). Prevents laptop double-runs.
+    Override via ENABLE_LOCAL_SCHEDULERS=1 — use with extreme care."""
     if os.environ.get("ENABLE_LOCAL_SCHEDULERS") == "1":
         return True
     return platform.system() == "Linux"
@@ -55,463 +62,98 @@ def _is_market_hours() -> bool:
 
 
 def _is_event_blocked() -> bool:
-    """Return True if today is blocked (config or runtime) and not explicitly unblocked."""
+    """True if today is on the event-block list (config or runtime) AND not
+    explicitly unblocked via the dashboard."""
     today_str = now_ist().date().isoformat()
     if today_str in ipc.read_event_unblocks():
-        logger.info("Trading UNBLOCKED today — %s (manual override). Proceeding.", today_str)
+        logger.info("Trading UNBLOCKED today — %s (manual override).", today_str)
         return False
-    blocked = config.EVENT_BLOCK_DATES.get(today_str) or ipc.read_event_blocks().get(today_str)
+    blocked = (config.EVENT_BLOCK_DATES.get(today_str)
+               or ipc.read_event_blocks().get(today_str))
     if blocked:
-        logger.warning("Trading BLOCKED today — %s (%s). Skipping all cycles.", today_str, blocked)
+        logger.warning("Trading BLOCKED today — %s (%s). Skipping cycles.",
+                       today_str, blocked)
     return bool(blocked)
 
 
-# ── per-day state (reset at midnight) ─────────────────────────────────────────
-
-class _DailyState:
-    def __init__(self):
-        self._date: Optional[date] = None
-        self._trades: dict = {}        # strategy -> count
-        self._positions: dict = {}     # strategy -> position dict or None
-
-    def _maybe_reset(self):
-        today = now_ist().date()
-        if self._date != today:
-            self._date = today
-            self._trades.clear()
-            self._positions.clear()
-            logger.info("Daily state reset for %s", today)
-
-    def can_trade(self, strategy: str, max_trades: int) -> bool:
-        self._maybe_reset()
-        return self._trades.get(strategy, 0) < max_trades
-
-    def record_trade(self, strategy: str):
-        self._maybe_reset()
-        self._trades[strategy] = self._trades.get(strategy, 0) + 1
-
-    def get_position(self, strategy: str) -> Optional[dict]:
-        self._maybe_reset()
-        return self._positions.get(strategy)
-
-    def set_position(self, strategy: str, pos: Optional[dict]):
-        self._maybe_reset()
-        if pos is None:
-            self._positions.pop(strategy, None)
-        else:
-            self._positions[strategy] = pos
-
-    def all_open_positions(self) -> list:
-        self._maybe_reset()
-        return [p for p in self._positions.values() if p]
-
-
-# ── BotRunner ─────────────────────────────────────────────────────────────────
+# ── BotRunner ────────────────────────────────────────────────────────────────
 
 class BotRunner:
-    """
-    Manages all 3 strategy loops as async scheduled jobs.
-    Start it once from FastAPI lifespan; it runs until the process exits.
-    """
+    """Drives the shadow executor scheduler. Stop/start via FastAPI lifespan."""
 
     def __init__(self):
         from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
         self.scheduler = AsyncIOScheduler(timezone="Asia/Kolkata")
         self.memory = TradeMemory()
-        self.state = _DailyState()
-        self._atr_strategy = None   # lazy-init TrendStrategy (ATR Intraday, atr_only mode)
-        self.last_heartbeat: Optional[str] = None   # ISO string, IST
-        self.last_scores: dict = {}                 # strategy → last signal scores
-        self.last_day_bias: dict = ipc.read_day_bias()  # cached; updated by set_bias API
+        self.last_heartbeat: Optional[str] = None   # ISO IST
         self.last_option_chain: dict = {}
-        self.last_angel_trades: list = []               # Angel One tradeBook, synced every 5m
-        self.last_zones: list = []                      # today's watch zones (pre-market briefing)
-        self._zone_entry_fired_today: bool = False      # zone reversal: one entry per day max
-        # Q5 multi-strategy shadow signals (forward test, no real orders).
-        # Three independent signals each with its own ledger.
+        # Multi-strategy shadow signals (one (signal, book) per element)
         self._shadow_signals: list = []
         self._shadow_books: dict = {}
+        self._paused: bool = False
 
-    # ── lifecycle ─────────────────────────────────────────────────────────────
+    @property
+    def paused(self) -> bool:
+        return self._paused
 
-    def start(self):
-        ipc.clear_all_flags()
+    def pause(self) -> None:
+        self._paused = True
+        logger.info("BotRunner: paused")
 
-        # ── OS gate ────────────────────────────────────────────────────────────
-        # Scheduled jobs (ATR cycle, EOD square-off, token refresh, option-chain
-        # fetch, etc.) MUST only fire from the DigitalOcean droplet. If this
-        # code is running on a Windows or macOS laptop — e.g. someone runs
-        # `uvicorn api.server:app` locally for frontend dev — we skip the
-        # entire scheduler. The API stays up so the dashboard works, but no
-        # cron jobs trigger trades or duplicate the cloud's snapshot writes.
+    def resume(self) -> None:
+        self._paused = False
+        logger.info("BotRunner: resumed")
+
+    def start(self) -> None:
         if not _is_cloud_host():
-            logger.warning(
-                "BotRunner: scheduled jobs DISABLED (platform=%s, not Linux). "
-                "API will serve dashboard reads but no cycles, trades, "
-                "token-refresh, or option-chain snapshots will fire. "
-                "Set ENABLE_LOCAL_SCHEDULERS=1 to override (only for "
-                "deliberate local debugging in paper mode).",
-                platform.system(),
-            )
+            logger.warning("BotRunner.start: not a cloud host (Linux) — schedulers OFF. "
+                           "Set ENABLE_LOCAL_SCHEDULERS=1 to override.")
             return
 
-        # Warm up Angel One login so first cycle doesn't pay the auth cost
-        try:
-            from data.angel_fetcher import AngelFetcher
-            AngelFetcher.get()._ensure_logged_in()
-        except Exception as e:
-            logger.warning("Angel One warm-up failed (will retry per cycle): %s", e)
-
-        # ── Candle-aligned cron schedules ─────────────────────────────────────
-        # NSE 5m candles close at 9:20, 9:25, 9:30 ... (every :00/:05/:10/:15/:20/:25/:30/:35/:40/:45/:50/:55)
-        # NSE 15m candles close at 9:30, 9:45, 10:00 ... (every :00/:15/:30/:45)
-        # Each strategy fires a few seconds after its candle closes so it reads the
-        # freshest closed bar. Staggered seconds prevent simultaneous Angel One API calls.
-
-        # ATR Intraday — 5s after every 5m candle close (9:20:05, 9:25:05, ...)
+        # Shadow signal tick — every 30 s during market hours
         self.scheduler.add_job(
-            self._atr_cycle, "cron", minute="*/5", second=5,
-            id="atr_intraday",
+            self._shadow_signal_tick, "interval", seconds=30,
+            id="shadow_signal_tick",
         )
-        # Fast entry check — 2 min into each 5m candle (9:22:30, 9:27:30 ...)
-        # Only fires if the PREVIOUS bar's score was near-threshold (6-7).
-        # This catches moves that scored 6 last bar → score 8+ now → enter 3 min early.
-        # Avoids re-entry loops: after SL the score drops back to HOLD/negative
-        # so last_score is no longer near threshold → fast check stays quiet.
-        self.scheduler.add_job(
-            self._atr_fast_check, "cron", minute="2-59/5", second=30,
-            id="atr_fast_check",
-        )
-        # Option chain refresh — every 15m. (Used to also fetch India VIX
-        # but the VIX-based logic was retired as untested/unreliable.)
+        # Option chain panel refresh — every 15 min (dashboard widget)
         self.scheduler.add_job(
             self._option_chain_refresh, "cron", minute="*/15", second=20,
             id="option_chain_refresh",
         )
-        # Force trade fast-poll — every 30s, no-op unless flag file exists
-        self.scheduler.add_job(
-            self._force_trade_poll, "interval", seconds=30,
-            id="force_trade_poll",
-        )
-        # EOD square-off at configured intraday cutoff, journal save after exits settle.
-        exit_hour, exit_minute = map(int, config.INTRADAY_EXIT_BY.split(":"))
-        self.scheduler.add_job(self._eod_squareoff, "cron", hour=exit_hour, minute=exit_minute, id="eod")
-        self.scheduler.add_job(self._save_journal,  "cron", hour=15, minute=20, id="journal")
-        self.scheduler.add_job(self._weekly_review, "cron", day_of_week="sat", hour=8, minute=0, id="weekly_review")
-        # Reset day bias to NEUTRAL at 20:00 IST each evening
-        self.scheduler.add_job(self._reset_day_bias, "cron", hour=20, minute=0, id="bias_reset")
-        # Angel One trade book sync — every 5 minutes during market hours
-        self.scheduler.add_job(self._sync_angel_trades, "cron", minute="*/5", second=45, id="angel_sync")
-        # (VIX auto-lots scheduling retired — min_lots is now driven by
-        # config.MIN_LOTS + dashboard dropdown only, no VIX-based auto-scaling.)
-        # Pre-market zone briefing — 9:00 AM, before session starts
-        self.scheduler.add_job(self._zone_briefing, "cron", hour=9, minute=0, id="zone_briefing")
-        # Position guardian — every 60s during market hours: checks SL/TP on open positions
-        # independent of strategy cycle. Catches fast moves between 5m candle ticks.
-        self.scheduler.add_job(self._position_guardian, "interval", seconds=60, id="position_guardian")
-        # Q5 multi-strategy SHADOW signal — runs every 30s during market hours so
-        # entries/exits are SPONTANEOUS, not locked to 5-min candle boundaries.
-        # Signal feature value still uses the latest option_snapshot bar (which the
-        # collector writes every 5min), but the executor checks for fire/exit on
-        # every 30s tick using LIVE spot + LTP. This means:
-        #   • SL/TP can fire mid-bar — much tighter risk than 5-min-only checks
-        #   • Entries don't wait for the next 5-min mark — fire the moment threshold breaks
-        # Linux-only — prevents laptop double-fires.
-        if _is_cloud_host():
-            self.scheduler.add_job(
-                self._shadow_signal_tick, "interval", seconds=30,
-                id="shadow_signal_tick",
-            )
-        # Daily Angel One token refresh — runs at 08:30, 12:00, and 14:00 IST.
-        # Angel One JWTs live ~24 hours from issue. A single 08:30 refresh
-        # isn't enough: a token issued at 11:00 yesterday will expire at
-        # 11:00 today — mid-session. So we re-login mid-day too. Each
-        # refresh also re-downloads the instrument master in case it went
-        # stale (expired contracts get pruned, new ones appear after expiry).
+        # Daily Angel One JWT refresh — 08:30 / 12:00 / 14:00 IST
         for h, m in [(8, 30), (12, 0), (14, 0)]:
             self.scheduler.add_job(
                 self._daily_token_refresh, "cron", hour=h, minute=m,
                 id=f"token_refresh_{h:02d}{m:02d}",
             )
-
-        self.scheduler.start()
-        logger.info(
-            "BotRunner started — ATR(5m+5s) "
-            "OCRefresh(15m+20s) ForcePoll(30s) PosGuard(60s)"
+        # Daily shadow-summary journal — 15:25 IST (after market close)
+        self.scheduler.add_job(
+            self._save_journal, "cron", hour=15, minute=25, id="journal",
         )
 
-    def stop(self):
+        self.scheduler.start()
+        logger.info("BotRunner started — Shadow(30s) OptionChain(15m) "
+                    "TokenRefresh(x3) Journal(15:25)")
+
+    def stop(self) -> None:
         self.scheduler.shutdown(wait=False)
 
-    @property
-    def paused(self) -> bool:
-        return ipc.flag_exists(ipc.FLAG_PAUSE)
-
-    # ── ATR Intraday (TrendStrategy / Claude) ─────────────────────────────────
-
-    async def _atr_cycle(self):
-        self.last_heartbeat = datetime.now(IST).isoformat()
-        if self.paused or not _is_market_hours() or _is_event_blocked():
-            return
-        try:
-            if self._atr_strategy is None:
-                from strategies.trend_strategy import TrendStrategy
-                self._atr_strategy = TrendStrategy(strategy_name="ATR Intraday", score_mode="atr_only")
-
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, self._atr_strategy.run_watchlist)
-
-            # Update last_scores for the debug/signal-radar endpoint
-            sc = self._atr_strategy.last_score
-            if sc:
-                score      = sc.get("score", 0)
-                threshold  = sc.get("threshold", 6)
-                direction  = sc.get("action", "HOLD")
-                will_trade = abs(score) >= threshold
-                # Pull ATR from the live cycle's intraday indicators so the paper
-                # seller can mirror the live SL/TP formula exactly.
-                atr_for_paper = 0.0
-                try:
-                    intraday = self._atr_strategy.market.get_intraday_indicators("NIFTY") or {}
-                    atr_for_paper = float(
-                        intraday.get("atr_5m") or sc.get("breakdown", {}).get("atr_filter", 0) or 0
-                    )
-                except Exception:
-                    atr_for_paper = 0.0
-                entry = {
-                    "score": score, "direction": direction, "action": direction,
-                    "threshold": threshold, "will_trade": will_trade,
-                    "atr": atr_for_paper,
-                    # Per-section point contributions (e.g. {"sma50_trend": 2,
-                    # "rsi": 2, "pcr": 1, "oc_bias": 2, "herd_danger": -3, ...}).
-                    # The frontend Signal Radar groups these to show how much
-                    # option chain / patterns / etc contribute to the score.
-                    "breakdown": dict(sc.get("breakdown") or {}),
-                    "signals":   list(sc.get("signals") or [])[:12],
-                    "note": "ATR technical analysis only (sections 1–11)",
-                }
-                self.last_scores["ATR Intraday"] = entry
-
-                # ── Persist every evaluation to signal_log ────────────────────
-                try:
-                    from core.memory import log_signal
-                    from data.angel_fetcher import AngelFetcher
-                    af         = AngelFetcher.get()
-                    nifty_spot = af.get_index_ltp("NIFTY") or 0
-                    opt_type   = "CE" if direction == "BUY" else ("PE" if direction == "SELL" else "")
-                    strike     = int(round(nifty_spot / 50) * 50) if nifty_spot else 0
-                    opt_prem   = 0.0
-                    if opt_type and strike and nifty_spot:
-                        from data.angel_fetcher import AngelFetcher as _AF
-                        expiry = af.nearest_weekly_expiry()
-                        _, opt_prem = af.get_option_ltp("NIFTY", strike, opt_type, expiry)
-                        opt_prem = opt_prem or 0.0
-                    did_trade  = bool(self._atr_strategy.last_score.get("did_trade"))
-                    reason     = sc.get("skip_reason", "")
-                    if not will_trade and not reason:
-                        reason = f"score {score:+.0f} below threshold {threshold}"
-                    log_signal(
-                        strategy="ATR Intraday", score=score, threshold=threshold,
-                        direction=direction, will_trade=will_trade, did_trade=did_trade,
-                        reason_skipped=reason, nifty_spot=nifty_spot,
-                        option_type=opt_type, strike=strike, option_premium=float(opt_prem),
-                        signals_fired="|".join(sc.get("signals", [])[:5]),
-                    )
-                except Exception as _log_err:
-                    logger.debug("signal_log write failed: %s", _log_err)
-
-                # ── Zone reversal early entry ─────────────────────────────────
-                try:
-                    self._check_zone_reversal_entry()
-                except Exception as _ze_err:
-                    logger.debug("zone_reversal_entry check failed: %s", _ze_err)
-
-        except Exception as e:
-            logger.error("ATR Intraday cycle: %s", e, exc_info=True)
-
-    def _check_zone_reversal_entry(self):
-        """Enter early when price taps a supply/demand zone and the last 5m candle
-        confirms rejection — independent of the ATR score build-up."""
-        if self._zone_entry_fired_today:
-            return
-        if self.memory.get_open_trade_for_symbol("NIFTY"):
-            return
-        if self._atr_strategy is None:
-            return
-
-        try:
-            from core.ipc import read_watch_zones
-            from core.zone_briefing import get_active_zone
-            from data.angel_fetcher import AngelFetcher
-
-            zones = read_watch_zones()
-            if not zones:
-                return
-
-            af    = AngelFetcher.get()
-            spot  = af.get_index_ltp("NIFTY")
-            if not spot:
-                return
-
-            zone = get_active_zone(spot, zones, proximity_pts=40)
-            if not zone:
-                return
-
-            # Fetch last two 5m bars to confirm rejection candle
-            from data.market import _get_intraday_df
-            df = _get_intraday_df("NIFTY", "5m")
-            if df is None or len(df) < 2:
-                return
-
-            last      = df.iloc[-1]
-            prev      = df.iloc[-2]
-            last_open  = float(last["Open"])
-            last_close = float(last["Close"])
-            prev_close = float(prev["Close"])
-
-            zone_dir = zone["direction"]  # "CE" = support (buy CE), "PE" = resistance (buy PE)
-
-            if zone_dir == "PE":
-                # Resistance zone — look for bearish rejection:
-                # last candle closed below open AND below previous close
-                bearish = last_close < last_open and last_close < prev_close
-                if not bearish:
-                    return
-                direction = "SELL"
-                logger.info(
-                    "[ZONE REVERSAL] Resistance zone at ₹%.0f | NIFTY=%.0f | bearish rejection → PE entry",
-                    zone["mid"], spot,
-                )
-            elif zone_dir == "CE":
-                # Support zone — look for bullish rejection (hammer / green candle)
-                bullish = last_close > last_open and last_close > prev_close
-                if not bullish:
-                    return
-                direction = "BUY"
-                logger.info(
-                    "[ZONE REVERSAL] Support zone at ₹%.0f | NIFTY=%.0f | bullish bounce → CE entry",
-                    zone["mid"], spot,
-                )
-            else:
-                return
-
-            self._zone_entry_fired_today = True
-            self._atr_strategy._force_early_entry(direction)
-
-        except AttributeError:
-            pass  # _get_intraday_df_raw not available — skip silently
-        except Exception as e:
-            logger.debug("Zone reversal entry: %s", e)
-
-    async def _atr_fast_check(self):
-        """Runs 2 min into each 5m candle to catch moves 3 min earlier than bar close.
-
-        SAFE re-entry guard: only fires when the PREVIOUS bar's score was 6-7
-        (near threshold but below). After SL the signal reverses → last_score drops
-        to HOLD/negative → this check stays quiet → no re-entry loop.
-
-        Logic:
-          1. Last bar score must be 6 or 7 in the signal direction (near miss)
-          2. No open position
-          3. Not within 15 min of last trade entry (cooldown)
-        """
-        if self.paused or not _is_market_hours():
-            return
-        if self._atr_strategy is None:
-            return
-        try:
-            strat = self._atr_strategy
-
-            # Guard 1: previous bar score must be near-threshold (6 or 7)
-            # If it was 0 or negative (HOLD / reversed), the move is over — skip.
-            last = strat.last_score or {}
-            last_score_val = abs(last.get("score", 0))
-            last_threshold = last.get("threshold", 8)
-            if not (last_threshold - 2 <= last_score_val < last_threshold):
-                return   # not near threshold → nothing building → skip
-
-            # Guard 2: no open position
-            positions = strat.broker.get_positions()
-            if any(v.get("quantity", 0) > 0 for v in positions.values()):
-                return
-
-            # Guard 3: cooldown — no trade in last 15 minutes
-            today_trades = strat.memory.get_today_trades()
-            if today_trades:
-                from core.utils import now_ist as _now_ist
-                from datetime import timedelta
-                last_ts_str = max(
-                    (t.get("timestamp", "") for t in today_trades if t.get("side") == "BUY"),
-                    default=""
-                )
-                if last_ts_str:
-                    try:
-                        from datetime import datetime as _dt
-                        last_ts = _dt.fromisoformat(last_ts_str)
-                        if last_ts.tzinfo is None:
-                            last_ts = last_ts.replace(tzinfo=_now_ist().tzinfo)
-                        if (_now_ist() - last_ts).total_seconds() < 900:  # 15 min
-                            return
-                    except Exception:
-                        pass
-
-            logger.info(
-                "FastCheck: last score %+d near threshold %d — running early entry check",
-                last.get("score", 0), last_threshold
-            )
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, strat.run_watchlist)
-        except Exception as e:
-            logger.debug("_atr_fast_check: %s", e)
-
-    async def _position_guardian(self):
-        """Runs every 60s — fast SL/TP check for open positions between 5m candles.
-
-        Skips entirely when no position is open. Without this guard the poll
-        triggered a full run_watchlist every minute even on quiet days, which
-        caused a flood of fetch_intraday_df calls (~60/hr extra), some of
-        which inevitably hit Angel One rate limits and returned <3 bars,
-        polluting the broker error log with "insufficient data" entries.
-        """
-        if self.paused or not _is_market_hours():
-            return
-        if self._atr_strategy is None:
-            return
-        # Skip if no live or virtual_rejected position exists for this strategy.
-        # When a position is open, run_watchlist → run_once → _manage_position
-        # picks up the SL/TP check naturally. When none exists the cycle is just
-        # noise (and an Angel One rate-limit risk).
-        try:
-            if not self.memory.has_open_for_strategy(
-                self._atr_strategy.strategy_name, "NIFTY"
-            ):
-                return
-        except Exception:
-            pass   # fall through to run_watchlist on memory error
-        try:
-            loop = asyncio.get_event_loop()
-            await loop.run_in_executor(None, self._atr_strategy.run_watchlist)
-        except Exception as e:
-            logger.debug("position_guardian: %s", e)
-
-
-    # ── Q5 ATM-Straddle SHADOW signal (forward test, no real orders) ─────────
+    # ── Q5 multi-strategy SHADOW signal tick ────────────────────────────────
 
     async def _shadow_signal_tick(self):
-        """Computes the three Q5 signals (straddle level, straddle mom3, PCR
-        mom3) and opens/closes simulated trades for each independently.
+        """Drives all 3 shadow signals: open/close simulated trades against
+        live LTP. No real orders are ever placed.
 
-        SHADOW executor — never places real orders. Per-signal ledgers persist
-        to Mongo collection `shadow_trades` keyed by `strategy` field.
-
-        Flow per tick:
-          1. Read latest option_snapshot bar from Mongo (collector wrote it ~15s ago)
+        Flow:
+          1. Read latest option_snapshot bar from Mongo
           2. For each of 3 signals:
-               a. If a position is open under that signal: fetch live LTP, tick book
-               b. Else: compute the signal, if it fires fetch live ATM CE LTP and open
+               a. If position is open: fetch live LTP, tick book for SL/TP/EOD
+               b. Else: compute signal; if it fires, fetch live ITM-CE LTP and open
         """
-        if self.paused or not _is_market_hours():
+        if self._paused or not _is_market_hours():
             return
+        self.last_heartbeat = datetime.now(IST).isoformat()
         try:
             from strategies.feature_signals import (
                 ALL_SIGNALS, _today_bars, _atm_strike_for, _chosen_strike_for,
@@ -525,7 +167,7 @@ class BotRunner:
                 self._shadow_signals = [cls() for cls in ALL_SIGNALS]
                 self._shadow_books = {s.name: ShadowBook(s.name)
                                        for s in self._shadow_signals}
-                logger.info("shadow signals initialized: %s",
+                logger.info("shadow signals initialised: %s",
                             ", ".join(s.name for s in self._shadow_signals))
 
             now_dt = datetime.now(IST).replace(tzinfo=None)
@@ -534,8 +176,6 @@ class BotRunner:
                 logger.debug("shadow_signal: Mongo unreachable — skipping tick")
                 return
 
-            # Pull the latest TODAY bar from option_snapshots (collector writes
-            # ~15s before this tick fires).
             today_bars = _today_bars(db, now_dt.date())
             if not today_bars:
                 logger.debug("shadow_signal: no today bars yet — skipping")
@@ -551,11 +191,10 @@ class BotRunner:
             af = AngelFetcher.get()
             expiry = af.nearest_weekly_expiry()
 
-            # Per-signal loop
             for sig in self._shadow_signals:
                 book = self._shadow_books[sig.name]
 
-                # ── Open position? Tick the book against live LTP
+                # Open position? Tick against live LTP for SL/TP/EOD.
                 if book.has_open():
                     pos = book.open_position()
                     _, ltp = af.get_option_ltp("NIFTY", int(pos["strike"]),
@@ -569,7 +208,7 @@ class BotRunner:
                                     closed.get("pnl", 0), closed.get("reason", ""))
                     continue
 
-                # ── No open position — compute signal
+                # No open position — compute signal value
                 decision = sig.compute(now_dt, float(spot), current_rows)
                 logger.info("shadow[%s]: val=%.4f thr=%s fire=%s",
                             sig.name, decision.current_value,
@@ -578,7 +217,7 @@ class BotRunner:
                 if not decision.fire:
                     continue
 
-                # Fire — fetch live LTP for the chosen (ITM) strike
+                # Fire — fetch live LTP for the ITM strike
                 _, ce_ltp = af.get_option_ltp("NIFTY", chosen_strike,
                                                 decision.side, expiry)
                 if not ce_ltp:
@@ -590,66 +229,45 @@ class BotRunner:
         except Exception as e:
             logger.warning("shadow_signal_tick failed (non-fatal): %s", e)
 
-
-    # ── Option chain refresh (every 15 min) ──────────────────────────────────
+    # ── Option chain panel refresh (every 15 min) ───────────────────────────
 
     async def _option_chain_refresh(self):
-        """Pull a fresh option-chain snapshot for the dashboard panel + scorer.
-        VIX fetching has been removed — the VIX-based logic was retired."""
+        """Pull a fresh ATM-±N option chain for the dashboard panel.
+        Not used by signal logic — that path reads from option_snapshots."""
         if not _is_market_hours():
             return
         try:
             from data.option_chain import OptionChainFetcher
             loop = asyncio.get_event_loop()
-            oc = await loop.run_in_executor(None, OptionChainFetcher.get().fetch, "NIFTY")
-            if oc and not oc.get("error"):
-                self.last_option_chain = oc
+            self.last_option_chain = await loop.run_in_executor(
+                None, OptionChainFetcher().fetch_full
+            ) or {}
         except Exception as e:
-            logger.warning("Option chain refresh: %s", e)
+            logger.debug("option_chain_refresh failed (non-fatal): %s", e)
 
-    def _has_margin(self, min_required: float = 15_000.0) -> bool:
-        """Check Angel One available margin before entering a trade."""
+    # ── Daily Angel One JWT refresh ─────────────────────────────────────────
+
+    async def _daily_token_refresh(self):
+        """Re-login to Angel One — tokens live ~24h from issue.
+
+        Three refreshes per day (08:30 / 12:00 / 14:00) ensure no single
+        long session expires mid-day."""
         try:
             from data.angel_fetcher import AngelFetcher
             af = AngelFetcher.get()
-            if not af._ensure_logged_in():
-                return True  # fail-open
-            rms = af._api.rmsLimit()
-            if rms and rms.get("status") and rms.get("data"):
-                d = rms["data"]
-                available = float(d.get("availablecash", 0) or d.get("net", 0) or 0)
-                if available < min_required:
-                    logger.warning(
-                        "Insufficient margin: ₹%.0f available, ₹%.0f required — skipping trade",
-                        available, min_required,
-                    )
-                    return False
-            return True
+            af._api = None
+            af._login_date = None
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, af._ensure_logged_in)
+            ok = bool(af._api)
+            logger.info("Daily token refresh: %s", "OK" if ok else "FAILED")
         except Exception as e:
-            logger.warning("Margin check failed: %s — allowing trade", e)
-            return True  # fail-open: let Angel One reject if truly insufficient
+            logger.error("Daily token refresh failed: %s", e, exc_info=True)
 
-
-    # ── Force trade fast poll (every 30s, no-op unless flag exists) ──────────
-
-    async def _force_trade_poll(self):
-        if self.paused or not _is_market_hours() or _is_event_blocked():
-            return
-        if not ipc.flag_exists(ipc.FLAG_FORCE_TRADE):
-            return
-        logger.info("force_trade_poll: flag detected — running ATR cycle immediately")
-        await self._atr_cycle()
-
-    # ── EOD square-off ────────────────────────────────────────────────────────
-
-    async def _eod_squareoff(self):
-        logger.info("EOD square-off triggered")
-        loop = asyncio.get_event_loop()
-        if self._atr_strategy:
-            await loop.run_in_executor(None, self._atr_strategy.square_off_all)
+    # ── Daily shadow journal (15:25 IST) ────────────────────────────────────
 
     async def _save_journal(self):
-        """Save daily journal JSON at 15:20 (after EOD square-off)."""
+        """Save a daily summary of shadow performance to Mongo."""
         try:
             from core.journal import save_daily_journal
             loop = asyncio.get_event_loop()
@@ -658,251 +276,8 @@ class BotRunner:
         except Exception as e:
             logger.error("Journal save failed: %s", e, exc_info=True)
 
-    async def _weekly_review(self):
-        """Generate Claude-powered weekly review every Saturday at 08:00 IST."""
-        try:
-            from core.journal import save_weekly_review
-            loop = asyncio.get_event_loop()
-            path = await loop.run_in_executor(None, save_weekly_review)
-            if path:
-                logger.info("Weekly review saved: %s", path)
-        except Exception as e:
-            logger.error("Weekly review failed: %s", e, exc_info=True)
 
-    async def _sync_angel_trades(self):
-        """Pull Angel One tradeBook and reconcile against SQLite open trades.
-
-        For each BUY: if our DB has no matching order_id, import it so manually
-        placed or Windows-bot trades are visible in the P&L dashboard.
-        For each SELL: if our DB shows that symbol open, compute real PnL and close.
-        """
-        try:
-            from data.angel_fetcher import AngelFetcher
-            loop = asyncio.get_event_loop()
-            angel_trades = await loop.run_in_executor(None, AngelFetcher.get().get_trade_book)
-            self.last_angel_trades = angel_trades
-
-            # ── Import missing BUY trades ─────────────────────────────────────
-            # Skip rows with qty=0 or price=0. Angel One's tradeBook sometimes
-            # echoes cancelled / rejected / placeholder orders with zero values
-            # — importing those as OPEN positions creates phantom entries that
-            # block tomorrow's duplicate guard and pollute PPnL.
-            buys = [t for t in angel_trades if t["side"] == "BUY"]
-            for buy in buys:
-                symbol   = buy["symbol"]
-                order_id = buy["order_id"]
-                qty      = int(buy.get("quantity") or 0)
-                price    = float(buy.get("price") or 0)
-                if qty <= 0 or price <= 0:
-                    logger.warning(
-                        "angel_sync: skipping zero-value tradeBook entry "
-                        "(order=%s symbol=%s qty=%s price=%s) — likely cancelled "
-                        "or rejected upstream",
-                        order_id, symbol, qty, price,
-                    )
-                    continue
-                existing = self.memory.get_open_trade_for_symbol(symbol)
-                if existing and existing.get("order_id") == order_id:
-                    continue  # already in DB
-                order = {
-                    "order_id":  order_id,
-                    "symbol":    symbol,
-                    "side":      "BUY",
-                    "quantity":  qty,
-                    "price":     price,
-                    "pnl":       0,
-                    "status":    "OPEN",
-                    "timestamp": now_ist().isoformat(),
-                    "strategy":  "ANGEL_SYNC",
-                }
-                decision = {"reasoning": f"imported from Angel One trade book: {symbol}", "confidence": 1.0, "risk_level": "UNKNOWN"}
-                self.memory.log_trade(order, decision)
-                logger.info("angel_sync: imported BUY %s qty=%d @ ₹%.2f (order %s)",
-                            symbol, qty, price, order_id)
-
-            # ── Close matched SELL trades ─────────────────────────────────────
-            sells = [t for t in angel_trades if t["side"] == "SELL"]
-            for sell in sells:
-                symbol      = sell["symbol"]
-                sell_price  = float(sell.get("price") or 0)
-                sell_qty    = int(sell.get("quantity") or 0)
-                if sell_price <= 0 or sell_qty <= 0:
-                    continue   # skip cancelled / placeholder sell rows
-                open_trade = self.memory.get_open_trade_for_symbol(symbol)
-                if not open_trade:
-                    continue
-                buy_price  = float(open_trade.get("price") or 0)
-                qty        = int(open_trade.get("quantity") or sell_qty)
-                pnl        = round((sell_price - buy_price) * qty, 2)
-                order_id   = open_trade.get("order_id", "")
-                self.memory.close_trade(order_id, pnl)
-                logger.info(
-                    "angel_sync: closed %s (order %s) pnl=%.2f buy=%.2f sell=%.2f",
-                    symbol, order_id, pnl, buy_price, sell_price,
-                )
-        except Exception as e:
-            logger.error("_sync_angel_trades: %s", e, exc_info=True)
-
-    async def _reset_day_bias(self):
-        """Reset day bias and early-entry state at 20:00 IST each evening."""
-        try:
-            ipc.write_day_bias("NEUTRAL", "")
-            self.last_day_bias = ipc.read_day_bias()
-            self._zone_entry_fired_today = False
-            logger.info("Day bias reset to NEUTRAL for tomorrow.")
-        except Exception as e:
-            logger.error("Bias reset failed: %s", e)
-
-    async def _daily_token_refresh(self):
-        """Force a fresh Angel One TOTP login + re-fetch instrument master.
-
-        AngelFetcher's auth cache only verifies "same calendar day", but
-        Angel One actually rotates JWTs ~24h from issue (so a token created
-        at 11:00 yesterday dies at 11:00 today, mid-session). This job runs
-        multiple times per day (08:30, 12:00, 14:00 IST) to ensure no API
-        call goes through a stale JWT.
-
-        It ALSO invalidates the instrument master cache. The master file gets
-        pruned of expired contracts overnight and new strikes appear after
-        each weekly expiry; without the re-fetch, a long-running container
-        ends up with a stale instrument list where weekly options can't be
-        resolved by strike anymore.
-        """
-        try:
-            from data.angel_fetcher import AngelFetcher
-            af = AngelFetcher.get()
-            with af._lock:
-                af._api = None
-                af._login_date = None
-                af._failed_at = None
-                # Force re-download of NFO instrument master
-                af._instruments = None
-                af._instruments_date = None
-            loop = asyncio.get_event_loop()
-            ok = await loop.run_in_executor(None, af._ensure_logged_in)
-            if ok:
-                # Trigger master re-download by calling _nfo_instruments() once
-                await loop.run_in_executor(None, af._nfo_instruments)
-                logger.info("Token refresh: fresh Angel One session + instrument master loaded.")
-            else:
-                logger.error("Token refresh: _ensure_logged_in returned False — check ANGEL_* env vars")
-        except Exception as e:
-            logger.error("Token refresh failed: %s", e, exc_info=True)
-
-    async def _zone_briefing(self):
-        """Pre-market zone briefing at 9:00 AM IST.
-        Computes today's watch zones from weekly + daily NIFTY bars.
-        Zones are used by the strategy to enter at key price levels
-        instead of chasing indicator signals mid-move.
-        """
-        try:
-            from data.angel_fetcher import AngelFetcher
-            from core.zone_briefing import compute_daily_zones, today_zones_summary
-            loop = asyncio.get_event_loop()
-            df = await loop.run_in_executor(
-                None,
-                lambda: AngelFetcher.get().fetch_historical_df("NIFTY", "5m", days=5),
-            )
-            if df is None or len(df) < 20:
-                logger.warning("Zone briefing: insufficient data — zones not computed")
-                return
-            zones = compute_daily_zones(df)
-            self.last_zones = zones
-            ipc.write_watch_zones(zones)   # persist so strategy can read without runner ref
-            logger.info("Zone briefing complete:\n%s", today_zones_summary(zones))
-        except Exception as e:
-            logger.error("Zone briefing failed: %s", e)
-
-    # ── trade helpers ─────────────────────────────────────────────────────────
-
-    def _open_trade(self, strategy: str, side: str, entry_spot: float,
-                    sl: float, tp: float, score: float,
-                    option_type: str = "CE", strike: int = 0,
-                    expiry=None, opt_sym: str = "", entry_prem: float = 0.0) -> dict:
-        ts       = now_ist().isoformat()
-        order_id = f"{strategy.upper()}-{now_ist().strftime('%Y%m%d%H%M%S')}"
-        min_lots = ipc.read_settings().get("min_lots", config.MIN_LOTS)
-        lot_qty  = config.LOT_SIZES.get("NIFTY", 65) * min_lots
-        expiry_str = expiry.isoformat() if expiry and hasattr(expiry, "isoformat") else str(expiry or "")
-        order = {
-            "order_id":    order_id,
-            "symbol":      opt_sym or f"NIFTY{strike}{option_type}",
-            "side":        side,
-            "quantity":    lot_qty,
-            "price":       round(entry_prem, 2),     # option premium paid
-            "pnl":         0,
-            "status":      "OPEN",
-            "timestamp":   ts,
-            "strategy":    strategy,
-            "option_type": option_type,
-            "strike":      strike,
-            "lot_size":    lot_qty,
-            "expiry":      expiry_str,
-            "sl_price":    round(sl, 2),
-            "tp_price":    round(tp, 2),
-            "score":       score,
-            "nifty_entry": round(entry_spot, 2),     # spot at entry (for fallback delta calc)
-        }
-        decision = {
-            "reasoning": (f"{strategy} score={score:.1f} | {option_type} strike={strike} "
-                          f"prem=₹{entry_prem:.2f} spot={entry_spot:.0f}"),
-            "confidence": min(score / 10.0, 1.0),
-            "risk_level": "MEDIUM",
-        }
-        self.memory.log_trade(order, decision)
-        logger.info(
-            "[%s] ENTRY %s %s @ ₹%.2f (NIFTY spot=%.0f) | SL=%.2f TP=%.2f score=%.1f lot=%d",
-            strategy, side, opt_sym or f"{option_type}{strike}",
-            entry_prem, entry_spot, sl, tp, score, lot_qty,
-        )
-        return {
-            "strategy":    strategy,
-            "order_id":    order_id,
-            "symbol":      opt_sym or f"NIFTY{strike}{option_type}",
-            "side":        side,
-            "entry":       round(entry_prem, 2),   # entry = option premium
-            "nifty_entry": round(entry_spot, 2),
-            "sl":          round(sl, 2),
-            "tp":          round(tp, 2),
-            "qty":         lot_qty,
-            "score":       score,
-            "timestamp":   ts,
-            "option_type": option_type,
-            "strike":      strike,
-            "expiry":      expiry_str,
-        }
-
-    def _close_trade(self, pos: dict, close_price: float, pnl: float, reason: str):
-        ts = now_ist().isoformat()
-        order_id = f"{pos['strategy'].upper()}-CLOSE-{now_ist().strftime('%Y%m%d%H%M%S')}"
-        order = {
-            "order_id":    order_id,
-            "symbol":      pos["symbol"],
-            "side":        "SELL" if pos["side"] == "BUY" else "BUY",
-            "quantity":    pos["qty"],
-            "price":       close_price,
-            "pnl":         pnl,
-            "status":      "COMPLETE",
-            "timestamp":   ts,
-            "strategy":    pos["strategy"],
-            "option_type": pos.get("option_type"),
-            "strike":      pos.get("strike"),
-            "lot_size":    pos["qty"],
-            "close_reason":reason,
-            "score":       pos.get("score"),
-        }
-        decision = {
-            "reasoning": f"{pos['strategy']} closed: {reason} | PnL=₹{pnl:.2f}",
-            "confidence": 1.0,
-            "risk_level": "LOW",
-        }
-        self.memory.log_trade(order, decision)
-        self.memory.close_trade(pos["order_id"], pnl)
-        logger.info("[%s] CLOSE %s @ ₹%.2f | PnL=₹%.2f | %s",
-                    pos["strategy"], pos["symbol"], close_price, pnl, reason)
-
-
-# ── singleton ─────────────────────────────────────────────────────────────────
+# ── Singleton accessor ──────────────────────────────────────────────────────
 
 _runner: Optional[BotRunner] = None
 

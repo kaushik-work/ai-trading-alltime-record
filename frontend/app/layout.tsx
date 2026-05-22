@@ -10,7 +10,7 @@ export const metadata: Metadata = {
     default:  "The Gaint Company — Trading Bot",
     template: "%s · The Gaint Company",
   },
-  description: "NIFTY ATR Intraday — automated options trading dashboard",
+  description: "NIFTY shadow trading — forward-test dashboard",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -62,7 +62,9 @@ records = RecordTracker()
 market = RealMarketData()
 
 WATCHLIST = ["NIFTY"]
-STRATEGIES = ["ATR Intraday"]
+# Shadow strategies — read at runtime from feature_signals.ALL_SIGNALS for
+# any per-strategy aggregation the snapshot needs.
+SHADOW_STRATEGY_NAMES = ("q5_straddle_level", "q5_straddle_mom3", "q5_pcr_mom3")
 
 # ── Price cache — shared across all WebSocket connections ─────────────────────
 # Without this, 5 open browser tabs × every-5s broadcast = 60 Angel One calls/min
@@ -157,14 +159,14 @@ def _get_account_status(today_round_trips: list) -> dict:
     )
     try:
         from core.bot_runner import get_runner
-        is_paused = get_runner()._atr_strategy.paused if get_runner()._atr_strategy else False
+        is_paused = get_runner().paused
     except Exception:
         is_paused = False
 
     return {
         **cached,
         "rejections_today": rejections,
-        "cooldown_hit":     rejections >= config.MAX_REJECTIONS_PER_DAY if hasattr(config, "MAX_REJECTIONS_PER_DAY") else False,
+        "cooldown_hit":     False,   # ATR rejection cooldown removed with ATR
         "strategy_paused":  is_paused,
     }
 
@@ -172,127 +174,24 @@ def _get_account_status(today_round_trips: list) -> dict:
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def _build_snapshot() -> dict:
-    all_trades   = memory.get_all_trades(limit=500)
-    today_trades = memory.get_today_trades()
-    all_round_trips = memory.build_round_trips(all_trades)
-    today_round_trips = memory.build_round_trips(today_trades)
-    all_records  = records.get_all_records()
+    """Compact dashboard snapshot built around the shadow-trading ledger.
 
-    total_pnl  = sum(t.get("pnl", 0) for t in all_trades)
-    today_pnl  = sum(t.get("pnl", 0) for t in today_round_trips)
-    win_trades = sum(1 for t in all_round_trips if t.get("pnl", 0) > 0)
-    win_rate   = round(win_trades / len(all_round_trips) * 100, 1) if all_round_trips else 0
-    open_pos   = [t for t in all_trades if t.get("side") == "BUY" and not t.get("closed_at")]
-
-    wins_today   = sum(1 for t in today_round_trips if t.get("pnl", 0) > 0)
-    losses_today = sum(1 for t in today_round_trips if t.get("pnl", 0) < 0)
-
-    # Equity curve
-    sell_trades = [t for t in all_trades if t.get("side") == "SELL" and t.get("pnl") is not None]
-    cumulative = 0
-    equity_curve = []
-    for t in sorted(sell_trades, key=lambda x: x.get("timestamp", "")):
-        cumulative += t.get("pnl", 0)
-        equity_curve.append({"timestamp": t.get("timestamp"), "pnl": round(cumulative, 2)})
-
-    # Live prices — cached for 30s, shared across all WebSocket connections
-    prices = _get_prices()
-
-    # Per-strategy daily summary
-    strategy_summary = {}
-    for strat in STRATEGIES:
-        strat_trades = [t for t in today_round_trips if t.get("strategy") == strat]
-        strat_pnl    = round(sum(t.get("pnl", 0) for t in strat_trades), 2)
-        strat_wins   = sum(1 for t in strat_trades if t.get("pnl", 0) > 0)
-        strategy_summary[strat] = {
-            "trades": len(strat_trades),
-            "pnl":    strat_pnl,
-            "wins":   strat_wins,
-            "losses": len(strat_trades) - strat_wins,
-        }
-
-    # Today's completed journal (closed trades with full detail)
-    today_journal = [
-        {
-            "strategy":     t.get("strategy", "—"),
-            "symbol":       t.get("symbol"),
-            "underlying":   t.get("underlying"),
-            "option_type":  t.get("option_type", "—"),
-            "strike":       t.get("strike"),
-            "expiry":       t.get("expiry"),
-            "side":         t.get("side", "BUY"),
-            "lot_size":     t.get("lot_size", 65),
-            "entry_price":  t.get("entry_price"),
-            "exit_price":   t.get("exit_price"),
-            "pnl":          round(t.get("pnl", 0), 2),
-            "close_reason": t.get("close_reason", "—"),
-            "score":        t.get("score"),
-            "entry_time":   t.get("entry_time"),
-            "exit_time":    t.get("exit_time"),
-            "status":       t.get("status"),
-            "entry_remark": t.get("entry_remark"),
-            "exit_remark":  t.get("exit_remark"),
-        }
-        for t in today_round_trips
-    ]
-
-    open_trade_feed = [
-        {
-            "symbol":       t.get("underlying") or t.get("symbol"),
-            "contract_symbol": t.get("symbol"),
-            "underlying":   t.get("underlying"),
-            "option_type":  t.get("option_type"),
-            "strike":       t.get("strike"),
-            "expiry":       t.get("expiry"),
-            "strategy":     t.get("strategy"),
-            "buy_price":    t.get("price"),
-            "sell_price":   None,
-            "qty":          t.get("quantity"),
-            "pnl":          None,
-            "status":       "OPEN",
-            "entry_time":   t.get("timestamp"),
-            "exit_time":    None,
-            "activity_time": t.get("timestamp"),
-        }
-        for t in all_trades
-        if t.get("side") == "BUY" and not t.get("closed_at") and t.get("strategy")
-    ]
-
-    closed_trade_feed = [
-        {
-            "symbol":         t.get("underlying") or t.get("symbol"),
-            "contract_symbol": t.get("symbol"),
-            "underlying":     t.get("underlying"),
-            "option_type":    t.get("option_type"),
-            "strike":         t.get("strike"),
-            "expiry":         t.get("expiry"),
-            "strategy":       t.get("strategy"),
-            "buy_price":      t.get("entry_price"),
-            "sell_price":     t.get("exit_price"),
-            "qty":            t.get("quantity"),
-            "pnl":            t.get("pnl"),
-            "status":         t.get("status"),
-            "entry_time":     t.get("entry_time"),
-            "exit_time":      t.get("exit_time"),
-            "activity_time":  t.get("exit_time") or t.get("entry_time"),
-        }
-        for t in all_round_trips
-    ]
-
-    recent_activity = sorted(
-        open_trade_feed + closed_trade_feed,
-        key=lambda x: x.get("activity_time", "") or "",
-        reverse=True,
-    )
-
+    All real-trade history has been removed (ATR strategy retired). The bot
+    only forward-tests shadow signals; this snapshot reflects that reality.
+    """
     from zoneinfo import ZoneInfo
+    from datetime import time as _dtime
     IST = ZoneInfo("Asia/Kolkata")
     now_ist = datetime.now(IST)
     market_open = (
         now_ist.weekday() < 5
-        and __import__("datetime").time(9, 15) <= now_ist.time() <= __import__("datetime").time(15, 30)
+        and _dtime(9, 15) <= now_ist.time() <= _dtime(15, 30)
     )
 
+    # Live prices — cached
+    prices = _get_prices()
+
+    # Bot status
     runner = get_runner()
     scheduler_ok = runner.scheduler.running
     if ipc.flag_exists(ipc.FLAG_PAUSE):
@@ -304,41 +203,64 @@ def _build_snapshot() -> dict:
     else:
         bot_status = "running"
 
+    # Shadow trades summary from Mongo
+    shadow_summary = {"open": 0, "today_pnl": 0.0, "total_pnl": 0.0,
+                      "strategies": {}, "trades_today": 0}
+    all_records = {}
+    try:
+        from core import mongo as _mongo
+        from core.records import RecordTracker
+        db = _mongo.get_db()
+        if db is not None:
+            today_str = now_ist.date().isoformat()
+            for s_name in SHADOW_STRATEGY_NAMES:
+                rows = list(db.shadow_trades.find(
+                    {"strategy": s_name},
+                    projection={"_id": 0, "pnl": 1, "status": 1, "date": 1},
+                    sort=[("entry_dt", -1)],
+                    limit=500,
+                ))
+                today_rows = [r for r in rows if r.get("date") == today_str]
+                closed = [r for r in rows if r.get("status") == "CLOSED"]
+                today_closed = [r for r in today_rows if r.get("status") == "CLOSED"]
+                wins = sum(1 for r in closed if (r.get("pnl") or 0) > 0)
+                shadow_summary["strategies"][s_name] = {
+                    "trades_today":     len(today_rows),
+                    "today_pnl":        round(sum(r.get("pnl") or 0 for r in today_closed), 2),
+                    "total_pnl":        round(sum(r.get("pnl") or 0 for r in closed), 2),
+                    "closed":           len(closed),
+                    "wins":             wins,
+                    "win_rate":         round(wins / len(closed) * 100, 1) if closed else 0,
+                    "open":             any(r.get("status") == "OPEN" for r in rows),
+                }
+            shadow_summary["open"]         = sum(1 for s in shadow_summary["strategies"].values()
+                                                  if s["open"])
+            shadow_summary["today_pnl"]    = round(sum(s["today_pnl"]
+                                                        for s in shadow_summary["strategies"].values()), 2)
+            shadow_summary["total_pnl"]    = round(sum(s["total_pnl"]
+                                                        for s in shadow_summary["strategies"].values()), 2)
+            shadow_summary["trades_today"] = sum(s["trades_today"]
+                                                  for s in shadow_summary["strategies"].values())
+        all_records = records.get_all_records()
+    except Exception as e:
+        logger.debug("snapshot: shadow summary failed: %s", e)
+
     return {
-        "timestamp": now_ist.isoformat(),
-        "bot_status": bot_status,
-        "scheduler_running": scheduler_ok,
-        "market_open": market_open,
-        "last_heartbeat": runner.last_heartbeat,
-        "last_scores": runner.last_scores,
-        "token_set_at": _get_token_status(),
-        "day_bias": runner.last_day_bias,
-        "option_chain": runner.last_option_chain,
-        "watch_zones":  runner.last_zones,
-        "mode": "live",   # paper trading was removed — always live now
-        "pnl": {
-            "total": round(total_pnl, 2),
-            "today": round(today_pnl, 2),
-            "win_rate": win_rate,
-            "total_trades": len(all_round_trips),
-            "today_trades": len(today_round_trips),
-            "wins_today": wins_today,
-            "losses_today": losses_today,
-            "open_positions": len(open_pos),
-        },
-        "strategy_summary": strategy_summary,
-            "today_journal":    today_journal,
-            "prices": prices,
-            "recent_trades": all_trades[:20],
-            "recent_activity": recent_activity[:20],
-            "round_trips":   all_round_trips[:20],
-            "angel_trades":  runner.last_angel_trades,
-        "angel_error_count": len(__import__("core.angel_error_log", fromlist=["get_all"]).get_all()),
-        "latest_order_issue": _latest_order_issue(),
-        "open_positions": open_pos,
-        "settings": ipc.read_settings(),
-        "account": _get_account_status(today_round_trips),
-        "equity_curve": equity_curve[-100:],  # last 100 points
+        "timestamp":           now_ist.isoformat(),
+        "bot_status":          bot_status,
+        "scheduler_running":   scheduler_ok,
+        "market_open":         market_open,
+        "last_heartbeat":      runner.last_heartbeat,
+        "token_set_at":        _get_token_status(),
+        "option_chain":        runner.last_option_chain,
+        "shadow":              shadow_summary,
+        "mode":                "shadow",   # this bot does forward-testing only
+        "prices":              prices,
+        "angel_error_count":   len(__import__("core.angel_error_log",
+                                              fromlist=["get_all"]).get_all()),
+        "latest_order_issue":  _latest_order_issue(),
+        "settings":            ipc.read_settings(),
+        "account":             _get_account_status([]),
         "records": [
             {"description": r["description"], "value": r["value"],
              "symbol": r.get("symbol") or "-", "date": r["achieved_at"][:10]}
@@ -361,164 +283,49 @@ def snapshot(user: str = Depends(get_current_user)):
 
 @app.get("/api/pnl")
 def pnl_report(start: str = None, end: str = None, user: str = Depends(get_current_user)):
-    """Return trades filtered by date range for the PPnL page."""
-    all_trades = memory.get_all_trades(limit=2000)
-    if start:
-        all_trades = [t for t in all_trades if t.get("timestamp", "") >= start]
-    if end:
-        # include full end date
-        all_trades = [t for t in all_trades if t.get("timestamp", "") <= end + "T23:59:59"]
+    """Return shadow trade history grouped by day.
 
-    # Filter out pure REJECTED trades (legacy shape before virtualization)
-    legacy_rejected = [t for t in all_trades if t.get("status") == "REJECTED"]
-    normal_trades   = [t for t in all_trades if t.get("status") != "REJECTED"]
-
-    round_trips = memory.build_round_trips(normal_trades)
-
-    # Format legacy rejected trades to match the round_trip shape
-    rejected_formatted = [
-        {
-            "strategy":    t.get("strategy", "—"),
-            "symbol":      t.get("symbol"),
-            "underlying":  t.get("underlying") or t.get("symbol"),
-            "option_type": t.get("option_type"),
-            "strike":      t.get("strike"),
-            "expiry":      t.get("expiry"),
-            "side":        t.get("side", "BUY"),
-            "quantity":    t.get("quantity"),
-            "lot_size":    t.get("lot_size", 65),
-            "entry_price": t.get("price"),
-            "exit_price":  None,
-            "pnl":         0,
-            "close_reason": t.get("close_reason") or t.get("action_reason", "rejected"),
-            "score":       t.get("score"),
-            "entry_time":  t.get("timestamp"),
-            "exit_time":   None,
-            "status":      "REJECTED",
-        }
-        for t in legacy_rejected
-    ]
-
-    # Re-map virtual_rejected round trips so they display as REJECTED in the UI
-    for rt in round_trips:
-        if rt.get("mode") == "virtual_rejected":
-            rt["status"] = "REJECTED"
-            rt["close_reason"] = rt.get("close_reason") or "rejected by broker (virtual completion)"
-
-    # Also grab pending OPEN trades so they show up on the current day's dashboard
-    open_trades = [t for t in normal_trades if t.get("side") == "BUY" and t.get("closed_at") is None]
-    open_formatted = []
-    for t in open_trades:
-        # Don't duplicate if it somehow got into round trips (it shouldn't)
-        if any(rt.get("buy_order_id") == t.get("order_id") for rt in round_trips):
-            continue
-        open_formatted.append({
-            "strategy":    t.get("strategy", "—"),
-            "symbol":      t.get("symbol"),
-            "underlying":  t.get("underlying") or t.get("symbol"),
-            "option_type": t.get("option_type"),
-            "strike":      t.get("strike"),
-            "expiry":      t.get("expiry"),
-            "side":        t.get("side", "BUY"),
-            "quantity":    t.get("quantity"),
-            "lot_size":    t.get("lot_size", 65),
-            "entry_price": t.get("price"),
-            "exit_price":  None,
-            "pnl":         0,
-            "close_reason": t.get("close_reason") or "",
-            "score":       t.get("score"),
-            "entry_time":  t.get("timestamp"),
-            "exit_time":   None,
-            "status":      "REJECTED" if t.get("mode") == "virtual_rejected" else "OPEN",
-        })
-
-    all_entries = round_trips + rejected_formatted + open_formatted
-
-    # Group by date for daily summary
+    The legacy ATR P&L view is gone — this now reports the shadow ledger.
+    """
+    from core import mongo as _mongo
     from collections import defaultdict
-    daily: dict = defaultdict(lambda: {"trades": [], "total_pnl": 0, "wins": 0, "losses": 0, "rejected": 0})
-    for t in all_entries:
-        ts   = t.get("entry_time") or t.get("timestamp", "")
-        date = ts[:10] if ts else "unknown"
-        daily[date]["trades"].append(t)
+    db = _mongo.get_db()
+    if db is None:
+        return {"total_pnl": 0, "total_trades": 0, "completed_trades": 0,
+                "rejected_trades": 0, "win_rate": 0, "daily": [], "trades": []}
+
+    q: dict = {}
+    if start: q["date"] = {"$gte": start}
+    if end:   q.setdefault("date", {}).update({"$lte": end})
+    rows = list(db.shadow_trades.find(q, projection={"_id": 0}, limit=2000,
+                                       sort=[("entry_dt", -1)]))
+
+    daily: dict = defaultdict(lambda: {"trades": [], "total_pnl": 0,
+                                        "wins": 0, "losses": 0, "rejected": 0})
+    for t in rows:
+        d = t.get("date", "unknown")
+        daily[d]["trades"].append(t)
         pnl = t.get("pnl") or 0
-        daily[date]["total_pnl"] = round(daily[date]["total_pnl"] + pnl, 2)
-        if t.get("status") == "REJECTED":
-            daily[date]["rejected"] += 1
-        elif pnl > 0:
-            daily[date]["wins"] += 1
-        elif pnl <= 0 and t.get("status") == "COMPLETE":
-            daily[date]["losses"] += 1
+        daily[d]["total_pnl"] = round(daily[d]["total_pnl"] + pnl, 2)
+        if t.get("status") == "CLOSED":
+            if pnl > 0: daily[d]["wins"]   += 1
+            else:        daily[d]["losses"] += 1
 
-    # Convert to list sorted by date descending
-    daily_summary = [
-        {"date": d, **v, "trades": v["trades"]}
-        for d, v in sorted(daily.items(), reverse=True)
-    ]
-
-    total_pnl  = round(sum((t.get("pnl") or 0) for t in round_trips), 2)
-    win_trades = sum(1 for t in round_trips if (t.get("pnl") or 0) > 0)
-    total_count = len(round_trips) + len(legacy_rejected)
-    win_rate   = round(win_trades / len(round_trips) * 100, 1) if round_trips else 0
+    daily_summary = [{"date": d, **v} for d, v in sorted(daily.items(), reverse=True)]
+    closed_rows = [r for r in rows if r.get("status") == "CLOSED"]
+    total_pnl   = round(sum((r.get("pnl") or 0) for r in closed_rows), 2)
+    wins        = sum(1 for r in closed_rows if (r.get("pnl") or 0) > 0)
+    win_rate    = round(wins / len(closed_rows) * 100, 1) if closed_rows else 0
 
     return {
-        "total_pnl":      total_pnl,
-        "total_trades":   total_count,
-        "completed_trades": len(round_trips),
-        "rejected_trades":  len(legacy_rejected),
-        "win_rate":       win_rate,
-        "daily":          daily_summary,
-        "trades":         all_entries,
+        "total_pnl":         total_pnl,
+        "total_trades":      len(rows),
+        "completed_trades":  len(closed_rows),
+        "rejected_trades":   0,
+        "win_rate":          win_rate,
+        "daily":             daily_summary,
+        "trades":            rows,
     }
-
-@app.get("/api/pcr-log")
-def pcr_log_data(days: int = 2, user: str = Depends(get_current_user)):
-    """Return historical PCR/OI data from pcr_log.csv for the specified number of days."""
-    try:
-        import csv
-        from datetime import datetime, timedelta
-        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
-        log_file = os.path.join(config.BASE_DIR, "db", "pcr_log.csv")
-        if not os.path.exists(log_file):
-            return _safe_json([])
-            
-        data = []
-        with open(log_file, "r") as f:
-            reader = csv.reader(f)
-            for row in reader:
-                if len(row) >= 9 and row[0] >= cutoff:
-                    try:
-                        data.append({
-                            "timestamp": row[0],
-                            "symbol": row[1],
-                            "pcr": float(row[2]),
-                            "ce_oi": int(row[3]),
-                            "pe_oi": int(row[4]),
-                            "ce_wall": int(row[5]),
-                            "pe_wall": int(row[6]),
-                            "max_pain": int(row[7]),
-                            "spot": float(row[8]),
-                        })
-                    except ValueError:
-                        continue
-        return _safe_json(data)
-    except Exception as e:
-        logger.error(f"Error reading pcr_log: {e}")
-        return _safe_json([])
-
-@app.get("/api/signal-log")
-def signal_log_endpoint(date: str = None, limit: int = 200, user: str = Depends(get_current_user)):
-    """Every 5-min strategy evaluation — trade or no-trade — newest first."""
-    from core.memory import get_signal_log
-    rows = get_signal_log(date=date, limit=limit)
-    # Attach pre-signal premium: for each row, find what premium was 2-3 rows earlier
-    for i, row in enumerate(rows):
-        pre2 = rows[i + 2] if i + 2 < len(rows) else None
-        pre3 = rows[i + 3] if i + 3 < len(rows) else None
-        row["pre2_premium"] = pre2["option_premium"] if pre2 else None
-        row["pre3_premium"] = pre3["option_premium"] if pre3 else None
-    return {"rows": rows, "count": len(rows)}
-
 
 @app.get("/api/health")
 def health():
@@ -743,106 +550,6 @@ def token_refresh(user: str = Depends(get_current_user)):
     return {"live": live, "token_status": status, "error": error}
 
 
-@app.get("/api/bot/debug")
-def bot_debug(user: str = Depends(get_current_user)):
-    """Live signal scores for ATR Intraday — no trades placed."""
-    from core.bot_runner import _is_market_hours, IST
-    runner = get_runner()
-    now_ist = datetime.now(IST)
-
-    result = {"time_ist": now_ist.isoformat(), "market_open": _is_market_hours(),
-              "last_heartbeat": runner.last_heartbeat, "last_scores": runner.last_scores,
-              "token_set_at": _get_token_status(),
-              "latest_order_issue": _latest_order_issue(),
-              "strategies": {}}
-
-    # Use last_scores from the ATR cycle.
-    # Fall back to a live score fetch if the bot hasn't run yet (e.g. first load).
-    for strat_name, score_mode in [("ATR Intraday", "atr_only")]:
-        if strat_name in runner.last_scores:
-            result["strategies"][strat_name] = runner.last_scores[strat_name]
-        else:
-            try:
-                from strategies.signal_scorer import score_symbol
-                from strategies.patterns import detect_patterns, get_candles_from_df
-                from data.angel_fetcher import AngelFetcher
-                fetcher = AngelFetcher.get()
-                intraday_raw = fetcher.fetch_intraday("NIFTY", "5m")
-                if intraday_raw is None:
-                    result["strategies"][strat_name] = {
-                        "score": 0, "direction": "HOLD", "action": "HOLD",
-                        "threshold": 6, "will_trade": False,
-                        "note": "Waiting for market data (< 3 bars since open)",
-                    }
-                    continue
-                opens, highs, lows, closes, volumes, all_closes, bar_time = intraday_raw
-                import pandas as pd
-                import numpy as np
-                df_5m = pd.DataFrame({
-                    "Open": opens, "High": highs, "Low": lows,
-                    "Close": closes, "Volume": volumes,
-                })
-                price = float(closes[-1]) if len(closes) else 0
-                indicators = {"price": price, "symbol": "NIFTY"}
-                sc = score_symbol(indicators, {}, {}, mode=score_mode, df_5m=df_5m)
-                result["strategies"][strat_name] = {
-                    "score": sc["score"], "direction": sc["action"], "action": sc["action"],
-                    "threshold": sc["threshold"], "will_trade": abs(sc["score"]) >= sc["threshold"],
-                    "breakdown": dict(sc.get("breakdown") or {}),
-                    "signals":   list(sc.get("signals") or [])[:12],
-                    "note": f"live fetch (bot cycle not yet run) | mode={score_mode}",
-                }
-            except Exception as e:
-                result["strategies"][strat_name] = {"error": str(e)}
-
-    return Response(content=_safe_json(result), media_type="application/json")
-
-@app.get("/api/bot/bias")
-def get_bias(user: str = Depends(get_current_user)):
-    return ipc.read_day_bias()
-
-@app.post("/api/bot/bias")
-def set_bias(body: dict, user: str = Depends(get_current_user)):
-    from core.note_parser import parse_trade_note
-    bias = body.get("bias", "NEUTRAL").upper()
-    if bias not in ("BULLISH", "BEARISH", "NEUTRAL"):
-        raise HTTPException(status_code=400, detail="bias must be BULLISH, BEARISH, or NEUTRAL")
-    note = body.get("note", "")
-
-    parsed = parse_trade_note(note)
-
-    # If natural language bias detected, upgrade the explicit bias selection
-    if parsed["type"] == "bias" and bias == "NEUTRAL":
-        bias = parsed["bias"]
-
-    # Queue force trade (bypasses signal scorer)
-    if parsed["type"] == "force_trade":
-        if ipc.flag_exists(ipc.FLAG_FORCE_TRADE):
-            parsed["explanation"] = "A trade is already queued — wait for it to execute first."
-            parsed["type"] = "unclear"
-        else:
-            import config as _cfg
-            _sym = parsed.get("symbol", "NIFTY")
-            _lot_size = _cfg.LOT_SIZES.get(_sym, 65)
-            _lots = max(1, getattr(_cfg, "MIN_LOTS", 1))
-            ipc.write_force_trade(
-                symbol      = _sym,
-                side        = parsed["direction"],
-                quantity    = _lot_size * _lots,
-                reason      = f"Note trade: {note}",
-                option_type = parsed.get("option_type"),
-                strike      = parsed.get("strike"),
-                sl          = parsed.get("sl"),
-                tp          = parsed.get("tp"),
-            )
-
-    ipc.write_day_bias(bias, note, parsed)
-    result = ipc.read_day_bias()
-    result["parsed"] = parsed
-    # Update runner cache so WebSocket broadcast reflects new bias immediately
-    get_runner().last_day_bias = {k: v for k, v in result.items() if k != "parsed"}
-    return result
-
 @app.post("/api/bot/pause")
 def pause_bot(user: str = Depends(get_current_user)):
     ipc.write_flag(ipc.FLAG_PAUSE)
@@ -854,49 +561,6 @@ def resume_bot(user: str = Depends(get_current_user)):
     ipc.clear_flag(ipc.FLAG_PAUSE)
     ipc.write_flag(ipc.FLAG_RESUME)
     return {"status": "running"}
-
-@app.post("/api/trade/force")
-async def force_trade(body: dict, user: str = Depends(get_current_user)):
-    symbol   = body.get("symbol")
-    side     = body.get("side")
-    quantity = int(body.get("quantity", 1))
-    reason   = body.get("reason", "Manual override from dashboard")
-    if ipc.flag_exists(ipc.FLAG_FORCE_TRADE):
-        return {"error": "A trade is already queued"}
-    ipc.write_force_trade(symbol, side, quantity, reason)
-    return {"status": "queued", "symbol": symbol, "side": side, "quantity": quantity}
-
-
-@app.post("/api/live/preflight")
-def live_preflight(body: dict, user: str = Depends(get_current_user)):
-    from core.broker import AngelOneBroker
-    symbol = str(body.get("symbol", "NIFTY")).upper()
-    side = str(body.get("side", "BUY")).upper()
-    option_type = str(body.get("option_type") or ("PE" if side == "SELL" else "CE")).upper()
-    quantity = int(body.get("quantity") or config.LOT_SIZES.get(symbol, 1))
-    strike = body.get("strike")
-    strike = int(strike) if strike not in (None, "") else None
-    order_type = str(body.get("order_type", "MARKET")).upper()
-    product = str(body.get("product", "MIS")).upper()
-    exchange = str(body.get("exchange", "NFO")).upper()
-    try:
-        broker = AngelOneBroker()
-        report = broker.preflight_order(
-            symbol=symbol,
-            side=side,
-            quantity=quantity,
-            order_type=order_type,
-            exchange=exchange,
-            product=product,
-            option_type=option_type,
-            strike=strike,
-            tag="preflight",
-            log_failures=False,
-        )
-        return report
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
 
 @app.get("/api/journals")
 def list_journals(user: str = Depends(get_current_user)):
@@ -929,26 +593,6 @@ def save_journal_now(user: str = Depends(get_current_user)):
     from core.journal import save_daily_journal
     path = save_daily_journal()
     return {"status": "saved", "path": path}
-
-@app.get("/api/weekly-reviews")
-def list_weekly_reviews(user: str = Depends(get_current_user)):
-    from core.journal import list_weekly_reviews as _list
-    return {"weeks": _list()}
-
-@app.get("/api/weekly-reviews/{key}")
-def get_weekly_review(key: str, user: str = Depends(get_current_user)):
-    from core.journal import load_weekly_review
-    data = load_weekly_review(key)
-    if data is None:
-        raise HTTPException(status_code=404, detail=f"No weekly review found for {key}")
-    return data
-
-@app.post("/api/weekly-reviews/generate-now")
-def generate_weekly_now(user: str = Depends(get_current_user)):
-    from core.journal import save_weekly_review
-    path = save_weekly_review()
-    return {"status": "saved", "path": path}
-
 
 @app.get("/api/settings")
 def get_settings(user: str = Depends(get_current_user)):
@@ -1134,32 +778,6 @@ def clear_angel_errors(user: str = Depends(get_current_user)):
     from core.angel_error_log import clear
     clear()
     return {"status": "cleared"}
-
-
-@app.post("/api/backtest")
-def run_backtest(body: dict, user: str = Depends(get_current_user)):
-    from backtesting.engine import BacktestEngine
-    from backtesting.metrics import compute_metrics
-    symbol          = body.get("symbol", "NIFTY")
-    period          = body.get("period", "60d")
-    interval        = body.get("interval", "15m")
-    initial_capital = float(body.get("capital", 20000))
-    min_score       = int(body.get("min_score", 7))
-    risk_pct        = float(body.get("risk_pct", 2.0))
-    daily_loss      = float(body.get("daily_loss_limit_pct", 3.0))
-    rr_ratio        = float(body.get("rr_ratio", 2.0))
-    strategy        = body.get("strategy", "ATR Intraday")
-    try:
-        engine  = BacktestEngine(initial_capital=initial_capital)
-        result  = engine.run(symbol, period=period, interval=interval,
-                             min_score=min_score, risk_pct=risk_pct,
-                             daily_loss_limit_pct=daily_loss, rr_ratio=rr_ratio,
-                             strategy=strategy)
-        metrics = compute_metrics(result["trades"], result["equity_curve"],
-                                  result["initial_capital"])
-        return {"result": result, "metrics": metrics}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 _chart_cache: dict = {"data": None, "ts": 0.0}

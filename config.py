@@ -36,60 +36,15 @@ TARGET_PHASE_A   = 150_000
 TARGET_PHASE_B   = 1_500_000
 
 # ── Budget & Risk ──────────────────────────────────────────────────────────────
-STARTING_BUDGET    = 125_000   # ₹1.25L — 3 lots × 2 strategies running independently
-RISK_PER_TRADE_PCT = 2.0       # % of portfolio risked per trade (backtest optimal)
-MAX_OPEN_POSITIONS = 1         # one trade at a time — no concurrent positions
-MAX_TRADE_AMOUNT   = 40_000    # max capital per trade — covers 3 NIFTY lots at ₹180 ATM
-MAX_DAILY_LOSS              = 6_250   # ₹6,250 combined hard stop (5% of ₹1.25L) — all strategies pause when hit
-PER_STRATEGY_DAILY_LOSS_PCT = 3.0    # each strategy pauses independently at 3% loss (₹3,750) — doesn't stop others
-# MAX_DAILY_TRADES removed — the only entry constraint is "one live or
-# virtual_rejected trade per strategy at a time" enforced via the per-strategy
-# duplicate guard. No per-day count. Real risk caps below remain:
-#   - PER_STRATEGY_DAILY_LOSS_PCT (3%) pauses this strategy
-#   - MAX_DAILY_LOSS (₹6,250) pauses everything
-#   - MAX_OPEN_POSITIONS (1) belt-and-suspenders broker-level gate
-#
-# Broker-rejection cooldown — if Angel One silently rejects N entries today
-# (silent rejection / insufficient funds / contract issue), auto-pause this
-# strategy for the rest of the day. The underlying cause is almost always
-# operational (unfunded account, expired session, lot-size mismatch) and
-# won't fix itself; spamming retries every 5 min wastes API quota and
-# pollutes the trade log with cosmetic virtual_rejected rows.
-MAX_REJECTIONS_PER_DAY = 2
+# Shadow trading only — risk knobs live in core/risk_budget.py.
+STARTING_BUDGET = 50_000   # baseline capital for the shadow risk-budget
 
 # ── Lot Sizes (NSE) ────────────────────────────────────────────────────────────
-# Verify current lot sizes at NSE or Angel One contract specs
 LOT_SIZES = {
     "NIFTY": 65,   # revised Feb 2026
 }
-MIN_LOTS = 1   # default 1 lot for live baseline — overridable from dashboard header
-# Hard upper cap on lots — caps the value accepted by the /api/settings
-# endpoint and any future auto-scaling. Bump when comfortable scaling up.
+MIN_LOTS = 1
 MAX_LOTS = 1
-
-# ── Intraday Timing ────────────────────────────────────────────────────────────
-TRADING_TYPE          = "intraday"
-INTRADAY_START        = "09:30"    # open at 9:30 — first candle close
-INTRADAY_ENTRY_CUTOFF = "15:00"    # stop taking new entries at 3:00 PM
-INTRADAY_EXIT_BY      = "15:20"    # auto square-off all positions at 15:20
-ORB_WINDOW_MINS       = 15
-LUNCH_SKIP_START      = "23:59"    # disabled
-LUNCH_SKIP_END        = "23:59"
-
-# ── Stop Loss / Take Profit ────────────────────────────────────────────────────
-STOP_LOSS_PCT   = 1.5    # % of option premium — SL trigger for all strategies
-
-# Per-strategy R:R ratios (TP = STOP_LOSS_PCT × ratio)
-ATR_RR_RATIO    = 3.0    # ATR Intraday  → 1:3  (TP = 4.5%)
-TAKE_PROFIT_PCT = STOP_LOSS_PCT * ATR_RR_RATIO  # 4.5% — alias used by backtest + banner
-
-# ── Option Premium Target Range ───────────────────────────────────────────────
-MIN_OPTION_PREMIUM = 155   # target ₹160 strike — search until premium ≥ ₹155
-MAX_OPTION_PREMIUM = 165   # target ₹160 strike — search until premium ≤ ₹165
-
-# ── Signal Score ───────────────────────────────────────────────────────────────
-MIN_SIGNAL_SCORE = 6   # trade only when score ≥ 6 (backtest: 45.2% WR at 6 vs 44.7% at 5)
-FIB_OF_SIGNAL_SCORE = 6
 
 # ── Watchlist ──────────────────────────────────────────────────────────────────
 WATCHLIST = {

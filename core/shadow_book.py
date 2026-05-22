@@ -33,7 +33,7 @@ import logging
 from datetime import datetime, time as dtime
 from typing import Optional
 
-from strategies.straddle_signal import SL_DIST, RR, SIDE
+from strategies.feature_signals import SL_DIST, RR, SIDE
 
 logger = logging.getLogger(__name__)
 

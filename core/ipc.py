@@ -36,10 +36,6 @@ _PERSISTENT_FLAGS = {
     "event_blocks.json",      # custom Budget / RBI MPC dates
     "event_unblocks.json",    # force-allow overrides
     "settings.json",          # min_lots and any future runtime settings
-    "day_bias.json",          # today's BULLISH/BEARISH note
-    "sl_orders.json",         # live exchange SL-M order IDs (per strategy)
-    "tp_orders.json",         # live exchange TP order IDs (per strategy)
-    "watch_zones.json",       # pre-market zones from 9 AM briefing
 }
 
 
@@ -56,50 +52,8 @@ def clear_all_flags() -> None:
         f.unlink(missing_ok=True)
 
 
-# ── Force trade IPC ───────────────────────────────────────────────────────────
-
-FLAG_FORCE_TRADE = "force_trade.json"
-
-
-def write_force_trade(symbol: str, side: str, quantity: int, reason: str = "Manual override",
-                      option_type: str = None, strike: int = None,
-                      sl: float = None, tp: float = None) -> None:
-    """Dashboard writes this to queue a manual trade for the bot to execute."""
-    import json
-    payload = {"symbol": symbol, "side": side, "quantity": quantity, "reason": reason}
-    if option_type: payload["option_type"] = option_type
-    if strike:      payload["strike"]      = strike
-    if sl:          payload["sl"]          = sl
-    if tp:          payload["tp"]          = tp
-    (FLAGS_DIR / FLAG_FORCE_TRADE).write_text(json.dumps(payload))
-
-
-def read_day_bias() -> dict:
-    """Return current day bias. Default NEUTRAL if not set."""
-    import json
-    f = FLAGS_DIR / "day_bias.json"
-    if not f.exists():
-        return {"bias": "NEUTRAL", "note": "", "set_at": None}
-    try:
-        return json.loads(f.read_text())
-    except Exception:
-        return {"bias": "NEUTRAL", "note": "", "set_at": None}
-
-
-def write_day_bias(bias: str, note: str = "", parsed: dict = None) -> None:
-    """Dashboard writes trader's directional bias for the day."""
-    import json
-    from datetime import datetime, timezone, timedelta
-    ist = timezone(timedelta(hours=5, minutes=30))
-    (FLAGS_DIR / "day_bias.json").write_text(
-        json.dumps({
-            "bias": bias.upper(),
-            "note": note,
-            "parsed": parsed or {},
-            "set_at": datetime.now(ist).isoformat(),
-        })
-    )
-
+# Force-trade IPC and day_bias removed alongside ATR retirement — both
+# only existed to nudge the ATR scorer's decisions.
 
 # ── Event block overrides ─────────────────────────────────────────────────────
 
@@ -239,119 +193,9 @@ def write_settings(settings: dict) -> dict:
     return merged
 
 
-SL_ORDERS_FILE = FLAGS_DIR / "sl_orders.json"
-TP_ORDERS_FILE = FLAGS_DIR / "tp_orders.json"
+# SL/TP order tracking, pre-market watch zones, and force_trade IPC all
+# removed alongside ATR retirement — these only mattered for live ATR trades.
+# The shadow executor stores its open positions in Mongo (`shadow_trades`) and
+# requires no on-disk state.
 
 
-def read_tp_orders(strategy: str) -> dict:
-    import json
-    if not TP_ORDERS_FILE.exists():
-        return {}
-    try:
-        return json.loads(TP_ORDERS_FILE.read_text()).get(strategy, {})
-    except Exception:
-        return {}
-
-
-def write_tp_orders(strategy: str, tp_orders: dict) -> None:
-    import json
-    try:
-        all_data = {}
-        if TP_ORDERS_FILE.exists():
-            try:
-                all_data = json.loads(TP_ORDERS_FILE.read_text())
-            except Exception:
-                pass
-        all_data[strategy] = tp_orders
-        TP_ORDERS_FILE.write_text(json.dumps(all_data, indent=2))
-    except Exception:
-        pass
-
-
-def clear_tp_orders(strategy: str) -> None:
-    import json
-    if not TP_ORDERS_FILE.exists():
-        return
-    try:
-        all_data = json.loads(TP_ORDERS_FILE.read_text())
-        all_data.pop(strategy, None)
-        TP_ORDERS_FILE.write_text(json.dumps(all_data, indent=2))
-    except Exception:
-        pass
-
-
-_ZONES_FILE = FLAGS_DIR / "watch_zones.json"
-
-
-def write_watch_zones(zones: list) -> None:
-    """Persist today's pre-market watch zones so strategy can read them."""
-    import json
-    try:
-        _ZONES_FILE.write_text(json.dumps(zones, indent=2))
-    except Exception:
-        pass
-
-
-def read_watch_zones() -> list:
-    """Return today's watch zones computed by zone_briefing at 9 AM."""
-    import json
-    if not _ZONES_FILE.exists():
-        return []
-    try:
-        return json.loads(_ZONES_FILE.read_text())
-    except Exception:
-        return []
-
-
-def read_sl_orders(strategy: str) -> dict:
-    """Return persisted SL-M order dict for a strategy {option_symbol: order_id}."""
-    import json
-    if not SL_ORDERS_FILE.exists():
-        return {}
-    try:
-        return json.loads(SL_ORDERS_FILE.read_text()).get(strategy, {})
-    except Exception:
-        return {}
-
-
-def write_sl_orders(strategy: str, sl_orders: dict) -> None:
-    """Persist SL-M orders so they survive bot restarts."""
-    import json
-    try:
-        all_data = {}
-        if SL_ORDERS_FILE.exists():
-            try:
-                all_data = json.loads(SL_ORDERS_FILE.read_text())
-            except Exception:
-                pass
-        all_data[strategy] = sl_orders
-        SL_ORDERS_FILE.write_text(json.dumps(all_data, indent=2))
-    except Exception:
-        pass
-
-
-def clear_sl_orders(strategy: str) -> None:
-    """Remove a strategy's SL orders after EOD square-off."""
-    import json
-    if not SL_ORDERS_FILE.exists():
-        return
-    try:
-        all_data = json.loads(SL_ORDERS_FILE.read_text())
-        all_data.pop(strategy, None)
-        SL_ORDERS_FILE.write_text(json.dumps(all_data, indent=2))
-    except Exception:
-        pass
-
-
-def read_and_clear_force_trade() -> dict | None:
-    """Bot reads this once and immediately deletes it. Returns None if not set."""
-    import json
-    f = FLAGS_DIR / FLAG_FORCE_TRADE
-    if not f.exists():
-        return None
-    try:
-        data = json.loads(f.read_text())
-    except Exception:
-        data = None
-    f.unlink(missing_ok=True)
-    return data

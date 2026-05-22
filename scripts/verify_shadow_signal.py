@@ -22,7 +22,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 import config  # noqa: F401
 from datetime import datetime, timedelta
 from core import mongo  # noqa: E402
-from strategies.straddle_signal import StraddleSignal, N_DAYS, PERCENTILE
+from strategies.feature_signals import StraddleLevelSignal as StraddleSignal, N_DAYS, PERCENTILE
 
 
 def check_threshold_match():
@@ -124,9 +124,10 @@ def check_decision_on_latest_bar():
     pe_ltp = next(x["ltp"] for x in target_rows
                   if x["strike"] == atm and x["option_type"] == "PE")
 
+    # New API: signal.compute(now_dt, spot, current_rows). Pass the full bar.
     sig = StraddleSignal()
     now_dt = datetime.fromisoformat(target_ts.replace(" ", "T"))
-    decision = sig.compute(now_dt, float(spot), float(ce_ltp), float(pe_ltp))
+    decision = sig.compute(now_dt, float(spot), target_rows)
 
     print(f"  latest_day          = {latest_day}")
     print(f"  bar timestamp       = {target_ts}")
@@ -135,6 +136,7 @@ def check_decision_on_latest_bar():
     print(f"  ATM CE / PE / sum   = Rs {ce_ltp:.2f} / Rs {pe_ltp:.2f} / Rs {ce_ltp+pe_ltp:.2f}")
     print(f"  threshold           = "
           f"{'Rs ' + format(decision.threshold, '.2f') if decision.threshold else 'warmup'}")
+    print(f"  current_value       = {decision.current_value:.2f}")
     print(f"  fire                = {decision.fire}")
     print(f"  reason              = {decision.reason}")
     return True

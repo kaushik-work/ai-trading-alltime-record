@@ -1,80 +1,68 @@
 # AI Trading Bot — Agent Guide
 
-## Architecture (updated 2026-05-06)
+## Architecture (updated 2026-05-23 — shadow-only)
 
-Intraday NIFTY options trading bot. Phase A capital ₹1.25L → ₹15L target.
-Stack: Python 3.12, FastAPI, Next.js, SQLite, Angel One SmartAPI, Claude Sonnet 4.6.
+Forward-test NIFTY options bot. **Places NO real orders.** Every decision is
+logged to Mongo `shadow_trades` for offline evaluation. ATR Intraday was
+retired in this revision.
 
-### One Live Strategy: ATR Intraday
+Stack: Python 3.12, FastAPI, Next.js, MongoDB Atlas, SQLite (vestigial),
+Angel One SmartAPI.
 
-| Strategy | Score mode | Sections | Threshold | Scheduler |
-|---|---|---|---|---|
-| ATR Intraday | `atr_only` | 1–11 (SMA / EMA / RSI / MACD / VWAP / ORB / PDH/PDL / patterns / PCR / OI / herd / ATR-vol) + 12 (S/R + structure gate) | live ≥ ±8 (config ±6) | `*/5 * * * *` :05 |
+### Active strategies — three independent shadow signals
 
-A second `_atr_fast_check` job fires at :30 of each odd-numbered minute when the
-previous bar's score was 6–7 (near miss) — catches moves 3 minutes early.
+| Strategy | Trigger | IC |
+|---|---|---|
+| `q5_straddle_level` | ATM straddle > trailing-5d P70 | +0.132 |
+| `q5_straddle_mom3`  | 3-bar change in ATM straddle > P70 | +0.120 |
+| `q5_pcr_mom3`       | 3-bar change in PCR_OI > P70 | +0.115 |
 
-C-ICT was active previously and will be **rebuilt from scratch later**. The
-prior C-ICT scorer (`order_flow.py`, `ict_only` mode) and the dead Musashi /
-Raijin / SMC / Expiry-Day Gap research code paths have all been removed.
+Locked params: SL=₹10, RR=2.25, side=CE, strike=ITM by 50, 4 trades/day/strategy,
+loss caps ₹2K/strategy and ₹3.5K aggregate, same-strike correlation guard ON.
 
 ### Key files
 
 | File | Role |
 |---|---|
-| `strategies/signal_scorer.py` | `score_symbol(..., mode="atr_only")` — 12-section scorer, returns `{score, action, threshold, signals, breakdown, confidence}` |
-| `strategies/trend_strategy.py` | `TrendStrategy(strategy_name, score_mode)` — order execution, SL/TP, zone gating |
-| `core/bot_runner.py` | `_atr_cycle`, `_atr_fast_check`, `_position_guardian`, `_zone_briefing`, `_eod_squareoff`, `_save_journal` |
-| `core/zone_briefing.py` | Pre-market watch zones (PDH/PDL/ORB/weekly) computed at 09:00 IST |
-| `core/sr_levels.py` | RBD/DBR institutional zones, structure detection |
-| `core/ipc.py` | Flag files: pause/resume, force_trade, day_bias, sl_orders, tp_orders, watch_zones, settings, event_blocks, runtime_holidays |
-| `core/journal.py` | Daily journal JSON + Claude AI review (haiku for daily, sonnet for weekly) |
-| `api/server.py` | FastAPI: snapshot, signal-log, paper-comparison, chart-data, holidays, event-blocks, WebSocket |
-| `config.py` | All financial params hardcoded (capital, SL/TP, premium target, lot size, holidays) — not env vars |
-| `scripts/backtest_live_atr.py` | Realistic ATR backtest with `--slippage` modeling |
-| `scripts/collect_option_snapshots.py` | 5-min option chain snapshot writer (builds historical premium dataset) |
+| `strategies/feature_signals.py` | Three signal classes + threshold cache, ITM-50 strike, locked params |
+| `core/shadow_book.py` | Per-strategy book (one open trade max), Mongo-persisted, restart-safe |
+| `core/risk_budget.py` | Daily loss caps, lot multiplier, same-strike guard |
+| `core/bot_runner.py` | `_shadow_signal_tick` (30s), `_option_chain_refresh` (15m), `_daily_token_refresh` (08:30/12:00/14:00), `_save_journal` (15:25) |
+| `core/mongo.py` | Mirror helpers for shadow_trades, indexes |
+| `core/journal.py` | Daily shadow summary writer |
+| `core/ipc.py` | pause/resume flags, event blocks, market holidays, settings |
+| `api/server.py` | `/api/shadow-trades`, `/api/risk-budget`, `/api/pnl`, `/api/journals`, WebSocket |
+| `scripts/collect_option_snapshots.py` | 5-min option chain writer (builds the dataset signals depend on) |
+| `scripts/replay_multi_strategy.py` | Full forward-test simulation |
+| `config.py` | Capital baseline + lot sizes + watchlist only |
 
 ### Daily routine — fully automated on the droplet
 
-All scheduling lives in `core/bot_runner.py` (APScheduler in the api container)
-and the shell-loop wrapper in the collector container. There is no laptop
-dependency, no cron, no Windows Task Scheduler.
+All scheduling lives in `core/bot_runner.py` (APScheduler in the api container).
+No laptop dependency, no cron, no Windows Task Scheduler.
 
-1. **Container start (any time)** — Angel One TOTP login + warm-up.
-2. **09:00 IST** — `_zone_briefing` writes today's watch zones.
-3. **09:00–15:35 IST** — collector container scrapes 5-min option chain
-   snapshots → CSV in `db/oi_snapshots/` + Mongo `option_snapshots`.
-4. **09:30 IST** — `_vix_auto_lots_set` reads India VIX, sets `min_lots`.
-5. **09:30–15:20 IST** — every 5 min: ATR cycle + position guardian (only
-   when a position is open) + Angel One trade book sync.
-6. **15:20 IST** — `_eod_squareoff` closes any open position, then
-   `_save_journal` writes JSON + Claude AI review (mirrored to Mongo).
-7. **20:00 IST** — day bias resets to NEUTRAL, zone-entry-fired flag clears.
-8. **Saturday 08:00 IST** — Claude weekly review (mirrored to Mongo).
+1. **Container start** — Angel One TOTP login + warm-up.
+2. **09:15–15:30 IST** — `_shadow_signal_tick` fires every 30 s.
+3. **09:00–15:35 IST** — collector container writes option_snapshots
+   (5-min × 17 strikes × CE/PE) to CSV + Mongo.
+4. **08:30 / 12:00 / 14:00 IST** — daily Angel JWT refresh.
+5. **15:25 IST** — `_save_journal` writes shadow summary to disk + Mongo.
 
-**No daily token script run is required.** TOTP auth is lazy and self-healing.
+### When changing signal logic — update these places
 
-`scripts/get_token.py` is a manual sanity check only:
-```bash
-docker compose exec api python scripts/get_token.py
-```
-
-### When changing strategy logic — update ALL these places
-
-1. `strategies/signal_scorer.py` — section logic / thresholds
-2. `strategies/trend_strategy.py` — execution, SL/TP, live threshold floor
-3. `core/bot_runner.py` — cycle jobs, `last_scores` shape
-4. `scripts/backtest_live_atr.py` — keep parity with live logic
-5. `frontend/app/debug/page.tsx` — Signal Radar display
-6. `frontend/app/strategies/page.tsx` — Strategy Playbook copy
+1. `strategies/feature_signals.py` — signal class + locked params
+2. `core/bot_runner.py` — `_shadow_signal_tick` if interfaces change
+3. `scripts/replay_multi_strategy.py` — keep parity with live logic
+4. `scripts/verify_shadow_signal.py` — must keep passing
+5. `frontend/app/components/ShadowBadge.tsx` — chip rendering
+6. `README.md` — locked param table
 
 ---
 
 ## MCP Tools: code-review-graph
 
 **ALWAYS use graph tools BEFORE Grep/Glob/Read** for codebase exploration.
-The graph is faster, cheaper, and gives structural context (callers, dependents,
-test coverage) that file scanning cannot.
+The graph is faster, cheaper, and gives structural context.
 
 | Tool | Use when |
 |------|----------|

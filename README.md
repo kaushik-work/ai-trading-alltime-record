@@ -1,242 +1,116 @@
-# AI Trading Bot — All-Time Record
+# AI Trading Bot — Shadow
 
-Fully automated intraday trading bot for **NIFTY** options on Angel One SmartAPI,
-with Claude AI for trade narrative + post-trade review.
+Forward-test platform for **NIFTY** options on Angel One SmartAPI. The bot
+**never places real orders** — every decision is logged to a Mongo
+`shadow_trades` collection for offline evaluation.
 
-**Backend:** FastAPI on a DigitalOcean droplet (Docker) | **Frontend:** Next.js on Vercel | **Data:** Angel One SmartAPI
-
----
-
-## Roadmap
-
-| Phase | Budget | Style | Goal | Status |
-|-------|--------|-------|------|--------|
-| **A** | ₹1.25L | Intraday NIFTY | Compound to ₹1.5L | ✅ Active |
-| **B** | ₹1.5L  | Intraday + Swing | Compound to ₹15L | 🔒 Locked |
-| **C** | ₹15L+  | Options Selling (Straddle / Iron Condor) | Monthly income | 🔒 Locked |
+**Backend:** FastAPI on a DigitalOcean droplet (Docker)
+**Frontend:** Next.js on Vercel
+**Data:** Angel One SmartAPI + persistent option-chain snapshots
 
 ---
 
-## Strategy
+## Active strategy: Q5 multi-signal shadow
 
-The bot runs a **single live strategy**: **ATR Intraday**.
+Three independent signals run in parallel, each with its own ledger:
 
-### ATR Intraday
-- **Signal:** SMA50 + SMA20 + EMA9 + RSI + MACD + Bollinger + Volume + ATR-vol filter
-  + VWAP + ORB + 15m trend/RSI + PDH/PDL + 12 candlestick patterns
-  + PCR + OI walls + herd-gate + S/R zones (RBD/DBR + structure)
-- **Timeframe:** 5-minute bars
-- **Score range:** −10 to +10. Live entry threshold: ≥ ±8 (config default ±6,
-  hard-floor of 8 enforced in `strategies/trend_strategy.py` to skip 6–7 traps).
-- **R:R:** 1:3.0 — SL = ½ × min(5m ATR, 50)pts (≥ 5pts floor); TP = SL × 3.0
-- **Entry window:** 09:30–15:20 IST. Mandatory square-off at 15:20.
-- **Strike selection:** Walk ATM ± 10 strikes in ₹50 steps until premium falls
-  in ₹155–₹165 range. Closest match used as fallback.
-- **Zone gating:** Pre-market watch zones (PDH/PDL/ORB/weekly) computed at 09:00.
-  Trade rejected if signal fights an active zone within 30pts.
-- **Zone-reversal early entry:** Independent of score — at most one entry/day.
-  When price taps a watch zone and the last 5m candle confirms rejection
-  (bearish at resistance / bullish at support), force-entry CE/PE.
+| Signal | Trigger | Discovered via |
+|--------|---------|----------------|
+| `q5_straddle_level` | ATM straddle > trailing-5d P70 | analyze_option_chain.py (IC +0.132) |
+| `q5_straddle_mom3`  | 3-bar change in ATM straddle > P70 | alpha_mining.py (IC +0.120) |
+| `q5_pcr_mom3`       | 3-bar change in PCR_OI > P70 | alpha_mining.py (IC +0.115) |
 
-C-ICT was active previously and will be **rebuilt from scratch later**.
-Musashi / Raijin / SMC / Expiry-Day Gap research are not in the live path.
+**Locked parameters** (from sweep + multi-strategy replay):
 
----
+| Param | Value | Notes |
+|-------|-------|-------|
+| SL distance | ₹10 | premium points |
+| RR ratio | 2.25 | WR-max from RR fine-tune (38–40%) |
+| Strike | ITM by 50 (CE) | higher delta, lower IV cost |
+| Side | CE only | signed corr was bullish |
+| Trades/day/strategy | 4 | hard cap |
+| Per-strategy daily loss cap | ₹2,000 | 4% of ₹50K |
+| Aggregate daily loss cap | ₹3,500 | 7% of ₹50K |
+| Same-strike correlation guard | ON | prevents triple-betting on a bar |
+| Lot multiplier | 1× default, 2× after 30+ closed trades | Kelly-capped |
 
-## Data Pipeline
+**Backtested expectation** (8 days replay):
 
-```
-Angel One SmartAPI   ←  primary: real NSE bars + option chain + VIX
-        ↓ if unavailable
-Cycle skipped        ←  never trade on bad data
-```
-
-5-minute option chain snapshots are persisted to build a real historical
-premium dataset over time (mitigates the BS-vs-live premium mismatch that
-hurts naive backtests).
+- Net +₹14,300, WR ~40%, PF 1.52
+- Max DD 2.6% of capital
+- 5 winning days out of 8, worst day −₹1,300
 
 ---
 
 ## Architecture
 
 ```
-DigitalOcean droplet (Docker)
-└── api  (FastAPI + APScheduler in one process)
-    ├── api/server.py           # REST + WebSocket, snapshot every 5s
-    ├── core/bot_runner.py      # AsyncIOScheduler — schedules every cycle
-    │
-    ├── strategies/
-    │   ├── trend_strategy.py   # Order execution, SL/TP, zone gating
-    │   ├── signal_scorer.py    # ATR Intraday scoring engine (atr_only)
-    │   ├── indicators.py       # EMA, RSI, ATR, VWAP, swing structure
-    │   ├── patterns.py         # 12 candlestick pattern detectors
-    │   └── vix_filter.py       # India VIX regime helper
-    │
-    ├── data/
-    │   ├── angel_fetcher.py    # Angel One singleton — TOTP, bars, option LTP, VIX
-    │   ├── market.py           # RealMarketData — daily + intraday indicators
-    │   ├── option_chain.py     # OI walls, PCR, max-pain, herd-gate
-    │   └── oi_data.py          # OI helpers
-    │
-    ├── core/
-    │   ├── brain.py            # Claude AI trade remarks
-    │   ├── broker.py           # MockBroker (paper) + AngelOneBroker (live)
-    │   ├── memory.py           # SQLite — trades, signal_log, daily_summaries
-    │   ├── records.py          # All-time records tracker
-    │   ├── journal.py          # Daily journal JSON + Claude review (haiku)
-    │   ├── ipc.py              # Flag-file IPC: pause, force-trade, day-bias, settings
-    │   ├── paper_seller.py     # Buyer-vs-seller paper P&L comparison
-    │   ├── sr_levels.py        # RBD/DBR institutional zones, structure detection
-    │   ├── zone_briefing.py    # Pre-market PDH/PDL/ORB/weekly watch zones (9 AM)
-    │   ├── greeks.py           # Black-Scholes delta/gamma/theta/vega
-    │   ├── trade_analyst.py    # Post-trade Claude analysis
-    │   └── angel_error_log.py  # Append-only error log
-    │
-    ├── backtesting/
-    │   ├── engine.py           # ATR Intraday bar-by-bar replay
-    │   ├── metrics.py          # Win rate, Sharpe, drawdown, profit factor
-    │   └── charges.py          # NSE brokerage + STT + exchange + GST
-    │
-    └── db/
-        └── trading.db          # SQLite
-
-Vercel (Next.js frontend)
-└── frontend/                   # Dashboard, signal radar, P&L, backtest, journal
+collector container       ──→  Mongo option_snapshots (5-min bars, 17 strikes × 2 sides)
+        │
+api container (FastAPI)
+  ├── BotRunner (apscheduler)
+  │   ├── _shadow_signal_tick    every 30 s
+  │   ├── _option_chain_refresh  every 15 m
+  │   ├── _daily_token_refresh   08:30 / 12:00 / 14:00 IST
+  │   └── _save_journal          15:25 IST
+  ├── REST endpoints
+  │   ├── /api/shadow-trades  per-strategy ledger
+  │   ├── /api/risk-budget    today's caps + lot multipliers
+  │   ├── /api/pnl            daily shadow P&L grouping
+  │   ├── /api/journals       saved daily JSONs
+  │   ├── /api/mongo/status   mirror health
+  │   └── /api/health
+  └── WebSocket /ws           5 s snapshot broadcast
+frontend container (Next.js)
+  └── Dashboard               chart + status chips + per-strategy summary + today's trades
 ```
 
 ---
 
-## Setup
+## Research scripts (scripts/)
 
-### 1. Install dependencies
-```bash
-pip install -r requirements.txt
-```
-
-### 2. Configure `.env`
-```env
-# Angel One SmartAPI
-ANGEL_API_KEY=...
-ANGEL_CLIENT_ID=...
-ANGEL_PASSWORD=...
-ANGEL_TOTP_TOKEN=...        # base32 secret from Angel One 2FA setup
-
-# Claude AI
-ANTHROPIC_API_KEY=sk-ant-...
-
-# Mode
-TRADING_MODE=paper          # paper = simulation | live = real money
-```
-
-All financial parameters (capital, lot size, SL/TP, premium target) live in
-`config.py` — not env vars. See `feedback_deploy_habits.md` for the rationale.
-
-### 3. Daily token routine — automatic on droplet
-
-Nothing to do daily. Angel One TOTP login is automatic — `data/angel_fetcher.py`
-reads `ANGEL_API_KEY / ANGEL_CLIENT_ID / ANGEL_PASSWORD / ANGEL_TOTP_TOKEN`
-from `.env` and generates a fresh session on first authenticated call. The bot
-runs 24/7 on the DigitalOcean droplet so this happens automatically every
-container start and as needed during the session.
-
-`scripts/get_token.py` remains as a **manual sanity check only**:
-
-```bash
-# Run inside the api container if you ever need to verify creds work
-docker compose exec api python scripts/get_token.py
-```
-
-It does not need to be scheduled on a laptop or as a cron — the droplet
-handles its own auth.
-
----
-
-## Run Locally
-
-```bash
-# Start FastAPI backend (Bot runs inside the same process via APScheduler lifespan)
-python -m uvicorn api.server:app --host 0.0.0.0 --port 8000 --reload
-```
-
-API at `http://localhost:8000`, WebSocket at `ws://localhost:8000/ws`.
-
----
-
-## API Endpoints
-
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/api/auth/token`        | POST      | Login (returns JWT) |
-| `/api/snapshot`          | GET       | Full dashboard snapshot |
-| `/api/bot/debug`         | GET       | Live ATR signal score |
-| `/api/bot/pause`         | POST      | Pause trading |
-| `/api/bot/resume`        | POST      | Resume trading |
-| `/api/bot/bias`          | POST      | Set day bias (BULLISH / NEUTRAL / BEARISH) |
-| `/api/trade/force`       | POST      | Queue a manual trade |
-| `/api/live/preflight`    | POST      | Validate token, contract, LTP, margin |
-| `/api/backtest`          | POST      | Run ATR Intraday backtest |
-| `/api/journals`          | GET       | List daily journals |
-| `/api/journals/{date}`   | GET       | Get a specific day's journal |
-| `/api/signal-log`        | GET       | Every 5-min evaluation (trade or no-trade) |
-| `/api/paper-comparison`  | GET       | Buyer-vs-seller paper P&L per signal |
-| `/api/chart-data`        | GET       | NIFTY 5m candles + S/R + EMA + POC |
-| `/api/event-blocks`      | GET/POST  | Event-blocked dates (Budget, RBI MPC) |
-| `/api/market-holidays`   | GET/POST  | NSE market holidays |
-| `/api/angel/session`     | POST      | Force fresh Angel One TOTP login |
-| `/ws`                    | WebSocket | Live snapshot every 5s |
-
----
-
-## Backtesting
-
-```json
-POST /api/backtest
-{
-  "strategy": "ATR Intraday",
-  "symbol": "NIFTY",
-  "period": "60d",
-  "interval": "5m",
-  "capital": 125000,
-  "risk_pct": 2.0,
-  "rr_ratio": 3.0,
-  "daily_loss_limit_pct": 5.0
-}
-```
-
-Backtest replays real Angel One historical bars. For realistic results
-(bar-level SL + slippage modeling), use `scripts/backtest_live_atr.py`.
-
----
-
-## Paper vs Live
-
-| | Paper Mode | Live Mode |
-|-|-----------|-----------|
-| `TRADING_MODE` | `paper` | `live` |
-| Real money | No | Yes |
-| Orders placed | Simulated (MockBroker) | Real Angel One orders |
-| Market data | Angel One | Same |
-
-> Always run paper for at least 1–2 weeks after material strategy changes.
-> Verify signal scores in the Signal Radar, then flip `TRADING_MODE=live`.
+| Script | Purpose |
+|--------|---------|
+| `analyze_option_chain.py`     | Feature → forward-return correlation pass |
+| `backtest_straddle_signal.py` | Single-signal backtest with caps |
+| `sweep_straddle.py`           | 54-combo parameter sweep + LOO |
+| `regime_filter.py`            | Trend-regime classifier (`trend_up` = noise) |
+| `meta_label_q5.py`            | López-de-Prado meta-labeling (needs more data) |
+| `alpha_mining.py`             | WorldQuant-style alpha discovery |
+| `replay_multi_strategy.py`    | Full forward-test simulation |
+| `verify_shadow_signal.py`     | Sanity check (passes) |
+| `collect_option_snapshots.py` | The 5-min option-chain writer |
 
 ---
 
 ## Deploy
 
 ```bash
+# Droplet
 git pull
-docker compose build --no-cache
-docker compose up -d --force-recreate
+docker compose build --no-cache api frontend
+docker compose up -d --force-recreate api frontend
+docker compose logs -f api | grep -E "shadow|ShadowBook"
 ```
 
-Or use `deploy.sh`. The GitHub Actions workflow (`.github/workflows/deploy.yml`)
-SSHs into the droplet on push to `main` and runs the same sequence.
+You should see, every 30 s during market hours:
+
+```
+shadow[q5_straddle_level]: val=312.5 thr=349.4 fire=False
+shadow[q5_straddle_mom3]:  val=-4.3  thr=0.65  fire=False
+shadow[q5_pcr_mom3]:       val=0.0234 thr=0.0175 fire=True
+ShadowBook[q5_pcr_mom3] OPEN ... strike=23750 prem=Rs 152.30 SL=142.30 TP=174.80
+```
 
 ---
 
-## Security
+## What was retired
 
-- All credentials in `.env` — never committed (`.gitignore`)
-- Logs automatically mask API keys, passwords, tokens (`core/security.py`)
-- Never push `.env` to git
+- **ATR Intraday strategy** — at-break-even (PF 1.03, 25.9% WR). Removed
+  Nov 2026 along with its scorer, scheduler jobs, day-bias panel, force-trade
+  IPC, signal_log, weekly Claude reviews, backtest engine, and dashboard pages.
+- **Paper trading / MockBroker** — removed earlier. The bot is live-only.
+- **VIX-based logic** — never validated, removed.
+- **Real money trading** — currently disabled. Capital is withdrawn from
+  Angel One. Bot can fetch quotes but cannot place orders. Re-fund only after
+  shadow PF stays > 1.5 across 4+ weeks of forward data.

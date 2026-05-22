@@ -454,73 +454,8 @@ class TradeMemory:
             """, (symbol, json.dumps(data), now_ist().isoformat()))
 
 
-def log_signal(
-    strategy: str,
-    score: float,
-    threshold: float,
-    direction: str,
-    will_trade: bool,
-    did_trade: bool = False,
-    reason_skipped: str = "",
-    nifty_spot: float = 0,
-    option_type: str = "",
-    strike: int = 0,
-    option_premium: float = 0,
-    signals_fired: str = "",
-    symbol: str = "NIFTY",
-):
-    """Persist every 5-min signal evaluation — trade or no-trade — to signal_log."""
-    ts = now_ist().isoformat()
-    with get_connection() as conn:
-        conn.execute("""
-            INSERT INTO signal_log
-            (timestamp, date, strategy, symbol, score, threshold, direction,
-             will_trade, did_trade, reason_skipped, nifty_spot, option_type,
-             strike, option_premium, signals_fired)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        """, (
-            ts, ts[:10], strategy, symbol,
-            round(score, 2), round(threshold, 2), direction,
-            int(will_trade), int(did_trade), reason_skipped,
-            round(nifty_spot, 2) if nifty_spot else None,
-            option_type or None,
-            strike or None,
-            round(option_premium, 2) if option_premium else None,
-            signals_fired or None,
-        ))
-    try:
-        from core import mongo
-        mongo.mirror_signal({
-            "timestamp":      ts,
-            "date":           ts[:10],
-            "strategy":       strategy,
-            "symbol":         symbol,
-            "score":          round(score, 2),
-            "threshold":      round(threshold, 2),
-            "direction":      direction,
-            "will_trade":     bool(will_trade),
-            "did_trade":      bool(did_trade),
-            "reason_skipped": reason_skipped,
-            "nifty_spot":     round(nifty_spot, 2) if nifty_spot else None,
-            "option_type":    option_type or None,
-            "strike":         strike or None,
-            "option_premium": round(option_premium, 2) if option_premium else None,
-            "signals_fired":  signals_fired or None,
-        })
-    except Exception:
-        pass
-
-
-def get_signal_log(date: str = None, limit: int = 500) -> list:
-    """Return signal evaluations, newest first. Optionally filter by date (YYYY-MM-DD)."""
-    with get_connection() as conn:
-        if date:
-            rows = conn.execute("""
-                SELECT * FROM signal_log WHERE date = ?
-                ORDER BY timestamp DESC LIMIT ?
-            """, (date, limit)).fetchall()
-        else:
-            rows = conn.execute("""
-                SELECT * FROM signal_log ORDER BY timestamp DESC LIMIT ?
-            """, (limit,)).fetchall()
-    return [dict(r) for r in rows]
+# NOTE: log_signal / get_signal_log used to live here and wrote every 5-min
+# ATR scorer evaluation to the signal_log table. Both removed with the ATR
+# strategy retirement — the shadow executor logs its own decisions to the
+# `shadow_trades` Mongo collection via core/shadow_book.py. The signal_log
+# SQLite table is kept for historical reference but is no longer written to.
