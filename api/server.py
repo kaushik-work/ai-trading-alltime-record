@@ -526,6 +526,82 @@ def health():
     return {"status": "ok", "time": datetime.now(ZoneInfo("Asia/Kolkata")).isoformat()}
 
 
+@app.get("/api/risk-budget")
+def risk_budget_endpoint(user: str = Depends(get_current_user)):
+    """Today's risk-budget status: aggregate + per-strategy caps & lot multipliers."""
+    from core import risk_budget
+    return risk_budget.status_snapshot()
+
+
+@app.get("/api/shadow-trades")
+def shadow_trades_endpoint(days: int = 30, user: str = Depends(get_current_user)):
+    """Multi-strategy shadow trade ledger.
+
+    Forward-test data only — these are simulated trades, no real orders.
+    Returns one block per strategy (q5_straddle_level, q5_straddle_mom3,
+    q5_pcr_mom3) plus an aggregate.
+    """
+    from core import mongo as _mongo
+    from datetime import datetime, timedelta
+    db = _mongo.get_db()
+    if db is None:
+        return {"enabled": False, "strategies": {}, "aggregate": None}
+
+    today = datetime.now().date().isoformat()
+    since_date = (datetime.now().date() - timedelta(days=days)).isoformat()
+
+    rows = list(db.shadow_trades.find(
+        {"date": {"$gte": since_date}},
+        projection={"_id": 0},
+        sort=[("entry_dt", -1)],
+        limit=500,
+    ))
+
+    # Group by strategy. Default name covers any pre-multi-strategy rows.
+    strategies: dict = {}
+    for r in rows:
+        s = r.get("strategy") or "q5_straddle_level"
+        strategies.setdefault(s, []).append(r)
+
+    # Per-strategy summary
+    out: dict = {}
+    for strat_name in ("q5_straddle_level", "q5_straddle_mom3", "q5_pcr_mom3"):
+        s_rows = strategies.get(strat_name, [])
+        open_pos  = next((r for r in s_rows if r.get("status") == "OPEN"), None)
+        today_pnl = sum(r.get("pnl", 0) or 0 for r in s_rows
+                        if r.get("date") == today and r.get("status") == "CLOSED")
+        total_pnl = sum(r.get("pnl", 0) or 0 for r in s_rows
+                        if r.get("status") == "CLOSED")
+        closed_cnt = sum(1 for r in s_rows if r.get("status") == "CLOSED")
+        wins_cnt   = sum(1 for r in s_rows
+                          if r.get("status") == "CLOSED" and (r.get("pnl") or 0) > 0)
+        out[strat_name] = {
+            "open_position": open_pos,
+            "today_pnl":     round(today_pnl, 2),
+            "total_pnl":     round(total_pnl, 2),
+            "closed_count":  closed_cnt,
+            "wins_count":    wins_cnt,
+            "win_rate":      round(wins_cnt / closed_cnt * 100, 1) if closed_cnt else 0,
+            "trades":        s_rows[:50],   # cap per-strategy list
+        }
+
+    # Aggregate row (sum across all strategies)
+    agg_today = sum(s["today_pnl"]    for s in out.values())
+    agg_total = sum(s["total_pnl"]    for s in out.values())
+    agg_open  = sum(1 for s in out.values() if s["open_position"])
+
+    return {
+        "enabled":      True,
+        "strategies":   out,
+        "aggregate":    {
+            "today_pnl":      round(agg_today, 2),
+            "total_pnl":      round(agg_total, 2),
+            "open_count":     agg_open,
+            "strategy_count": len(out),
+        },
+    }
+
+
 _mongo_status_cache: dict = {"result": None, "checked_at": 0.0}
 _MONGO_STATUS_TTL = 30   # re-check Mongo connectivity at most every 30s
 
@@ -560,7 +636,8 @@ def mongo_status(user: str = Depends(get_current_user)):
         try:
             counts = {}
             for col in ("trades", "signal_log", "daily_journals",
-                        "option_snapshots", "records", "weekly_reviews"):
+                        "option_snapshots", "records", "weekly_reviews",
+                        "shadow_trades"):
                 try:
                     counts[col] = db[col].estimated_document_count()
                 except Exception as _ce:

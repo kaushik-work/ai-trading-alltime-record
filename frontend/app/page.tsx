@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import { useWebSocket } from "./hooks/useWebSocket";
 import Header from "./components/Header";
 import MongoBadge from "./components/MongoBadge";
+import ShadowBadge from "./components/ShadowBadge";
 import NiftyChart from "./components/NiftyChart";
 
 const _API    = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -188,6 +189,8 @@ export default function Home() {
                 )}
                 {/* Mongo mirror health (hover for db name + collection counts) */}
                 <MongoBadge />
+                {/* Q5 ATM-Straddle shadow signal — forward-test ledger, no real orders */}
+                <ShadowBadge />
               </div>
               <p className="text-xs text-gray-400">Updates every 5 seconds via WebSocket</p>
             </div>

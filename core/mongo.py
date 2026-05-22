@@ -111,6 +111,14 @@ def _ensure_indexes(db) -> None:
         )
         db.records.create_index([("description", ASCENDING)], unique=True)
         db.weekly_reviews.create_index([("week", ASCENDING)], unique=True)
+        # Shadow trades — Q5 atm_straddle signal forward test.
+        # signal_id is "shadow_YYYYMMDD_HHMMSS" so it's unique per entry.
+        db.shadow_trades.create_index([("signal_id", ASCENDING)], unique=True)
+        db.shadow_trades.create_index([("date", DESCENDING), ("entry_dt", DESCENDING)])
+        db.shadow_trades.create_index([("date", ASCENDING), ("status", ASCENDING)])
+        # Multi-strategy support: filter open positions per (strategy, status)
+        db.shadow_trades.create_index([("strategy", ASCENDING), ("date", DESCENDING)])
+        db.shadow_trades.create_index([("strategy", ASCENDING), ("status", ASCENDING)])
     except Exception as e:
         logger.warning("Mongo index creation failed (non-fatal): %s", e)
 
@@ -198,6 +206,37 @@ def mirror_option_snapshot(rows: list[dict]) -> int:
     docs = [{**r, "_mirrored_at": datetime.now(timezone.utc)} for r in rows]
     res = db.option_snapshots.insert_many(docs, ordered=False)
     return len(res.inserted_ids)
+
+
+@_safe
+def mirror_shadow_open(doc: dict) -> None:
+    """Insert a new OPEN shadow trade. Idempotent — upserts by signal_id."""
+    db = _get_db()
+    if db is None or not doc.get("signal_id"):
+        return
+    payload = {**doc, "_mirrored_at": datetime.now(timezone.utc)}
+    db.shadow_trades.update_one({"signal_id": doc["signal_id"]},
+                                {"$set": payload}, upsert=True)
+
+
+@_safe
+def mirror_shadow_close(signal_id: str, exit_dt: str, exit_premium: float,
+                        reason: str, pnl: float) -> None:
+    """Update the OPEN shadow trade with exit fields. Marks status=CLOSED."""
+    db = _get_db()
+    if db is None or not signal_id:
+        return
+    db.shadow_trades.update_one(
+        {"signal_id": signal_id},
+        {"$set": {
+            "status":       "CLOSED",
+            "exit_dt":      exit_dt,
+            "exit_premium": exit_premium,
+            "reason":       reason,
+            "pnl":          pnl,
+            "_mirrored_at": datetime.now(timezone.utc),
+        }},
+    )
 
 
 @_safe

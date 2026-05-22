@@ -127,6 +127,10 @@ class BotRunner:
         self.last_angel_trades: list = []               # Angel One tradeBook, synced every 5m
         self.last_zones: list = []                      # today's watch zones (pre-market briefing)
         self._zone_entry_fired_today: bool = False      # zone reversal: one entry per day max
+        # Q5 multi-strategy shadow signals (forward test, no real orders).
+        # Three independent signals each with its own ledger.
+        self._shadow_signals: list = []
+        self._shadow_books: dict = {}
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
@@ -205,6 +209,19 @@ class BotRunner:
         # Position guardian — every 60s during market hours: checks SL/TP on open positions
         # independent of strategy cycle. Catches fast moves between 5m candle ticks.
         self.scheduler.add_job(self._position_guardian, "interval", seconds=60, id="position_guardian")
+        # Q5 multi-strategy SHADOW signal — runs every 30s during market hours so
+        # entries/exits are SPONTANEOUS, not locked to 5-min candle boundaries.
+        # Signal feature value still uses the latest option_snapshot bar (which the
+        # collector writes every 5min), but the executor checks for fire/exit on
+        # every 30s tick using LIVE spot + LTP. This means:
+        #   • SL/TP can fire mid-bar — much tighter risk than 5-min-only checks
+        #   • Entries don't wait for the next 5-min mark — fire the moment threshold breaks
+        # Linux-only — prevents laptop double-fires.
+        if _is_cloud_host():
+            self.scheduler.add_job(
+                self._shadow_signal_tick, "interval", seconds=30,
+                id="shadow_signal_tick",
+            )
         # Daily Angel One token refresh — runs at 08:30, 12:00, and 14:00 IST.
         # Angel One JWTs live ~24 hours from issue. A single 08:30 refresh
         # isn't enough: a token issued at 11:00 yesterday will expire at
@@ -476,6 +493,102 @@ class BotRunner:
             await loop.run_in_executor(None, self._atr_strategy.run_watchlist)
         except Exception as e:
             logger.debug("position_guardian: %s", e)
+
+
+    # ── Q5 ATM-Straddle SHADOW signal (forward test, no real orders) ─────────
+
+    async def _shadow_signal_tick(self):
+        """Computes the three Q5 signals (straddle level, straddle mom3, PCR
+        mom3) and opens/closes simulated trades for each independently.
+
+        SHADOW executor — never places real orders. Per-signal ledgers persist
+        to Mongo collection `shadow_trades` keyed by `strategy` field.
+
+        Flow per tick:
+          1. Read latest option_snapshot bar from Mongo (collector wrote it ~15s ago)
+          2. For each of 3 signals:
+               a. If a position is open under that signal: fetch live LTP, tick book
+               b. Else: compute the signal, if it fires fetch live ATM CE LTP and open
+        """
+        if self.paused or not _is_market_hours():
+            return
+        try:
+            from strategies.feature_signals import (
+                ALL_SIGNALS, _today_bars, _atm_strike_for, _chosen_strike_for,
+            )
+            from core.shadow_book import ShadowBook
+            from core import mongo as _mongo
+            from data.angel_fetcher import AngelFetcher
+
+            # First call: instantiate all signals + their books
+            if not self._shadow_signals:
+                self._shadow_signals = [cls() for cls in ALL_SIGNALS]
+                self._shadow_books = {s.name: ShadowBook(s.name)
+                                       for s in self._shadow_signals}
+                logger.info("shadow signals initialized: %s",
+                            ", ".join(s.name for s in self._shadow_signals))
+
+            now_dt = datetime.now(IST).replace(tzinfo=None)
+            db = _mongo.get_db()
+            if db is None:
+                logger.debug("shadow_signal: Mongo unreachable — skipping tick")
+                return
+
+            # Pull the latest TODAY bar from option_snapshots (collector writes
+            # ~15s before this tick fires).
+            today_bars = _today_bars(db, now_dt.date())
+            if not today_bars:
+                logger.debug("shadow_signal: no today bars yet — skipping")
+                return
+            latest_ts = max(today_bars.keys())
+            current_rows = today_bars[latest_ts]
+            spot = current_rows[0].get("spot")
+            if not spot:
+                return
+            atm           = _atm_strike_for(float(spot))
+            chosen_strike = _chosen_strike_for(float(spot))   # ITM-50 for CE
+
+            af = AngelFetcher.get()
+            expiry = af.nearest_weekly_expiry()
+
+            # Per-signal loop
+            for sig in self._shadow_signals:
+                book = self._shadow_books[sig.name]
+
+                # ── Open position? Tick the book against live LTP
+                if book.has_open():
+                    pos = book.open_position()
+                    _, ltp = af.get_option_ltp("NIFTY", int(pos["strike"]),
+                                                pos["side"], expiry)
+                    if ltp is None:
+                        continue
+                    closed = book.tick(now_dt, float(ltp))
+                    if closed:
+                        logger.info("shadow[%s] closed %s pnl=Rs %+.2f reason=%s",
+                                    sig.name, closed["signal_id"],
+                                    closed.get("pnl", 0), closed.get("reason", ""))
+                    continue
+
+                # ── No open position — compute signal
+                decision = sig.compute(now_dt, float(spot), current_rows)
+                logger.info("shadow[%s]: val=%.4f thr=%s fire=%s",
+                            sig.name, decision.current_value,
+                            f"{decision.threshold:.4f}" if decision.threshold else "N/A",
+                            decision.fire)
+                if not decision.fire:
+                    continue
+
+                # Fire — fetch live LTP for the chosen (ITM) strike
+                _, ce_ltp = af.get_option_ltp("NIFTY", chosen_strike,
+                                                decision.side, expiry)
+                if not ce_ltp:
+                    logger.warning("shadow[%s] fired but %d CE LTP fetch failed",
+                                   sig.name, chosen_strike)
+                    continue
+                book.open(now_dt, chosen_strike, decision.side, float(ce_ltp),
+                          decision.threshold, float(spot))
+        except Exception as e:
+            logger.warning("shadow_signal_tick failed (non-fatal): %s", e)
 
 
     # ── Option chain refresh (every 15 min) ──────────────────────────────────
