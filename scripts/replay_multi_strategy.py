@@ -191,6 +191,28 @@ def _index_premium_series(df: pd.DataFrame) -> dict:
     return by_key
 
 
+def _classify_regime_inline(bar_list, current_idx, window_bars=6,
+                             trend_thr=0.0015) -> str:
+    """Same logic as strategies/feature_signals._classify_regime() but
+    inlined for the replay (works on the per-day bar list rather than
+    a Mongo query)."""
+    if current_idx < window_bars:
+        return "warmup"
+    spots = [bar_list[current_idx - k][1][0]["spot"]
+             for k in range(window_bars, -1, -1)]
+    if any(s is None or s <= 0 for s in spots):
+        return "warmup"
+    ret = spots[-1] / spots[0] - 1.0
+    import numpy as _np
+    x = _np.arange(len(spots))
+    slope = float(_np.polyfit(x, spots, 1)[0])
+    if ret >= trend_thr and slope > 0:
+        return "trend_up"
+    if ret <= -trend_thr and slope < 0:
+        return "trend_down"
+    return "chop"
+
+
 def _trade_qualifies(state: dict, strategy: str, date: str, atm: int,
                      apply_loss_caps: bool) -> tuple:
     """Risk-budget gate. Returns (allowed, reason, lot_mult)."""
@@ -275,6 +297,16 @@ def _replay(apply_loss_caps: bool, sl_dist: float = 10.0, rr: float = 3.0,
     refused = defaultdict(int)
     sorted_bars = sorted(bars.keys())
 
+    # Build per-day bar lists for regime classification (need 6 prior bars)
+    by_day_bars: dict = defaultdict(list)
+    for (date, ts) in sorted_bars:
+        by_day_bars[date].append((ts, bars[(date, ts)]))
+    # Index lookup so we know the current bar's position within its day
+    day_bar_index: dict = {}
+    for date, bar_list in by_day_bars.items():
+        for i, (ts, _) in enumerate(bar_list):
+            day_bar_index[(date, ts)] = i
+
     for (date, ts) in sorted_bars:
         rows = bars[(date, ts)]
         bar_dt = ts.to_pydatetime() if hasattr(ts, "to_pydatetime") else ts
@@ -323,6 +355,11 @@ def _replay(apply_loss_caps: bool, sl_dist: float = 10.0, rr: float = 3.0,
                 state["agg_pnl_today"][date] += pnl
                 del state["open"][s]
 
+        # Compute current regime once per bar (shared across all strategies)
+        bar_idx = day_bar_index.get((date, ts), -1)
+        day_bars_list = by_day_bars.get(date, [])
+        regime = _classify_regime_inline(day_bars_list, bar_idx)
+
         # ── Then: check each strategy for a new entry
         for s in strategies:
             if s in state["open"]:
@@ -332,6 +369,10 @@ def _replay(apply_loss_caps: bool, sl_dist: float = 10.0, rr: float = 3.0,
                 continue
             feat = features_by_sig[s].get((date, ts))
             if feat is None or feat <= thr:
+                continue
+            # Regime gate: refuse fires in trend_up (PF 1.13 — noise regime)
+            if regime == "trend_up":
+                refused["trend_up regime"] += 1
                 continue
             # Strike selection: ATM by default; ITM by -1 step for CE means
             # strike below spot (more intrinsic, higher delta).
@@ -479,9 +520,10 @@ def main():
     ap.add_argument("--no-loss-caps", action="store_true",
                     help="Disable risk-budget loss caps (4/day cap still applies)")
     ap.add_argument("--sl", type=float, default=10.0, help="SL distance in premium points")
-    ap.add_argument("--rr", type=float, default=3.0, help="R:R ratio")
-    ap.add_argument("--strike-offset", type=int, default=0,
-                    help="Strike offset in steps (0=ATM, -1=ITM by 50, -2=ITM by 100, +1=OTM by 50)")
+    ap.add_argument("--rr", type=float, default=2.25, help="R:R ratio (default 2.25 — matches production)")
+    ap.add_argument("--strike-offset", type=int, default=-1,
+                    help="Strike offset in steps (default -1 ITM-50 — matches production). "
+                         "0=ATM, -1=ITM by 50, -2=ITM by 100, +1=OTM by 50.")
     ap.add_argument("--csv", default=None)
     args = ap.parse_args()
 

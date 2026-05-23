@@ -118,6 +118,58 @@ def _today_bars(db, today: date) -> dict:
     return bars
 
 
+# ── Regime filter ────────────────────────────────────────────────────────────
+# Backed by scripts/regime_filter.py findings:
+#   trend_up regime  → PF 1.13 (essentially noise) → REFUSE fires
+#   chop regime      → PF 2.52
+#   trend_down regime → PF 3.26
+#
+# Trend defined as: spot return over last 6 bars (30 min) exceeds threshold
+# AND OLS slope of those 6 bars confirms direction.
+REGIME_WINDOW_BARS    = 6        # 30 min lookback
+REGIME_TREND_RETURN   = 0.0015   # 0.15% over 30 min defines a trend
+
+
+def _classify_regime(today_bars: dict, now_ts: str) -> str:
+    """Returns one of: 'trend_up', 'trend_down', 'chop', 'warmup'.
+
+    `today_bars` is {ts: [row, ...]} from _today_bars().
+    `now_ts` is the current bar's timestamp string (already keyed in today_bars).
+    """
+    sorted_ts = sorted(today_bars.keys())
+    if now_ts not in sorted_ts:
+        return "warmup"
+    idx = sorted_ts.index(now_ts)
+    if idx < REGIME_WINDOW_BARS:
+        return "warmup"
+
+    # Last REGIME_WINDOW_BARS+1 bars of spot (inclusive of current)
+    window_ts = sorted_ts[idx - REGIME_WINDOW_BARS : idx + 1]
+    spots = []
+    for ts in window_ts:
+        rows = today_bars.get(ts, [])
+        if not rows or rows[0].get("spot") is None:
+            return "warmup"
+        spots.append(float(rows[0]["spot"]))
+
+    cur = spots[-1]
+    past = spots[0]
+    if past <= 0:
+        return "warmup"
+    ret = cur / past - 1.0
+
+    # OLS slope sign confirmation
+    import numpy as _np
+    x = _np.arange(len(spots))
+    slope = float(_np.polyfit(x, spots, 1)[0])
+
+    if ret >= REGIME_TREND_RETURN and slope > 0:
+        return "trend_up"
+    if ret <= -REGIME_TREND_RETURN and slope < 0:
+        return "trend_down"
+    return "chop"
+
+
 # ── Base class ───────────────────────────────────────────────────────────────
 
 class FeatureSignal:
@@ -209,6 +261,28 @@ class FeatureSignal:
             logger.debug("%s today_history failed: %s", self.name, e)
             return None
 
+    def _regime_now(self, now_dt: datetime) -> str:
+        """Return current 30-min regime: trend_up | trend_down | chop | warmup."""
+        try:
+            from core import mongo
+            db = mongo.get_db()
+            if db is None:
+                return "warmup"
+            today_bars = _today_bars(db, now_dt.date())
+            if not today_bars:
+                return "warmup"
+            # Find latest bar ts at or before now_dt
+            sorted_ts = sorted(today_bars.keys())
+            latest = max((ts for ts in sorted_ts
+                          if datetime.fromisoformat(ts.replace(" ", "T")) <= now_dt),
+                         default=None)
+            if latest is None:
+                return "warmup"
+            return _classify_regime(today_bars, latest)
+        except Exception as e:
+            logger.debug("%s regime check failed: %s", self.name, e)
+            return "warmup"
+
     def compute(self, now_dt: datetime, spot: float,
                 current_rows: list) -> SignalDecision:
         """Caller passes `current_rows` = list of snapshot dicts for the
@@ -235,9 +309,15 @@ class FeatureSignal:
                                   f"{self.name}={current_val:.4f} <= "
                                   f"threshold={threshold:.4f}")
 
+        # ── Regime gate: refuse fires when in trend_up (worst regime, PF 1.13)
+        regime = self._regime_now(now_dt)
+        if regime == "trend_up":
+            return SignalDecision(False, atm, current_val, threshold,
+                                  f"regime=trend_up — refused (noise regime)")
+
         return SignalDecision(True, atm, current_val, threshold,
                               f"{self.name}={current_val:.4f} > "
-                              f"threshold={threshold:.4f}")
+                              f"threshold={threshold:.4f} regime={regime}")
 
 
 # ── Concrete signals ─────────────────────────────────────────────────────────
