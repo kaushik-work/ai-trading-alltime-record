@@ -49,7 +49,7 @@ SL_DIST = 10.0
 RR = 2.25
 PER_STRAT_LOSS_CAP = 2_000
 DAILY_AGG_LOSS_CAP = 3_500
-MAX_TRADES_PER_DAY = 4
+MAX_TRADES_PER_DAY = 5
 RV_WINDOW_BARS = 12        # 12 × 5min = 60 min trailing realised-vol window
 
 
@@ -219,6 +219,30 @@ def _index_premium_series(df: pd.DataFrame) -> dict:
     return by_key
 
 
+def _pick_strike_for_target_premium(df: pd.DataFrame, bar_date: str,
+                                     bar_ts, atm: int,
+                                     target_premium: float,
+                                     side: str = "CE") -> int:
+    """Walk strikes from ATM downward (for CE) until the option's LTP at this
+    bar is closest to `target_premium`. Returns the chosen strike.
+
+    Searches the full chain (ATM-400 to ATM+400 in 50-pt steps).
+    """
+    candidates = df[(df["date"] == bar_date) &
+                    (df["ts"] == bar_ts) &
+                    (df["option_type"] == side)]
+    if candidates.empty:
+        return atm - 50   # fallback to ITM-50
+    best_strike = atm
+    best_diff   = float("inf")
+    for r in candidates.itertuples(index=False):
+        diff = abs(float(r.ltp) - target_premium)
+        if diff < best_diff:
+            best_diff   = diff
+            best_strike = int(r.strike)
+    return best_strike
+
+
 def _evaluate_mode(r, mode: str, threshold: float) -> bool:
     """Return True if this bar should fire under the chosen mode."""
     if mode == "iv_rv_low":
@@ -241,7 +265,9 @@ def _evaluate_mode(r, mode: str, threshold: float) -> bool:
 
 def _run_backtest(bars: pd.DataFrame, premium_series: dict,
                   threshold: float, sl_dist: float, rr: float,
-                  apply_loss_caps: bool, mode: str):
+                  apply_loss_caps: bool, mode: str,
+                  df_raw: pd.DataFrame | None = None,
+                  target_premium: float | None = None):
     trades, refused = [], defaultdict(int)
     open_until: dict = {}
     state = {"strat_pnl_today": defaultdict(float),
@@ -261,8 +287,13 @@ def _run_backtest(bars: pd.DataFrame, premium_series: dict,
         if apply_loss_caps and state["strat_pnl_today"][r.date] <= -PER_STRAT_LOSS_CAP:
             refused["loss cap"] += 1; continue
 
-        # Trade ITM-50 CE
-        chosen_strike = int(r.atm_strike) - 50
+        # Strike: closest to target premium, or fallback ITM-50
+        if target_premium is not None and df_raw is not None:
+            chosen_strike = _pick_strike_for_target_premium(
+                df_raw, r.date, r.ts, int(r.atm_strike), target_premium, "CE"
+            )
+        else:
+            chosen_strike = int(r.atm_strike) - 50
         key = (r.date, chosen_strike, "CE")
         series = premium_series.get(key)
         if not series:
@@ -347,7 +378,9 @@ def main():
     ap.add_argument("--sl",        type=float, default=10.0)
     ap.add_argument("--rr",        type=float, default=2.25)
     ap.add_argument("--no-loss-caps", action="store_true")
-    ap.add_argument("--symbol",    default="NIFTY")
+    ap.add_argument("--symbol",         default="NIFTY")
+    ap.add_argument("--target-premium", type=float, default=170.0,
+                    help="Target option premium for strike selection (default 170)")
     ap.add_argument("--csv",       default=None)
     args = ap.parse_args()
 
@@ -378,8 +411,11 @@ def main():
                                      threshold=args.threshold,
                                      sl_dist=args.sl, rr=args.rr,
                                      apply_loss_caps=not args.no_loss_caps,
-                                     mode=args.mode)
-    _summarise(trades, refused, f"{args.mode} threshold={args.threshold} (BUY CE)")
+                                     mode=args.mode,
+                                     df_raw=df,
+                                     target_premium=args.target_premium)
+    _summarise(trades, refused,
+               f"{args.mode} threshold={args.threshold} target_premium=Rs{args.target_premium} (BUY CE)")
 
     if args.csv and trades:
         out = pd.DataFrame(trades)

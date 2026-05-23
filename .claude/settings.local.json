@@ -151,7 +151,22 @@
       "Bash(powershell -command \"Get-ScheduledTask -TaskName 'NiftyDailyRunner' | Get-ScheduledTaskInfo | Select-Object LastRunTime, NextRunTime, LastTaskResult\")",
       "Bash(powershell -command ' *)",
       "PowerShell(Start-Process \"taskschd.msc\")",
-      "Bash(timeout 8 .venv/Scripts/python scripts/collect_option_snapshots.py --dry-run)"
+      "Bash(timeout 8 .venv/Scripts/python scripts/collect_option_snapshots.py --dry-run)",
+      "Bash(dir \"c:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\db\\\\oi_snapshots\")",
+      "Bash(dir \"c:\\\\Users\\\\rkkau\\\\Desktop\\\\github\\\\ai-trading-alltime-record\\\\db\")",
+      "Bash(.venv/Scripts/python scripts/backtest_iv_mispricing.py --mode iv_rv_low --threshold 0.85 --csv results_iv_rv_low.csv)",
+      "Bash(.venv/Scripts/python scripts/backtest_iv_mispricing.py --mode iv_rv_low --threshold 0.85 --no-loss-caps --csv results_iv_rv_low_uncapped.csv)",
+      "Bash(.venv/Scripts/python scripts/backtest_iv_mispricing.py --mode iv_rv_low --threshold 0.70)",
+      "Bash(.venv/Scripts/python scripts/backtest_iv_mispricing.py --mode iv_rv_low --threshold 0.60)",
+      "Bash(.venv/Scripts/python scripts/backtest_iv_mispricing.py --mode iv_rv_high --threshold 1.5)",
+      "Bash(.venv/Scripts/python scripts/backtest_iv_mispricing.py --mode iv_rank_low --threshold 0.25)",
+      "Bash(.venv/Scripts/python scripts/backtest_iv_mispricing.py --mode iv_rank_high --threshold 0.75)",
+      "Bash(.venv/Scripts/python scripts/backtest_iv_mispricing.py --mode iv_rv_low --threshold 0.85 --target-premium 170 --csv results_170_iv_rv_low.csv)",
+      "Bash(.venv/Scripts/python scripts/backtest_iv_mispricing.py --mode iv_rv_high --threshold 1.5 --target-premium 170 --csv results_170_iv_rv_high.csv)",
+      "Bash(.venv/Scripts/python scripts/backtest_iv_mispricing.py --mode iv_rv_low --threshold 0.85 --target-premium 170)",
+      "Bash(.venv/Scripts/python scripts/backtest_iv_mispricing.py --mode iv_rv_high --threshold 1.5 --target-premium 170)",
+      "Bash(.venv/Scripts/python scripts/replay_multi_strategy.py --csv results_q5_live.csv)",
+      "Bash(.venv/Scripts/python scripts/replay_multi_strategy.py)"
     ]
   }
 }
