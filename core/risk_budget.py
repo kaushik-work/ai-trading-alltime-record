@@ -219,7 +219,8 @@ def status_snapshot() -> dict:
             "agg_cap_hit":        agg <= -DAILY_AGG_LOSS_CAP,
             "strategies":         {},
         }
-        for strat in ("q5_straddle_level", "q5_straddle_mom3", "q5_pcr_mom3"):
+        for strat in ("q5_straddle_level", "q5_straddle_mom3",
+                       "q5_pcr_mom3", "q5_iv_cheap_090"):
             s_pnl = _strategy_pnl_today(db, strat)
             mult  = current_lot_multiplier(strat)
             out["strategies"][strat] = {

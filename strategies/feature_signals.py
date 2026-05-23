@@ -381,6 +381,159 @@ class PcrMom3Signal(FeatureSignal):
         return cur_pcr - past
 
 
+class IvCheapSignal(FeatureSignal):
+    """Fires when Black-Scholes ATM implied vol < 0.90 × realised vol.
+
+    Orthogonal to the three Q5 signals (Jaccard < 0.07 with all of them) —
+    catches "cheap IV vs realised" bars while Q5 signals catch
+    "rich/rising IV" bars. Validated by scripts/check_signal_overlap.py:
+    74.6% of fires are on bars no Q5 signal catches.
+
+    Threshold is FIXED at 0.90 (not percentile-rolling) per backtest sweep:
+    PF 1.60 at 0.90, PF degrades both ways. Above ~1.5 the signal becomes
+    indistinguishable from random.
+
+    Live cost: 2 Black-Scholes inversions per tick + one Mongo query for
+    recent spot bars. Negligible (~5ms per tick worst case).
+    """
+    name = "q5_iv_cheap_090"
+    FIXED_THRESHOLD  = 0.90
+    RISK_FREE_RATE   = 0.07
+    CALENDAR_DAYS_YR = 365
+    RV_WINDOW_BARS   = 12   # 60-min trailing RV
+    BARS_PER_DAY     = 75
+    TRADING_DAYS_YR  = 252
+
+    def _bs_call(self, S, K, T, r, sigma):
+        import math
+        from scipy.stats import norm
+        if T <= 0 or sigma <= 0:
+            return max(0.0, S - K)
+        d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * math.sqrt(T))
+        d2 = d1 - sigma * math.sqrt(T)
+        return S * norm.cdf(d1) - K * math.exp(-r * T) * norm.cdf(d2)
+
+    def _bs_put(self, S, K, T, r, sigma):
+        import math
+        from scipy.stats import norm
+        if T <= 0 or sigma <= 0:
+            return max(0.0, K - S)
+        d1 = (math.log(S / K) + (r + 0.5 * sigma * sigma) * T) / (sigma * math.sqrt(T))
+        d2 = d1 - sigma * math.sqrt(T)
+        return K * math.exp(-r * T) * norm.cdf(-d2) - S * norm.cdf(-d1)
+
+    def _implied_vol(self, market_price, S, K, T, option_type):
+        from scipy.optimize import brentq
+        if T <= 0 or market_price <= 0:
+            return None
+        intrinsic = max(0.0, S - K) if option_type == "CE" else max(0.0, K - S)
+        if market_price <= intrinsic:
+            return None
+        f = self._bs_call if option_type == "CE" else self._bs_put
+
+        def diff(sigma):
+            return f(S, K, T, self.RISK_FREE_RATE, sigma) - market_price
+
+        try:
+            return brentq(diff, 1e-3, 5.0, maxiter=100, xtol=1e-4)
+        except (ValueError, RuntimeError):
+            return None
+
+    def _realised_vol(self, now_dt: datetime) -> Optional[float]:
+        """Annualised RV from last RV_WINDOW_BARS spot values today."""
+        import math
+        import numpy as _np
+        try:
+            from core import mongo
+            db = mongo.get_db()
+            if db is None:
+                return None
+            today_bars = _today_bars(db, now_dt.date())
+            sorted_ts = sorted(today_bars.keys())
+            # Take last N bars at or before now_dt
+            usable = [ts for ts in sorted_ts
+                      if datetime.fromisoformat(ts.replace(" ", "T")) <= now_dt]
+            if len(usable) < 6:
+                return None
+            window = usable[-self.RV_WINDOW_BARS:]
+            spots = []
+            for ts in window:
+                rows = today_bars.get(ts, [])
+                if not rows or rows[0].get("spot") is None:
+                    return None
+                spots.append(float(rows[0]["spot"]))
+            if len(spots) < 6:
+                return None
+            log_returns = []
+            for i in range(1, len(spots)):
+                if spots[i-1] <= 0:
+                    continue
+                log_returns.append(math.log(spots[i] / spots[i-1]))
+            if len(log_returns) < 5:
+                return None
+            sigma = float(_np.std(log_returns, ddof=1))
+            return sigma * math.sqrt(self.TRADING_DAYS_YR * self.BARS_PER_DAY)
+        except Exception as e:
+            logger.debug("%s realised_vol failed: %s", self.name, e)
+            return None
+
+    def _refresh_threshold(self, today: date) -> Optional[float]:
+        # Threshold is fixed — no percentile recomputation needed
+        return self.FIXED_THRESHOLD
+
+    def compute(self, now_dt: datetime, spot: float,
+                current_rows: list) -> SignalDecision:
+        atm = _atm_strike_for(spot)
+        ce_ltp = next((r["ltp"] for r in current_rows
+                        if r.get("strike") == atm and r.get("option_type") == "CE"),
+                       None)
+        pe_ltp = next((r["ltp"] for r in current_rows
+                        if r.get("strike") == atm and r.get("option_type") == "PE"),
+                       None)
+        if ce_ltp is None or pe_ltp is None:
+            return SignalDecision(False, atm, 0.0, None,
+                                  "missing ATM premiums")
+
+        # Calendar days to nearest weekly expiry (from broker)
+        try:
+            from data.angel_fetcher import AngelFetcher
+            af = AngelFetcher.get()
+            expiry = af.nearest_weekly_expiry()
+            days_to_expiry = max(1, (expiry - now_dt.date()).days)
+        except Exception as e:
+            logger.debug("%s expiry lookup failed: %s", self.name, e)
+            return SignalDecision(False, atm, 0.0, None, "expiry lookup failed")
+
+        T = days_to_expiry / self.CALENDAR_DAYS_YR
+        iv_ce = self._implied_vol(float(ce_ltp), float(spot), int(atm), T, "CE")
+        iv_pe = self._implied_vol(float(pe_ltp), float(spot), int(atm), T, "PE")
+        if iv_ce is None or iv_pe is None:
+            return SignalDecision(False, atm, 0.0, None, "IV inversion failed")
+        iv_atm = (iv_ce + iv_pe) / 2.0
+
+        rv = self._realised_vol(now_dt)
+        if rv is None or rv <= 0:
+            return SignalDecision(False, atm, iv_atm, None,
+                                  "warmup: insufficient bars for RV")
+
+        ratio = iv_atm / rv
+
+        if ratio >= self.FIXED_THRESHOLD:
+            return SignalDecision(False, atm, ratio, self.FIXED_THRESHOLD,
+                                  f"iv_rv={ratio:.3f} >= {self.FIXED_THRESHOLD} "
+                                  f"(IV not cheap enough)")
+
+        # Regime gate (same as other signals)
+        regime = self._regime_now(now_dt)
+        if regime == "trend_up":
+            return SignalDecision(False, atm, ratio, self.FIXED_THRESHOLD,
+                                  f"regime=trend_up — refused (noise regime)")
+
+        return SignalDecision(True, atm, ratio, self.FIXED_THRESHOLD,
+                              f"iv_rv={ratio:.3f} < {self.FIXED_THRESHOLD} "
+                              f"regime={regime}")
+
+
 # ── Registry ─────────────────────────────────────────────────────────────────
 
-ALL_SIGNALS = [StraddleLevelSignal, StraddleMom3Signal, PcrMom3Signal]
+ALL_SIGNALS = [StraddleLevelSignal, StraddleMom3Signal, PcrMom3Signal, IvCheapSignal]

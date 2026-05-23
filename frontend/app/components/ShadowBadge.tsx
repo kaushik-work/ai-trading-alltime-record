@@ -47,6 +47,7 @@ const STRATEGY_LABELS: Record<string, string> = {
   q5_straddle_level: "STRADDLE",
   q5_straddle_mom3:  "STR-MOM",
   q5_pcr_mom3:       "PCR-MOM",
+  q5_iv_cheap_090:   "IV-CHEAP",
 };
 
 /**

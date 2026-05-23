@@ -57,9 +57,17 @@ export default function StrategyExplainer() {
                   3-bar change in PCR_OI &gt; P70. Short-term contrarian positioning signal.
                 </span>
               </div>
+              <div className="flex gap-2">
+                <span className="font-bold text-gray-900 w-44 shrink-0">q5_iv_cheap_090</span>
+                <span className="text-gray-600">
+                  ATM IV &lt; 0.90 × realised vol. Black-Scholes mispricing — buy when
+                  options are cheap relative to recent realised vol.
+                </span>
+              </div>
             </div>
             <div className="mt-1.5 text-[10px] text-gray-400">
-              Independent feature values, max pairwise |corr| under 0.5 — ensemble has real diversification.
+              Four independent signals — IV-cheap has Jaccard 0.04–0.07 with the
+              other three (truly orthogonal alpha, catches different market state).
             </div>
           </div>
 

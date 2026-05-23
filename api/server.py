@@ -64,7 +64,8 @@ market = RealMarketData()
 WATCHLIST = ["NIFTY"]
 # Shadow strategies — read at runtime from feature_signals.ALL_SIGNALS for
 # any per-strategy aggregation the snapshot needs.
-SHADOW_STRATEGY_NAMES = ("q5_straddle_level", "q5_straddle_mom3", "q5_pcr_mom3")
+SHADOW_STRATEGY_NAMES = ("q5_straddle_level", "q5_straddle_mom3",
+                          "q5_pcr_mom3", "q5_iv_cheap_090")
 
 # ── Price cache — shared across all WebSocket connections ─────────────────────
 # Without this, 5 open browser tabs × every-5s broadcast = 60 Angel One calls/min
