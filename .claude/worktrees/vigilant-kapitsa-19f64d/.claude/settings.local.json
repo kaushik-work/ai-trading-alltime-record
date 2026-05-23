@@ -58,7 +58,10 @@
       "Bash(.venv/Scripts/python.exe -c \"from markdown_pdf import MarkdownPdf, Section; print\\('OK markdown-pdf installed'\\)\")",
       "Bash(.venv/Scripts/python.exe docs/build_pdf.py)",
       "Bash(.venv/Scripts/python.exe -c \"from scipy.stats import norm; from scipy.optimize import brentq; print\\('scipy OK'\\)\")",
-      "Bash(.venv/Scripts/python.exe scripts/backtest_iv_mispricing.py)"
+      "Bash(.venv/Scripts/python.exe scripts/backtest_iv_mispricing.py)",
+      "Bash(.venv/Scripts/python.exe scripts/backtest_iv_mispricing.py --mode iv_mom3 --threshold 0.005)",
+      "Bash(.venv/Scripts/python.exe scripts/backtest_iv_mispricing.py --mode iv_rv_high --threshold 1.5)",
+      "Bash(.venv/Scripts/python.exe scripts/backtest_iv_mispricing.py --threshold 0.85)"
     ]
   }
 }
