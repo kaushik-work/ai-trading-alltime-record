@@ -67,6 +67,32 @@ MAX_TRADES_PER_DAY = 4
 EOD_LIMIT = dtime(15, 20)
 
 
+# ── Transaction-cost model (Angel One, NIFTY options, post-Budget-2024) ──────
+# Per round trip (BUY entry + SELL exit) at 1 lot of 65 contracts:
+#   Brokerage       Rs 20 per order             = Rs 40
+#   STT             0.1% of sell-side premium   ~= entry_premium*65*0.001
+#   Exch. txn       0.053% on premium turnover  ~= (entry+exit)*65*0.00053
+#   GST             18% on (brokerage + exch)
+#   SEBI + stamp    ~= Rs 0.30
+# Net per round trip averages ~Rs 65-75 at typical NIFTY premium levels.
+BROKERAGE_PER_ORDER = 20.0
+STT_RATE            = 0.001       # 0.1% on sell premium (options, FY25 rate)
+EXCH_TXN_RATE       = 0.00053     # 0.053% on premium turnover
+GST_RATE            = 0.18
+MISC_PER_TRIP       = 0.30
+
+
+def _round_trip_cost(entry_premium: float, exit_premium: float,
+                      lot_size: int = LOT_SIZE, lots: int = 1) -> float:
+    """Approximate all-in cost of one buy+sell round trip on a NIFTY option."""
+    qty = lot_size * lots
+    brokerage = BROKERAGE_PER_ORDER * 2   # buy + sell
+    stt       = exit_premium * qty * STT_RATE
+    exch_txn  = (entry_premium + exit_premium) * qty * EXCH_TXN_RATE
+    gst       = (brokerage + exch_txn) * GST_RATE
+    return round(brokerage + stt + exch_txn + gst + MISC_PER_TRIP, 2)
+
+
 def _bars_with_full_chain(df: pd.DataFrame) -> dict:
     """Build {(date, ts): [row, ...]} of all snapshot rows per bar."""
     out: dict = {}
@@ -344,10 +370,17 @@ def _replay(apply_loss_caps: bool, sl_dist: float = 10.0, rr: float = 3.0,
                 reason = "TP"
             if reason:
                 lot_mult = pos["lot_multiplier"]
-                pnl = round((exit_premium - pos["entry_premium"]) * LOT_SIZE * lot_mult, 2)
+                gross_pnl = round((exit_premium - pos["entry_premium"])
+                                   * LOT_SIZE * lot_mult, 2)
+                cost = _round_trip_cost(pos["entry_premium"], exit_premium,
+                                          lots=lot_mult)
+                pnl = round(gross_pnl - cost, 2)
                 pos.update({
                     "exit_dt": bar_dt, "exit_premium": exit_premium,
-                    "reason": reason, "pnl": pnl,
+                    "reason": reason,
+                    "gross_pnl": gross_pnl,
+                    "cost":      cost,
+                    "pnl":       pnl,    # net of costs
                 })
                 trades.append(pos)
                 state["closed_trades"][s].append(pos)

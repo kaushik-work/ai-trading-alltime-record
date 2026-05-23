@@ -43,6 +43,23 @@ from core import mongo  # noqa: E402
 LOT_SIZE = 65
 EOD_LIMIT = dtime(15, 20)
 RISK_FREE_RATE = 0.07     # India 1-year G-Sec ~7%
+
+# Cost model — same constants as replay_multi_strategy.py
+BROKERAGE_PER_ORDER = 20.0
+STT_RATE            = 0.001       # 0.1% on sell premium (post Budget 2024)
+EXCH_TXN_RATE       = 0.00053
+GST_RATE            = 0.18
+MISC_PER_TRIP       = 0.30
+
+
+def _round_trip_cost(entry_premium: float, exit_premium: float,
+                      lot_size: int = LOT_SIZE, lots: int = 1) -> float:
+    qty       = lot_size * lots
+    brokerage = BROKERAGE_PER_ORDER * 2
+    stt       = exit_premium * qty * STT_RATE
+    exch_txn  = (entry_premium + exit_premium) * qty * EXCH_TXN_RATE
+    gst       = (brokerage + exch_txn) * GST_RATE
+    return round(brokerage + stt + exch_txn + gst + MISC_PER_TRIP, 2)
 TRADING_DAYS_PER_YEAR = 252
 BARS_PER_DAY = 75         # 5-min bars between 09:15 and 15:30
 SL_DIST = 10.0
@@ -308,7 +325,9 @@ def _run_backtest(bars: pd.DataFrame, premium_series: dict,
         exit_dt, exit_premium, reason = _walk_forward(series, entry_dt,
                                                        entry_premium,
                                                        sl_dist, rr)
-        pnl = round((exit_premium - entry_premium) * LOT_SIZE, 2)
+        gross_pnl = round((exit_premium - entry_premium) * LOT_SIZE, 2)
+        cost      = _round_trip_cost(entry_premium, exit_premium)
+        pnl       = round(gross_pnl - cost, 2)   # net of costs
         trades.append({
             "date":          r.date,
             "entry_dt":      entry_dt,
