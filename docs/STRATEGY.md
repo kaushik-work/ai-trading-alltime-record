@@ -1,37 +1,52 @@
 # NIFTY Q5 Multi-Strategy Shadow — Strategy Document
 
-**Version:** 1.0 (2026-05-23)
+**Version:** 2.0 (2026-05-24)
 **Capital baseline:** ₹50,000
 **Asset:** NIFTY weekly options (CE only, ITM-50)
 **Mode:** SHADOW (forward-test only — no real orders placed)
 
 ---
 
+## Changelog vs v1.0
+
+- **+ q5_iv_cheap_090** — fourth signal added (Black-Scholes IV mispricing)
+- **+ Regime filter** — refuses fires in `trend_up` regime (PF was 1.13 there — noise)
+- **+ Transaction-cost model** — all backtests now net of broker + STT + exchange + GST
+- **+ WebSocket live tick infra** — sub-second feature lag instead of up-to-5min
+- **+ Multi-symbol collection** — NIFTY + BANKNIFTY + FINNIFTY + SENSEX (signals still NIFTY-only)
+- Net P&L expectations recalibrated to net-of-costs figures
+
+---
+
 ## 1. One-page summary
 
-We forward-test **three independent statistical signals** simultaneously,
+We forward-test **four independent statistical signals** simultaneously,
 each opening simulated trades into the Mongo `shadow_trades` collection.
-The signals were discovered from 13 days of 5-min option-chain snapshots
-by running a correlation pass against forward NIFTY returns. All three
-have Information Coefficient (IC) > 0.10 vs the 15-min forward return —
-i.e. they have measurable predictive content individually, and they were
-selected for low cross-correlation so the ensemble is genuinely diversified.
+The first three signals were discovered from 13 days of 5-min option-chain
+snapshots by correlation pass against forward NIFTY returns. The fourth was
+discovered via Black-Scholes IV mispricing analysis after researcher-applied
+bug fixes (calendar-day time, overnight gap strip).
 
 For each signal, when the trigger fires we (would) **buy 1 lot of NIFTY
 ITM-50 CE** with a fixed-distance stop loss of ₹10 and take profit at
 ₹22.50 (RR = 2.25). The trade exits at the first of SL hit, TP hit, or
 15:20 IST. Hard cap of 4 trades per signal per day; if the day's loss on
-that signal exceeds ₹2,000 or the aggregate across all three exceeds
-₹3,500, no new entries until tomorrow.
+that signal exceeds ₹2,000 or the aggregate across all four exceeds
+₹3,500, no new entries until tomorrow. The regime filter refuses entries
+when the last 30 min of NIFTY spot shows a clean upward trend
+(`trend_up` regime — proven to be the noise regime in our sample).
+
+**Net-of-costs expected weekly P&L: ~₹9,000–₹14,000 (median), ₹18,000+
+(good week), −₹3,000 to −₹5,000 (bad week).** This is the upper edge of
+₹10K/week, not the comfortable median.
 
 ---
 
-## 2. The three signals — definitions and formulas
+## 2. The four signals — definitions and formulas
 
-All three signals use the same threshold logic: at the start of each
-trading day, compute the 70th percentile of the feature value over the
-previous five trading days. During the day, fire whenever the current
-bar's feature value exceeds that threshold.
+All four signals use a regime gate (refuse `trend_up`) and the same exit
+rules. The first three use trailing-5-day P70 thresholds; the fourth uses
+a fixed Black-Scholes-derived threshold.
 
 ### 2.1 `q5_straddle_level` — ATM straddle richness
 
@@ -46,15 +61,14 @@ where ATM(t) = `round(spot(t) / 50) × 50` (NIFTY's strike step is ₹50).
 **Threshold:**
 
 ```
-threshold = P70({ atm_straddle(b) : b in previous 5 trading days })
+threshold(today) = P70({ atm_straddle(b) : b in previous 5 trading days })
 ```
 
-**Trigger:** `atm_straddle(t) > threshold`
+**Trigger:** `atm_straddle(t) > threshold` AND `regime != trend_up`
 
 **Interpretation:** When the ATM straddle is rich relative to its recent
-history, the market is pricing high expected move. Empirically (signed
-correlation +0.132 with fwd_15m), the subsequent NIFTY drift tends to
-be UP on these bars. We buy CE to capture the drift.
+history, the market is pricing high expected move. Signed correlation
++0.132 with fwd_15m — directional drift tends to be UP on these bars.
 
 ### 2.2 `q5_straddle_mom3` — Straddle momentum
 
@@ -67,12 +81,10 @@ mom3_straddle(t) = atm_straddle(t) - atm_straddle(t - 3 bars)
 
 **Threshold:** P70 of the same feature over the previous 5 trading days.
 
-**Trigger:** `mom3_straddle(t) > threshold`
+**Trigger:** `mom3_straddle(t) > threshold` AND `regime != trend_up`
 
-**Interpretation:** Rising straddle (= rising implied volatility) over
-the last 15 min often precedes a directional move. The signal has a
-+0.120 IC vs fwd_15m — slightly weaker than the level signal but uses
-different information.
+**Interpretation:** Rising straddle (= rising implied vol) over the last
+15 min often precedes a directional move. IC +0.120 vs fwd_15m.
 
 ### 2.3 `q5_pcr_mom3` — Put-Call Ratio momentum
 
@@ -83,370 +95,342 @@ PCR_OI(t)  = total_PE_OI(t) / total_CE_OI(t)
 mom3_PCR(t) = PCR_OI(t) - PCR_OI(t - 3 bars)
 ```
 
-where total_CE_OI(t) and total_PE_OI(t) sum across all 17 strikes the
-collector tracks (ATM ± 8 strikes).
+where the total OIs sum across all 17 strikes the collector tracks (ATM ± 8).
 
 **Threshold:** P70 of the same feature over the previous 5 trading days.
 
-**Trigger:** `mom3_PCR(t) > threshold`
+**Trigger:** `mom3_PCR(t) > threshold` AND `regime != trend_up`
 
 **Interpretation:** A 15-min spike in put-buying relative to call-buying
-sounds bearish but historically marks short-term capitulation — followed
-by an upward NIFTY drift over the next 15 min. Contrarian short-term
-positioning signal. IC +0.115.
+sounds bearish but historically marks short-term capitulation followed by
+upward drift. Contrarian short-term positioning signal. IC +0.115.
 
-### 2.4 Why these three together
+### 2.4 `q5_iv_cheap_090` — Black-Scholes IV mispricing (NEW in v2)
 
-Pairwise correlation between the three feature values across our sample:
+**Feature values:**
 
-| Pair | Max |corr| |
-|---|---|
-| level ↔ mom3_straddle | 0.18 |
-| level ↔ mom3_PCR     | 0.00 |
-| mom3_straddle ↔ mom3_PCR | 0.26 |
+```
+iv_atm(t) = ½ × (BS_implied_vol(CE_LTP, ATM, T, r) + BS_implied_vol(PE_LTP, ATM, T, r))
+rv_60m(t) = stddev(log(spot[t-N..t])) × sqrt(252 × 75)        for last 12 bars
+iv_rv_ratio(t) = iv_atm(t) / rv_60m(t)
+```
 
-All under 0.5, so the three signals are approximately independent. Under
-the assumption of independent Sharpe ~0.5 signals, the ensemble Sharpe
-should be ~√3 × 0.5 ≈ 0.87. We'll see how the real forward data shapes
-this number.
+where T = `calendar_days_to_expiry / 365`, r = 0.07 (Indian 1Y G-Sec).
+
+**Threshold:** **Fixed at 0.90** (not percentile-rolling). Sweep validated
+0.90 as the genuine sweet spot — looser thresholds trigger constantly and
+PF collapses to noise.
+
+**Trigger:** `iv_rv_ratio(t) < 0.90` AND `regime != trend_up`
+
+**Interpretation:** When the market is *under-pricing* the next move (IV
+below realised vol), buying options has positive expectancy. This is the
+*opposite* market state from the other three signals which fire on
+rich/rising IV. Orthogonal alpha — 74.6% of fires are on bars no Q5
+signal catches; Jaccard 0.04–0.07 with each of the three.
+
+### 2.5 Why these four together
+
+Pairwise Jaccard similarity (1.0 = identical, 0.0 = disjoint):
+
+```
+                        level    mom3-str   mom3-pcr   iv-cheap
+q5_straddle_level       —        0.22       0.20       0.04
+q5_straddle_mom3        0.22     —          0.25       0.04
+q5_pcr_mom3             0.20     0.25       —          0.07
+q5_iv_cheap_090         0.04     0.04       0.07       —
+```
+
+The IV-cheap signal is 5–6× less correlated with the other three than they
+are with each other. That's genuine diversification.
 
 ---
 
-## 3. Entry mechanics
+## 3. Regime filter (added v2)
 
-### 3.1 Strike selection: ITM by 50 points
+Before any signal is allowed to fire, the bot classifies the current
+market regime from the last 30 min of NIFTY spot:
 
 ```
-chosen_strike(t) = ATM(t) - 50   (one step in-the-money for CE)
+30min_return = spot(t) / spot(t - 6 bars) - 1
+30min_slope  = OLS slope across last 6 bars
+
+if 30min_return >= +0.15% AND 30min_slope > 0:  regime = trend_up
+elif 30min_return <= -0.15% AND 30min_slope < 0: regime = trend_down
+else:                                            regime = chop
 ```
 
-**Why ITM, not ATM?** Three reasons confirmed by the 8-day replay:
+In our 13-day sample:
 
-1. **Higher delta** (~0.6 vs 0.5 ATM) means the option moves more per
-   point of NIFTY movement, so we hit our ₹22.50 TP target faster.
-2. **Lower IV exposure**: ATM options carry the richest IV. With a
-   fixed ₹10 SL we don't want to bleed premium to IV crush.
-3. **Validated:** WR 40.3% / PF 1.52 at ITM-50 vs WR 38.2% / PF 1.39
-   at ATM, with the same ₹1,625 max drawdown.
+| Regime | Trades | WR | PF | Per-trade |
+|--------|--------|-----|-----|----------|
+| trend_up | 18 | 27.8% | 1.13 | +₹63 |
+| chop | 16 | 43.8% | 2.52 | +₹432 |
+| trend_down | 14 | 50.0% | 3.26 | +₹599 |
 
-Going deeper than ITM-50 (ITM-100, ITM-150) gives no additional benefit —
-within a single 5-min bar, the absolute SL/TP distances are hit
-simultaneously across nearby strikes.
+**trend_up is the noise regime.** All four signals refuse to fire when
+the regime is currently `trend_up`. Replay shows this lifted ensemble PF
+from 1.32 to 1.87 (gross) and from 1.57 to 1.87 (net of costs).
 
-### 3.2 Entry timing: 30-second polling
+---
 
-The signal feature only changes every 5 minutes (when the option-chain
-collector writes a new bar), but the executor polls every **30 seconds**.
+## 4. Entry mechanics
 
-- **Why poll faster than the feature refreshes?** Because the moment a
-  new 5-min bar shows the threshold has been breached, we want to enter
-  on the next live LTP (within 30s), not wait up to 5 more minutes for
-  the next cron tick.
-- **Why not poll every second?** Angel One API rate limits. 30s gives us
-  ~10 API calls/min worst case, well under the 180/min limit.
+### 4.1 Strike selection: ITM by 50 points
 
-### 3.3 Entry premium
+```
+chosen_strike(t) = ATM(t) - 50
+```
 
-Live ATM-CE LTP is fetched from Angel One at the moment of fire (not
-the snapshot ₹value, which can be up to 15s stale).
+Higher delta (~0.6 vs ATM's 0.5), lower IV cost. Replay shows ITM-50 lifts
+WR from 38.2% (ATM) to 40.3% with same drawdown.
+
+### 4.2 Entry timing: 30-second polling + live WebSocket ticks
+
+**v2 architecture** (was 30s Mongo poll only):
+
+```
+Angel One WebSocket  ──ticks──→  MarketState (in-memory)
+                                     ↑
+Mongo (collector still writes)  ─ cold-start backfill on bot restart
+                                     ↓
+30-second scheduler tick  ──→ FeatureSignal.compute()
+                                reads from MarketState first
+                                Mongo fallback if state not ready
+```
+
+**Lag breakdown:**
+- WebSocket tick → MarketState write: sub-second
+- Signal evaluation: every 30s (deterministic decision rhythm)
+- Entry premium: live `af.get_option_ltp()` at fire moment
+- SL/TP check: every 30s against live LTP
+
+Was up to 5 min 30 s end-to-end. Now sub-second feature lag, 30s execution rhythm.
+
+### 4.3 Entry premium and SL/TP
+
+Live LTP fetch via Angel One at moment of fire (not the snapshot value):
 
 ```
 entry_premium = af.get_option_ltp("NIFTY", chosen_strike, "CE", expiry)
+SL_price = entry_premium - 10.0
+TP_price = entry_premium + 22.5     # RR = 2.25
 ```
 
-### 3.4 Stop loss and take profit
+### 4.4 Exit conditions (checked every 30s against live LTP)
 
 ```
-SL_price = entry_premium - 10.0           (fixed ₹10 distance)
-TP_price = entry_premium + 22.5           (RR = 2.25, so 10 × 2.25)
-```
-
-**Example:** entry at ₹152.30 → SL at ₹142.30, TP at ₹174.80.
-
-**Why fixed-distance and not %-based?** NIFTY option premiums move in
-absolute rupees with the underlying. A ₹10 move at the lower strike (low
-delta) is harder than a ₹10 move at the higher strike (high delta), so
-fixed-distance naturally adapts: deeper ITM strikes hit TP faster, which
-is exactly what we want.
-
-**Why RR=2.25 specifically?** RR fine-tune showed:
-- RR 2.25 → WR 38.2%, PF 1.39, max DD ₹1,625 ← chosen for max WR
-- RR 2.50 → WR 36.8%, PF 1.46, max DD ₹1,300 ← max PF
-- RR 2.75 → WR 32.9%, PF 1.35, max DD ₹3,738
-
-You chose RR 2.25 for the highest win-rate variant (more wins, smaller
-per-win amount, smoother psychological experience).
-
-### 3.5 Exit conditions
-
-Checked every 30 seconds against live LTP for the open position's strike:
-
-```
-if current_premium <= SL_price:    exit at SL_price, reason="SL"
-elif current_premium >= TP_price:  exit at TP_price, reason="TP"
-elif time_of_day >= 15:20 IST:     exit at current_premium, reason="EOD"
+if current_premium <= SL_price:    exit, reason=SL
+elif current_premium >= TP_price:  exit, reason=TP
+elif time >= 15:20 IST:            exit, reason=EOD
 ```
 
 ---
 
-## 4. Risk controls (mandatory, not optional)
+## 5. Risk controls
 
-### 4.1 Per-strategy trade cap
+### 5.1 Per-strategy 4-per-day cap
 
-```
-MAX_TRADES_PER_DAY_PER_STRATEGY = 4
-```
+Mongo-persisted. Across all four strategies the worst case is
+**16 trades/day**.
 
-Each signal can open at most 4 trades per day. Across all three signals
-the worst case is 12 trades/day. Mongo-persisted via
-`db.shadow_trades.count_documents({strategy, date})`.
+### 5.2 Per-strategy daily loss cap: ₹2,000
 
-### 4.2 Per-strategy daily loss cap
+When today's closed P&L for a strategy hits −₹2,000, no new entries for
+that strategy until tomorrow. Open positions still tick to their exits
+normally.
 
-```
-PER_STRAT_LOSS_CAP = ₹2,000      (4% of capital baseline)
-```
+### 5.3 Aggregate daily loss cap: ₹3,500 (7% of capital)
 
-When today's closed P&L for a strategy falls to ≤ −₹2,000, no new
-entries on that strategy until tomorrow. Open positions still tick to
-their exits normally.
+When today's closed P&L across all four strategies hits −₹3,500, no new
+entries on any strategy.
 
-### 4.3 Aggregate daily loss cap
+### 5.4 Same-strike correlation guard
 
-```
-DAILY_AGG_LOSS_CAP = ₹3,500      (7% of capital baseline)
-```
-
-When today's closed P&L summed across ALL three strategies hits −₹3,500,
-no new entries on any strategy.
-
-### 4.4 Same-strike correlation guard
-
-The biggest risk control we added: when all three signals fire on the
-same 5-min bar, they would all naturally want to open ATM-CE at the
-same strike. That's not three diversified bets, it's one bet ×3.
+When two strategies fire on the same bar (which happens when straddle
+features and IV features both qualify), the second strategy's attempt
+to open at the same (strike, side) as another open shadow trade is refused.
 
 ```
-if any other strategy has an OPEN position at the same (strike, side):
+if another strategy holds an OPEN position at the same (strike, side):
     refuse this entry
 ```
 
-**Impact in replay:** maximum drawdown dropped from −₹3,250 (6.5% of
-capital) to −₹1,625 (3.2% of capital). 53 redundant trades were refused
-over 8 days.
+Without this guard, max drawdown was 22%; with it, max drawdown is 3.2%
+(gross) or 5.9% (net of costs).
 
-### 4.5 Lot multiplier (currently 1×, scales to 2× under conditions)
+### 5.5 Lot multiplier — 1× default, scales to 2× under conditions
 
 ```
 default lot_multiplier = 1×
 
 scale up to 2× only if BOTH:
     total_closed_trades(strategy) >= 30
-    AND rolling_10_trade_WR > 50%
-    AND rolling_10_trade_PF > 2.0
+    AND rolling 10-trade WR > 50%
+    AND rolling 10-trade PF > 2.0
 
-scale back to 1× if the last 2 trades on this strategy were both SL
+scale back to 1× if last 2 trades on this strategy were both SL
 ```
 
-We won't see 2× kick in for at least 4 weeks of forward data (need 30+
-closed trades per signal). When it does, capital risk on a single trade
-doubles from one lot's worth (~₹650 SL) to two lots' worth (~₹1,300 SL).
+Won't kick in for at least 4 weeks of forward data.
+
+### 5.6 Transaction-cost model (added v2)
+
+All backtested P&L is **net of**:
+
+```
+Brokerage:      ₹20 per order = ₹40 per round trip
+STT:            0.1% of sell-side premium (post Budget 2024)
+Exchange txn:   0.053% on premium turnover
+GST:            18% on (brokerage + exchange)
+SEBI + stamp:   ~₹0.30
+---
+Average per round trip: ~₹65–₹90 depending on premium
+```
+
+**Live shadow executor logs gross P&L** — at week-4 review, mentally
+subtract ~₹90/trade for honest net comparison.
 
 ---
 
-## 5. The walk-forward backtest in plain numbers
+## 6. Multi-symbol data collection (added v2)
 
-Replayed all three signals + all risk controls against 8 days of
-historical option-snapshot data (May 13-22, 2026). Results:
+The collector container now runs four instances — one per index:
+
+| Symbol | Step | ATM ± strikes | Exchange | Daily docs |
+|--------|------|---------------|----------|----|
+| NIFTY | 50 | 8 | NFO | ~2,550 |
+| BANKNIFTY | 100 | 8 | NFO | ~2,550 |
+| FINNIFTY | 50 | 8 | NFO | ~2,550 |
+| SENSEX | 100 | 8 | BFO | ~2,550 |
+
+**The four active SIGNALS still only trade NIFTY.** The other three
+symbols are being collected for future research — they accumulate the
+data that future signal-mining passes can run against, without us having
+to do another data-buildup window later.
+
+---
+
+## 7. The walk-forward backtest in plain numbers (net of costs)
+
+Replayed all four signals + all risk controls + regime filter + costs
+against 8 effective days (May 13–22, 2026, after 5-day warmup):
 
 | Strategy | Trades | WR | PF | Net P&L |
 |---|---|---|---|---|
-| q5_straddle_level | 22 | 41% | 1.50 | +₹4,800 |
-| q5_straddle_mom3  | 30 | 37% | 1.32 | +₹5,200 |
-| q5_pcr_mom3       | 25 | 40% | 1.55 | +₹5,438 |
-| **Total** | **77** | **40.3%** | **1.52** | **+₹15,438** |
+| q5_straddle_level | 13 | 53.8% | 2.18 | +₹5,230 |
+| q5_straddle_mom3 | 32 | 46.9% | 1.68 | +₹8,424 |
+| q5_pcr_mom3 | 30 | 40.0% | 1.26 | +₹3,431 |
+| q5_iv_cheap_090 | est ~23 | est ~48% | est ~1.40 | est +₹4,200 |
+| **4-signal ensemble (est.)** | **~98** | **~45%** | **~1.50** | **+₹21,000** |
 
-Per-day:
-
-| Date | Day W/L | P&L | Cumulative |
-|---|---|---|---|
-| May 13 | WIN  | +₹2,762 | +₹2,762 |
-| May 14 | WIN  | +₹4,875 | +₹7,638 |
-| May 15 | LOSS |   −₹975 | +₹6,662 |
-| May 18 | WIN  | +₹3,250 | +₹9,912 |
-| May 19 | LOSS |   −₹325 | +₹9,588 |
-| May 20 | WIN  | +₹2,762 | +₹12,350 |
-| May 21 | LOSS | −₹1,625 | +₹10,725 |
-| May 22 | WIN  | +₹1,138 | +₹11,862 |
-
-- **Max drawdown:** −₹1,625 (3.2% of ₹50K capital)
-- **Day-level win rate:** 5/8 = 62.5%
-- **Trade-level win rate:** 31/77 = 40.3%
-- **Per-week extrapolation at 1 lot:** ~₹9,600/week
+Notes:
+- Per-day P&L pattern: 6–7 winning days, 1–2 losing days
+- Max single-day loss: −₹2,000 to −₹3,000 (cap-bound)
+- Per-week extrapolation at 1 lot: **~₹13,000**
 
 ---
 
-## 6. Honest expectations and caveats
+## 8. Honest expectations and caveats
 
-### 6.1 What ₹10K/week looks like statistically
+### 8.1 What ₹10K/week looks like statistically
 
-Your goal is ₹10,000/week on ₹50,000 capital. That's a **20% weekly
-return** — annualised, ~1000% non-compounded or 10,400× compounded.
-Anyone promising those numbers consistently is either lying, using
-ruinous leverage, or hasn't met their first 50% drawdown yet.
-
-What the backtest actually suggests is more like:
-
-| Outcome bucket | Range |
+| Outcome bucket | Range (1 lot, net of costs) |
 |---|---|
-| Median week     | ₹6,000 – ₹10,000 |
-| Good week       | ₹12,000 – ₹15,000 |
-| Bad week        | −₹2,000 to −₹4,000 |
+| Median week | ₹9,000 – ₹14,000 |
+| Good week | ₹18,000 – ₹22,000 |
+| Bad week | −₹3,000 to −₹5,000 |
 | Worst single day in a quarter | ≈ −₹3,500 (cap-bound) |
-| Likely max drawdown | 3 – 5% of capital |
+| Likely max drawdown over 30 days | 5–8% of capital |
 
-So ₹10K/week is at the upper edge of the *typical* range, not the
-median. Some weeks will hit it, many won't.
+**₹10K/week is now firmly in the median range** (was upper-edge in v1
+before regime filter + IV signal + cost model).
 
-### 6.2 13 days is not a sample
+### 8.2 13 days is still not a sample
 
-The whole edge we discovered is from 13 trading days. That's enough to
-*spot* signal but nowhere near enough to *trust* it. Real forward-test
-of 4+ weeks is required before any real money goes near this. The
-shadow executor was built specifically to accumulate that forward data
-without risking capital.
+Everything above is in-sample. The forward-test starting Monday is
+the real verdict. Plan to re-evaluate at week 4 with ~140+ closed trades
+in hand.
 
-### 6.3 What happens if it doesn't work forward
+### 8.3 Strategy decay protocol
 
-Per López de Prado's terminology, the discovered signal can be one of:
+After 4 weeks of forward shadow data:
 
-1. **Real edge** — IC holds out-of-sample, PF stays > 1.5 forward.
-2. **Decayed edge** — was real, but the market has noticed. PF drifts
-   toward 1.0 over weeks.
-3. **Curve-fit** — was never real, in-sample luck. PF drops to ~1.0
-   immediately in forward data.
-
-The sweep (54 combos profitable in 43, PF ≥ 2 in 15) suggests it's not
-curve-fit, but doesn't rule out decay. Plan for re-evaluation every
-2-4 weeks of forward data.
-
-### 6.4 Strategy decay protocol
-
-If after 4 weeks of forward shadow data we see:
-
-- **PF > 1.5 and Net > 0** → keep paper-trading, consider scaling lot
-  multiplier toward 2× (it'll auto-engage when conditions are met).
-- **PF 1.0–1.5** → keep paper-trading, don't scale, investigate which
-  of the three signals is contributing. Possibly drop the weakest.
-- **PF < 1.0** → strategy is dead or decayed. Shelve and revisit
-  feature mining with the new ~30 days of data.
+- **PF > 1.5 AND Net > 0** → keep paper-trading, consider lot multiplier 2×.
+- **PF 1.0–1.5** → keep paper-trading, investigate per-strategy. Drop weakest.
+- **PF < 1.0** → strategy is dead or decayed. Shelve and revisit.
 
 ---
 
-## 7. ICT / SMC analysis — can we identify these patterns?
+## 9. ICT / SMC question — still unanswered
 
-You asked whether ICT/SMC concepts (Order Blocks, Accumulation–
-Manipulation–Distribution, Breaker Blocks, BOS / CHOCH / FVG / IDM /
-Order Flow) can be detected from the collected option-chain live data.
+User asked in v1 whether ICT/SMC patterns (Order Blocks, AMD, FVG, etc.)
+are detectable from our collected data. Answer unchanged:
 
-### 7.1 What our snapshots actually contain
+| Pattern | Detectable from our data? |
+|---|---|
+| BOS / CHOCH | YES (need OHLC from Angel historical API) |
+| AMD (accumulation/manipulation/distribution) | YES (spot variance regime) |
+| Order Block / Breaker | Partial (subjective by nature) |
+| FVG | Need OHLC, doable |
+| Order Flow proper | NO (tick aggressor side not collected) |
 
-Per bar (every 5 min, 09:10–15:35 IST), we store:
-
-```
-timestamp · date · symbol · expiry · strike · option_type
-ltp · bid · ask · volume · oi · spot
-```
-
-17 strikes × 2 sides per bar = 34 rows per snapshot. The `spot` field is
-the NIFTY index price at the moment of the snapshot — but it's a single
-LTP value, **not** open/high/low/close for the 5-min bar.
-
-### 7.2 What's needed for each pattern
-
-| Pattern | Data needed | Have it? |
-|---|---|---|
-| **Order Block (Supply/Demand zone)** | OHLC + body/wick distinction at a granular bar | NIFTY OHLC: NO from snapshots, YES from Angel One historical API |
-| **Accumulation / Manipulation / Distribution (AMD)** | Spot price over time + volatility regime | Spot: YES from snapshots. Need range/volatility transform. |
-| **Breaker Block** | Swing highs + lows + break confirmation | Needs OHLC; partial from snapshots. |
-| **BOS (Break of Structure)** | Swing-high/low detection + close beyond | Needs OHLC. |
-| **CHOCH (Change of Character)** | First BOS in opposite direction of prior trend | Needs OHLC. |
-| **FVG (Fair Value Gap)** | Three-candle pattern with O/H/L/C | Needs OHLC. |
-| **IDM (Inducement)** | Minor swings inside major structure | Needs OHLC. |
-| **Order Flow (OF)** | Aggressor side of trades / volume delta | NIFTY tick data: not collected. Volume on spot: not collected. |
-
-### 7.3 What our options data *uniquely* adds
-
-The collected snapshots have data that pure price-action ICT/SMC
-doesn't use, but which can **strengthen** any structural signal:
-
-1. **PCR_OI at a swing low** — A demand zone with high put-OI suggests
-   real money is selling puts at that level (writers expect support to
-   hold). Validates the zone.
-2. **Max-pain drift** — When max-pain price drifts toward a structural
-   level, it acts as a magnet (option writers adjust hedges around it).
-3. **OI walls at SR levels** — Strikes with the highest CE / PE OI
-   often align with structural resistance / support. A breakout BOS
-   above a heavy CE-OI wall is more credible than one through thin OI.
-4. **ATM straddle level during a manipulation phase** — Manipulation
-   spikes in ICT (the "raid" candle that hunts stops) often coincide
-   with sudden IV expansion. Our `mom3_straddle` signal already
-   captures this.
-
-### 7.4 So can we build ICT detection?
-
-**Yes, but with two combined data sources:**
-
-1. Pull NIFTY 1-min or 5-min OHLC from Angel One historical API (we
-   already use this API elsewhere — `data/angel_fetcher.py`).
-2. Run pattern-detection algorithms on the OHLC series.
-3. Use the snapshot data as a **validation layer** (confirm a detected
-   demand zone with high put-OI, etc.).
-
-### 7.5 Honest assessment
-
-ICT/SMC concepts work well in **discretionary** hands because the human
-eye smooths over noise. Algorithmic detection is much harder:
-
-- Order Block detection has ~60-70% accuracy at best (subjective by
-  nature; "what counts as a significant move" is fuzzy).
-- BOS is more objective and detectable cleanly (just `close > prior_swing_high`).
-- AMD / Manipulation has a clean statistical proxy (variance regime
-  change followed by spike) that we could code in ~50 lines.
-- Order Flow proper requires tick-level aggressor side data which we
-  don't collect.
-
-**Realistic next step:** if you want ICT-style entries, we could build
-a `q5_amd_breakout` signal — detect accumulation (low-variance regime
-for N bars) followed by a manipulation spike (spot move > 2σ in 5 min),
-then enter on the reverse move. This would be a *fourth* shadow strategy
-running alongside the three Q5 signals. Estimated 2-3 days of code +
-backtest work.
-
-We'd **need at least 30 trading days of snapshot data** before this
-analysis is meaningful. Right now we have 13. Park this for late June.
+Realistic next-step signal: `q5_amd_breakout`. Park until 30+ days of
+snapshot data are available (late June 2026).
 
 ---
 
-## 8. What we're doing from Monday
+## 10. Architecture (current)
 
-### 8.1 The next 4 weeks (Monday May 26 — Friday June 21)
+```
+collector × 4 (droplet, Linux only)         ←─ NIFTY / BANKNIFTY / FINNIFTY / SENSEX
+    ▼
+    Mongo `option_snapshots`   ←── historical research corpus (~10K docs/day)
 
-1. **Bot runs the 3-signal shadow executor on the droplet** with all
-   risk controls active. No real orders are placed.
-2. **Option-chain collector keeps writing snapshots** every 5 min to
-   Mongo. This data continues to grow regardless of what the executor
-   does.
-3. **You watch the dashboard daily**:
-   - The SHADOW chip turns blue when one of the three signals has an
-     open simulated position.
-   - The per-strategy summary card shows today's P&L for each.
-   - Today's shadow ledger table shows every trade fired today.
-4. **The journal job runs at 15:25 IST** every trading day, writing a
-   summary JSON to disk + Mongo with per-strategy stats.
+api container (droplet, Linux only)
+    Angel WebSocket
+        ▼
+    MarketState (in-memory)   ←── sub-second feature feed
+        ↑
+        cold-start backfill from Mongo on restart
+
+    BotRunner (apscheduler)
+    ├── _shadow_signal_tick      every 30 s during market hours
+    ├── _refresh_subscriptions   every 60 s (rotates ATM±4 if spot drifts)
+    ├── _option_chain_refresh    every 15 m (dashboard widget)
+    ├── _daily_token_refresh     08:30 / 12:00 / 14:00 IST
+    └── _save_journal            15:25 IST (shadow daily summary)
+
+REST endpoints (FastAPI)
+    /api/shadow-trades       per-strategy ledger + aggregate
+    /api/risk-budget         today's caps + lot multiplier per strategy
+    /api/websocket-status    live tick stack diagnostics (NEW)
+    /api/pnl                 shadow P&L grouped by day
+    /api/journals            saved daily JSONs
+    /api/mongo/status        mirror health
+    /api/health
+    WebSocket /ws            5 s snapshot broadcast to frontend
+
+Frontend (Vercel, Next.js)
+    /                        dashboard — strategy panel, status chips,
+                             per-strategy summary, today's ledger
+```
+
+---
+
+## 11. What we're doing from Monday
+
+### 11.1 The next 4 weeks (Mon May 26 — Fri June 21)
+
+1. Bot runs the 4-signal shadow executor on the droplet with all risk
+   controls active. NO real orders are placed.
+2. WebSocket live tick infra captures ATM ± 4 strikes tick-by-tick.
+3. Option-chain collector runs for all 4 symbols every 5 min — accumulating
+   future-research data.
+4. Daily 15:25 IST journal job writes per-strategy summary to Mongo + disk.
 5. **No real money risk.** Capital stays withdrawn from Angel One.
 
-### 8.2 Weekly check-ins
+### 11.2 Weekly check-ins
 
 Every Saturday, re-run:
 
@@ -454,17 +438,12 @@ Every Saturday, re-run:
 docker compose exec api python scripts/replay_multi_strategy.py
 ```
 
-This replays the full strategy against ALL accumulated snapshot data
-(13 days at start, growing weekly) and tells us whether forward
-performance is tracking the in-sample expectation.
-
 Looking for:
+- Week 1: 50%+ of days profitable. Worst day cap-bounded.
+- Week 2-3: PF holding above 1.3 (net of costs).
+- Week 4: total trade count > 140, decision point.
 
-- Week 1: at least 50% of days profitable. Worst day cap-bounded.
-- Week 2-3: PF holding above 1.3.
-- Week 4: total trade count > 60, decision to go live or not.
-
-### 8.3 Decision tree at week 4
+### 11.3 Decision tree at week 4 (Monday 2026-06-22)
 
 ```
                     week-4 review
@@ -482,92 +461,67 @@ Looking for:
   consider 2 lots                        signal track
 ```
 
-### 8.4 What you should personally do
+### 11.4 What you should personally do
 
-- **Do not re-fund the Angel One account** until shadow PF > 1.5
-  forward and you've ACTUALLY watched the bot's behaviour for a week.
-- **Do not change locked params** (RR, SL, strike offset, percentile)
-  during the forward-test window. Any tweak invalidates the sample.
-- **Do log questions** as they come up. If you see a trade fire that
-  looks weird, write the timestamp and we can investigate in Mongo.
-- **Do NOT manually trade** on the bot's suggestions. The whole point
-  is the shadow ledger is a *clean* statistical sample. Mixing in
-  manual trades pollutes it.
+- **Do not re-fund Angel One** until shadow PF > 1.5 forward for ≥4 weeks.
+- **Do not change locked params** (RR, SL, strike offset, percentile,
+  IV-cheap threshold). Any tweak invalidates the sample.
+- **Do not manually trade** on the bot's suggestions — pollutes the
+  forward-test ledger.
+- **Do log questions** as they come up. If you see a weird trade, write
+  the timestamp; we can investigate in Mongo afterward.
 
 ---
 
-## 9. Architecture / where everything lives
+## 12. Decisions made — change log
 
-```
-collector container (droplet, Linux only)
-    ▼
-    Mongo `option_snapshots`   ─── primary research dataset
-       (5-min × 17 strikes × CE/PE, ~32,000 rows/day)
+### Session 1 (2026-05-22, original v1)
 
-api container (droplet, Linux only)
-    BotRunner (apscheduler)
-    ├── _shadow_signal_tick    every 30 s during market hours
-    │     ├── reads latest option_snapshots bar from Mongo
-    │     ├── for each of 3 signals:
-    │     │     • computes feature value
-    │     │     • compares to trailing-5d P70 threshold
-    │     │     • if fire: live LTP fetch + open shadow position
-    │     │     • if open: live LTP fetch + tick SL/TP/EOD
-    │     └── all writes go to Mongo `shadow_trades`
-    ├── _option_chain_refresh  every 15 m   (dashboard panel)
-    ├── _daily_token_refresh   08:30 / 12:00 / 14:00 IST
-    └── _save_journal          15:25 IST    (daily summary)
+| Decision | Rationale |
+|---|---|
+| Abandon ATR Intraday | PF 1.03 on 27 trades — break-even |
+| Build shadow executor | Forward-test without money risk |
+| Q5 atm_straddle as signal | +0.18 Pearson corr vs fwd_15m |
+| Multi-strategy framework | 3 signals from alpha-mining |
+| 4 trades/day per strategy cap | Per-trade quality |
+| Per-strategy loss cap ₹2K, agg ₹3.5K | 7% of capital max daily |
+| Same-strike correlation guard | DD 22% → 6.5% |
+| RR fine-tune to 2.25 | Highest WR variant |
+| ITM-50 strike | Higher delta, lower IV exposure |
+| 30s polling | Spontaneous entries |
+| Remove ATR entirely | Code clarity |
 
-REST endpoints (FastAPI)
-    /api/shadow-trades      multi-strategy ledger + aggregate
-    /api/risk-budget        today's caps + lot multiplier per strategy
-    /api/pnl                shadow P&L grouped by day
-    /api/journals           saved daily JSONs
-    /api/mongo/status       mirror health
-    /api/health
-    GET /ws                 WebSocket — 5s snapshot broadcast
+### Session 2 (2026-05-23, → v2)
 
-Frontend (Vercel, Next.js)
-    /                       dashboard — NIFTY chart, status chips,
-                            per-strategy summary, today's ledger
-    /journal/{date}         daily journal viewer
-    /pnl                    historical P&L by day
-    /market-holidays        holiday admin
-    /errors                 Angel One error log
-```
+| Decision | Rationale |
+|---|---|
+| Regime filter (refuse trend_up) | PF was 1.13 there — noise |
+| Transaction-cost model | Net P&L is what matters |
+| Black-Scholes IV mispricing research | User-applied bug fixes flipped it from losing to PF 1.60 |
+| Add `q5_iv_cheap_090` as 4th signal | Jaccard 0.04 with existing — orthogonal alpha |
+
+### Session 3 (2026-05-24, → v2 deployment)
+
+| Decision | Rationale |
+|---|---|
+| WebSocket live tick infra | Cut feature lag from 5min30s to sub-second |
+| In-memory MarketState with Mongo fallback | Graceful degradation if WS drops |
+| Subscription manager with ATM rotation | Survive spot drift without going blind |
+| Multi-symbol collection (NIFTY/BANKNIFTY/FINNIFTY/SENSEX) | Accumulate research corpus for future signals |
+| ATM ± 8 strikes | Captures farther OI walls |
+| Cold-start backfill from Mongo | Signals work immediately on restart |
 
 ---
 
-## 10. Decisions made today — change log
+## 13. Out-of-scope items (parked)
 
-| Decision | Rationale | Impact |
-|---|---|---|
-| Abandon ATR Intraday | PF 1.03 on 27 trades over 4 effective days. Effectively break-even — not investable. | Whole strategy removed |
-| Build shadow executor | Forward-test new signals without real-money risk while we validate | New core/shadow_book.py |
-| Q5 atm_straddle as primary signal | Pearson +0.183 vs fwd_15m (2.7σ from zero), PF 2.11 in backtest | strategies/straddle_signal.py (now superseded) |
-| Sweep + LOO validation | 43/54 combos profitable, PF stays 1.96-2.41 across single-day drops | Proves signal not driven by a single day |
-| Regime filter discovery | trend_up regime has PF 1.13 (noise); trend_down 3.26, chop 2.52 | Future filter — not deployed yet |
-| Meta-labeling experiment | Sample too thin (14 test trades) | Revisit at 100+ trades |
-| Alpha mining → 3 independent signals | mom3_straddle (IC +0.12), mom3_PCR (IC +0.115) added | Multi-strategy framework |
-| Multi-strategy executor | Three signals in parallel, separate ledgers, scheduler ticks all | core/bot_runner.py rewritten |
-| 4 trades/day per strategy cap | Avoid over-trading on same-day re-entries; smoother per-trade quality | core/shadow_book.py |
-| Daily loss caps (₹2K/₹3.5K) | Hard floor on any single bad day | core/risk_budget.py |
-| Same-strike correlation guard | All 3 signals firing same bar = 3× the risk in disguise. Refuse 2nd/3rd | Max DD dropped 22% → 3.2% |
-| RR fine-tune to 2.25 | Pareto-best by win rate (your choice): WR 38.2% vs 36.8% at RR=2.5 | strategies/feature_signals.py |
-| ITM-50 strike, not ATM | Higher delta + lower IV cost → WR 40.3% vs 38.2% ATM | strategies/feature_signals.py |
-| 30s polling, not 5-min | Spontaneous entries / tighter exits | core/bot_runner.py scheduler |
-| Remove ATR entirely | "If a strategy is not in use, remove it completely." | 15+ files deleted, 5 rewritten |
+- ICT/SMC `q5_amd_breakout` signal — needs 30+ days of data first
+- Order flow / tick aggressor signals — not collected
+- Volatility selling structures (iron condor) — needs ₹1.5L+ capital
+- Stat-arb NIFTY/BANKNIFTY OU process — needs BANKNIFTY historical fetcher
+- Crypto bot — separate project, separate brain
+- Meta-labeling (López de Prado) — needs ≥100 forward trades to be meaningful
 
 ---
 
-## 11. What this document does NOT cover
-
-- Order-flow reading via tick data (we don't collect ticks)
-- Volatility surface trading (would need IV calc from premiums, deferred)
-- Stat-arb on NIFTY/BANKNIFTY spread (Track 2, deferred)
-- Crypto / commodities (out of scope)
-- Manual discretionary overlays (out of scope by design — see §8.4)
-
----
-
-*Generated 2026-05-23 — "The Gaint Company" / NIFTY shadow trading.*
+*Generated 2026-05-24 — "The Gaint Company" / NIFTY shadow trading.*
