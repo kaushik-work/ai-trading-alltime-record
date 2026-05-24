@@ -106,7 +106,11 @@ def _load_prior_bars(db, today: date, n_days: int = N_DAYS) -> dict:
 
 
 def _today_bars(db, today: date) -> dict:
-    """{ts: [snapshot_row, ...]} for today's snapshots so far, sorted by ts."""
+    """{ts: [snapshot_row, ...]} for today's snapshots so far, sorted by ts.
+
+    LEGACY path — reads from Mongo. Still used as the cold-start fallback,
+    but the live signal path now prefers _today_bars_from_state() below.
+    """
     cur = db.option_snapshots.find(
         {"date": today.isoformat(), "symbol": "NIFTY"},
         projection={"_id": 0, "timestamp": 1, "strike": 1,
@@ -116,6 +120,80 @@ def _today_bars(db, today: date) -> dict:
     for d in cur:
         bars.setdefault(d["timestamp"], []).append(d)
     return bars
+
+
+def _today_bars_from_state(now_dt: datetime) -> Optional[dict]:
+    """{ts_str: [row_dict, ...]} built from in-memory MarketState.
+
+    Returns None when MarketState isn't ready (cold-start window) — caller
+    should fall back to _today_bars() reading from Mongo.
+
+    Output shape matches the Mongo-derived path so downstream feature
+    functions (_atm_straddle_for_bar, _pcr_oi_for_bar) work unchanged.
+    """
+    try:
+        from core.market_state import get_state
+        state = get_state()
+        if not state.is_ready():
+            return None
+
+        spot = state.get_spot()
+        if spot is None:
+            return None
+
+        # Build {bar_start_dt: {strike, side: {ltp, oi}}} by walking each
+        # registered option's bar deque.
+        bar_records: dict = {}   # bar_start_dt -> list[row_dict]
+        for snap in state.all_option_snapshots():
+            strike = snap.get("strike")
+            side   = snap.get("option_type")
+            if strike is None or side is None:
+                continue
+            for (bar_start, o, h, l, c, oi) in snap.get("bars", []):
+                bar_records.setdefault(bar_start, []).append({
+                    "strike":      int(strike),
+                    "option_type": side,
+                    "ltp":         float(c),
+                    "oi":          int(oi or 0),
+                    "spot":        spot,    # use latest spot for all rows
+                })
+            # Include in-progress bar (today's currently-live one) — the
+            # in-progress close is the freshest LTP we have, which is what
+            # the signal should see for the "current" bar.
+            cur_close = snap.get("cur_close")
+            if cur_close is not None:
+                # Compute the in-progress bar's start time
+                latest_ts = snap.get("latest_ts")
+                if latest_ts is not None:
+                    from core.market_state import _bar_start as _bs
+                    in_progress_start = _bs(latest_ts)
+                    bar_records.setdefault(in_progress_start, []).append({
+                        "strike":      int(strike),
+                        "option_type": side,
+                        "ltp":         float(cur_close),
+                        "oi":          int(snap.get("latest_oi") or 0),
+                        "spot":        spot,
+                    })
+
+        # Convert datetime keys to string format matching Mongo timestamp
+        # ("YYYY-MM-DD HH:MM:SS") so the regime/momentum helpers downstream
+        # can still index by string.
+        out: dict = {}
+        for bar_dt, rows in bar_records.items():
+            ts_str = bar_dt.strftime("%Y-%m-%d %H:%M:%S")
+            out[ts_str] = rows
+        return out
+    except Exception as e:
+        logger.debug("_today_bars_from_state failed (will fall back): %s", e)
+        return None
+
+
+def _get_today_bars(db, now_dt: datetime) -> dict:
+    """Hybrid getter — in-memory state first, Mongo fallback."""
+    from_state = _today_bars_from_state(now_dt)
+    if from_state is not None and from_state:
+        return from_state
+    return _today_bars(db, now_dt.date())
 
 
 # ── Regime filter ────────────────────────────────────────────────────────────
@@ -243,13 +321,15 @@ class FeatureSignal:
 
     def _today_history(self, now_dt: datetime) -> Optional[list]:
         """For momentum signals: return the 3 prior bars on today (each a list
-        of snapshot rows), or None if not enough today-bars yet."""
+        of snapshot rows), or None if not enough today-bars yet.
+
+        Now reads from in-memory MarketState when ready (sub-second lag),
+        falls back to Mongo (up-to-5min lag) during cold-start.
+        """
         try:
             from core import mongo
             db = mongo.get_db()
-            if db is None:
-                return None
-            today_bars = _today_bars(db, now_dt.date())
+            today_bars = _get_today_bars(db, now_dt)
             sorted_ts = sorted(today_bars.keys())
             # Take the 3 bars immediately PRIOR to now_dt
             prior_ts = [ts for ts in sorted_ts
@@ -262,16 +342,15 @@ class FeatureSignal:
             return None
 
     def _regime_now(self, now_dt: datetime) -> str:
-        """Return current 30-min regime: trend_up | trend_down | chop | warmup."""
+        """Return current 30-min regime: trend_up | trend_down | chop | warmup.
+
+        Reads from MarketState when ready, falls back to Mongo."""
         try:
             from core import mongo
             db = mongo.get_db()
-            if db is None:
-                return "warmup"
-            today_bars = _today_bars(db, now_dt.date())
+            today_bars = _get_today_bars(db, now_dt)
             if not today_bars:
                 return "warmup"
-            # Find latest bar ts at or before now_dt
             sorted_ts = sorted(today_bars.keys())
             latest = max((ts for ts in sorted_ts
                           if datetime.fromisoformat(ts.replace(" ", "T")) <= now_dt),
@@ -440,15 +519,16 @@ class IvCheapSignal(FeatureSignal):
             return None
 
     def _realised_vol(self, now_dt: datetime) -> Optional[float]:
-        """Annualised RV from last RV_WINDOW_BARS spot values today."""
+        """Annualised RV from last RV_WINDOW_BARS spot values today.
+        Hybrid: MarketState first, Mongo fallback."""
         import math
         import numpy as _np
         try:
             from core import mongo
             db = mongo.get_db()
-            if db is None:
+            today_bars = _get_today_bars(db, now_dt)
+            if not today_bars:
                 return None
-            today_bars = _today_bars(db, now_dt.date())
             sorted_ts = sorted(today_bars.keys())
             # Take last N bars at or before now_dt
             usable = [ts for ts in sorted_ts

@@ -341,6 +341,32 @@ def risk_budget_endpoint(user: str = Depends(get_current_user)):
     return risk_budget.status_snapshot()
 
 
+@app.get("/api/websocket-status")
+def websocket_status(user: str = Depends(get_current_user)):
+    """Live tick stack diagnostics: WebSocket connection, market state,
+    subscription manager. Surfaces whether signals are running on live ticks
+    or falling back to Mongo reads."""
+    out = {"ws": None, "market_state": None, "sub_manager": None}
+    try:
+        from data.angel_websocket import get_client
+        out["ws"] = get_client().diagnostics()
+    except Exception as e:
+        out["ws"] = {"error": str(e)}
+    try:
+        from core.market_state import get_state
+        out["market_state"] = get_state().diagnostics()
+    except Exception as e:
+        out["market_state"] = {"error": str(e)}
+    try:
+        from core.subscription_manager import get_manager
+        # get_manager requires args on first call — wrap in try; if not yet
+        # initialised, just report not-yet-started
+        out["sub_manager"] = get_manager().diagnostics()
+    except Exception as e:
+        out["sub_manager"] = {"error": str(e)}
+    return out
+
+
 @app.get("/api/shadow-trades")
 def shadow_trades_endpoint(days: int = 30, user: str = Depends(get_current_user)):
     """Multi-strategy shadow trade ledger.

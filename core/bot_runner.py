@@ -92,6 +92,10 @@ class BotRunner:
         self._shadow_signals: list = []
         self._shadow_books: dict = {}
         self._paused: bool = False
+        # Live tick infrastructure (WebSocket + market state + sub manager)
+        self._ws_client = None
+        self._market_state = None
+        self._sub_manager = None
 
     @property
     def paused(self) -> bool:
@@ -110,6 +114,38 @@ class BotRunner:
             logger.warning("BotRunner.start: not a cloud host (Linux) — schedulers OFF. "
                            "Set ENABLE_LOCAL_SCHEDULERS=1 to override.")
             return
+
+        # ── Live tick infrastructure (sub-second lag instead of up-to-5min) ──
+        # Start the Angel One WebSocket, prime market state with backfill,
+        # wire the subscription manager. All three are best-effort — if
+        # the WebSocket can't connect, the signals fall back to Mongo reads.
+        try:
+            from data.angel_websocket import get_client as _get_ws
+            from core.market_state import get_state as _get_market_state
+            from core.subscription_manager import get_manager as _get_sub_mgr
+
+            self._ws_client    = _get_ws()
+            self._market_state = _get_market_state()
+            self._sub_manager  = _get_sub_mgr(self._ws_client, self._market_state)
+
+            # Wire WebSocket ticks → market_state
+            self._ws_client.on_tick(self._market_state.on_tick)
+
+            # Cold-start backfill BEFORE starting WS (so signals see history)
+            self._market_state.cold_start_from_mongo(today_only=True)
+
+            self._ws_client.start()
+            self._sub_manager.start()
+
+            # First subscription kick — once spot arrives, refresh registers strikes
+            self.scheduler.add_job(
+                self._refresh_subscriptions, "interval", seconds=60,
+                id="subscription_refresh",
+            )
+            logger.info("BotRunner: live tick stack started (WS + MarketState + SubManager)")
+        except Exception as e:
+            logger.error("BotRunner: failed to start live tick stack — "
+                          "signals will fall back to Mongo reads: %s", e, exc_info=True)
 
         # Shadow signal tick — every 30 s during market hours
         self.scheduler.add_job(
@@ -138,6 +174,31 @@ class BotRunner:
 
     def stop(self) -> None:
         self.scheduler.shutdown(wait=False)
+        # Tear down live tick infra
+        try:
+            if self._sub_manager is not None:
+                self._sub_manager.stop()
+        except Exception:
+            pass
+        try:
+            if self._ws_client is not None:
+                self._ws_client.stop()
+        except Exception:
+            pass
+
+    async def _refresh_subscriptions(self):
+        """Periodic call to SubscriptionManager.refresh() — rotates strikes
+        when spot drifts more than the configured threshold."""
+        if self._paused or not _is_market_hours():
+            return
+        try:
+            if self._sub_manager is not None:
+                # SubscriptionManager.refresh is synchronous; run in executor
+                # to keep the event loop free.
+                loop = asyncio.get_event_loop()
+                await loop.run_in_executor(None, self._sub_manager.refresh)
+        except Exception as e:
+            logger.debug("_refresh_subscriptions failed (non-fatal): %s", e)
 
     # ── Q5 multi-strategy SHADOW signal tick ────────────────────────────────
 
