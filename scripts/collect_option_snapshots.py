@@ -31,9 +31,9 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 p = argparse.ArgumentParser()
-p.add_argument("--symbol",   default="NIFTY",     choices=["NIFTY", "BANKNIFTY"])
+p.add_argument("--symbol",   default="NIFTY",     choices=["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX"])
 p.add_argument("--interval", type=int, default=5, help="snapshot interval minutes")
-p.add_argument("--strikes",  type=int, default=8, help="ATM +/- N strikes")
+p.add_argument("--strikes",  type=int, default=6, help="ATM +/- N strikes (default 6 → 13 strikes × 2 sides = 26 contracts per bar)")
 p.add_argument("--dry-run",  action="store_true", help="skip market hours check")
 args = p.parse_args()
 
@@ -62,7 +62,8 @@ SNAP_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 SYMBOL       = args.symbol
-STEP         = 50 if SYMBOL == "NIFTY" else 100
+STEP         = {"NIFTY": 50, "BANKNIFTY": 100, "FINNIFTY": 50, "SENSEX": 100}[SYMBOL]
+EXCHANGE     = "BFO" if SYMBOL == "SENSEX" else "NFO"
 INTERVAL_SEC = args.interval * 60
 MARKET_OPEN  = dtime(9, 10)
 MARKET_CLOSE = dtime(15, 35)
@@ -131,10 +132,14 @@ def _parse_expiry(s: str):
     return None
 
 
+def _instruments(af: AngelFetcher) -> list:
+    return af._bfo_instruments() if SYMBOL == "SENSEX" else af._nfo_instruments()
+
+
 def nearest_expiry(af: AngelFetcher) -> date:
     expiries = sorted({
         _parse_expiry(i["expiry"])
-        for i in af._nfo_instruments()
+        for i in _instruments(af)
         if i.get("name") == SYMBOL
         and i.get("expiry")
         and _parse_expiry(i["expiry"]) is not None
@@ -149,7 +154,7 @@ def build_tokens(af: AngelFetcher, expiry: date, atm: int) -> list:
         strike = atm + k * STEP
         for ot in ("CE", "PE"):
             m = next((
-                i for i in af._nfo_instruments()
+                i for i in _instruments(af)
                 if i.get("name") == SYMBOL
                 and int(float(i.get("strike", 0))) // 100 == strike
                 and i.get("instrumenttype") == "OPTIDX"
@@ -165,7 +170,7 @@ def take_snapshot(af: AngelFetcher, token_map: list, expiry: date, out_file: Pat
     spot = af.get_index_ltp(SYMBOL)
     if not spot:
         raise RuntimeError("Spot is None")
-    resp = af._api.getMarketData("FULL", {"NFO": [t["token"] for t in token_map]})
+    resp = af._api.getMarketData("FULL", {EXCHANGE: [t["token"] for t in token_map]})
     if not resp or not resp.get("status"):
         raise RuntimeError(f"getMarketData failed: {resp}")
     quotes = {

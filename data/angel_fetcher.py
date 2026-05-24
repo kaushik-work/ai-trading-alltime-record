@@ -27,8 +27,10 @@ import config
 logger = logging.getLogger(__name__)
 
 _SPOT_TOKENS = {
-    "NIFTY":      {"token": "99926000", "tradingsymbol": "Nifty 50",   "exchange": "NSE"},
-    "BANKNIFTY":  {"token": "99926009", "tradingsymbol": "Nifty Bank",  "exchange": "NSE"},
+    "NIFTY":      {"token": "99926000", "tradingsymbol": "Nifty 50",          "exchange": "NSE"},
+    "BANKNIFTY":  {"token": "99926009", "tradingsymbol": "Nifty Bank",        "exchange": "NSE"},
+    "FINNIFTY":   {"token": "99926037", "tradingsymbol": "Nifty Fin Service",  "exchange": "NSE"},
+    "SENSEX":     {"token": "1",        "tradingsymbol": "SENSEX",             "exchange": "BSE"},
 }
 
 _INTERVAL_MAP = {
@@ -523,7 +525,7 @@ class AngelFetcher:
     # ── Options helpers ───────────────────────────────────────────────────────
 
     def _nfo_instruments(self) -> list:
-        """Return cached NIFTY/BANKNIFTY OPTIDX instruments from Angel One master file."""
+        """Return cached NFO OPTIDX instruments (NIFTY/BANKNIFTY/FINNIFTY)."""
         from core.utils import now_ist
         today = now_ist().date()
         if self._instruments_date == today and self._instruments is not None:
@@ -536,17 +538,43 @@ class AngelFetcher:
             all_inst = resp.json()
             self._instruments = [
                 i for i in all_inst
-                if i.get("name") in ("NIFTY", "BANKNIFTY")
+                if i.get("name") in ("NIFTY", "BANKNIFTY", "FINNIFTY")
                 and i.get("instrumenttype") == "OPTIDX"
                 and i.get("exch_seg") == "NFO"
             ]
             self._instruments_date = today
-            logger.info("AngelFetcher: cached %d NIFTY/BANKNIFTY instruments", len(self._instruments))
+            logger.info("AngelFetcher: cached %d NFO instruments", len(self._instruments))
         except Exception as e:
             logger.error("AngelFetcher: instrument master download failed: %s", e)
             if self._instruments is None:
                 self._instruments = []
         return self._instruments
+
+    def _bfo_instruments(self) -> list:
+        """Return cached BFO OPTIDX instruments (SENSEX) from Angel One master file."""
+        from core.utils import now_ist
+        today = now_ist().date()
+        if hasattr(self, "_bfo_instruments_date") and self._bfo_instruments_date == today \
+                and self._bfo_instruments_cache is not None:
+            return self._bfo_instruments_cache
+        try:
+            import requests
+            resp = requests.get(_MASTER_URL, timeout=30)
+            resp.raise_for_status()
+            all_inst = resp.json()
+            self._bfo_instruments_cache = [
+                i for i in all_inst
+                if i.get("name") == "SENSEX"
+                and i.get("instrumenttype") == "OPTIDX"
+                and i.get("exch_seg") == "BFO"
+            ]
+            self._bfo_instruments_date = today
+            logger.info("AngelFetcher: cached %d BFO instruments", len(self._bfo_instruments_cache))
+        except Exception as e:
+            logger.error("AngelFetcher: BFO instrument master download failed: %s", e)
+            if not hasattr(self, "_bfo_instruments_cache") or self._bfo_instruments_cache is None:
+                self._bfo_instruments_cache = []
+        return self._bfo_instruments_cache
 
     @classmethod
     def nearest_weekly_expiry(cls) -> date:

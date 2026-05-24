@@ -26,12 +26,76 @@ services:
     command: >
       sh -c '
         while true; do
-          # Sleep until next 09:00 IST.  IST = UTC+5:30, so 09:00 IST = 03:30 UTC.
           NOW=$$(date -u +%H%M)
           if [ "$$NOW" -ge "0330" ] && [ "$$NOW" -lt "1005" ]; then
-            python scripts/collect_option_snapshots.py --symbol NIFTY --interval 5 || true
+            python scripts/collect_option_snapshots.py --symbol NIFTY --interval 5 --strikes 6 || true
           else
-            # Wait 60s then re-check (cheap loop, no cron needed)
+            sleep 60
+          fi
+        done
+      '
+    env_file: .env
+    volumes:
+      - ./.env:/app/.env
+      - app_data:/app/db
+      - app_logs:/app/logs
+    restart: unless-stopped
+    depends_on:
+      - api
+
+  collector-banknifty:
+    build: .
+    command: >
+      sh -c '
+        while true; do
+          NOW=$$(date -u +%H%M)
+          if [ "$$NOW" -ge "0330" ] && [ "$$NOW" -lt "1005" ]; then
+            python scripts/collect_option_snapshots.py --symbol BANKNIFTY --interval 5 --strikes 6 || true
+          else
+            sleep 60
+          fi
+        done
+      '
+    env_file: .env
+    volumes:
+      - ./.env:/app/.env
+      - app_data:/app/db
+      - app_logs:/app/logs
+    restart: unless-stopped
+    depends_on:
+      - api
+
+  collector-finnifty:
+    build: .
+    command: >
+      sh -c '
+        while true; do
+          NOW=$$(date -u +%H%M)
+          if [ "$$NOW" -ge "0330" ] && [ "$$NOW" -lt "1005" ]; then
+            python scripts/collect_option_snapshots.py --symbol FINNIFTY --interval 5 --strikes 6 || true
+          else
+            sleep 60
+          fi
+        done
+      '
+    env_file: .env
+    volumes:
+      - ./.env:/app/.env
+      - app_data:/app/db
+      - app_logs:/app/logs
+    restart: unless-stopped
+    depends_on:
+      - api
+
+  collector-sensex:
+    build: .
+    command: >
+      sh -c '
+        while true; do
+          NOW=$$(date -u +%H%M)
+          if [ "$$NOW" -ge "0330" ] && [ "$$NOW" -lt "1005" ]; then
+            python scripts/collect_option_snapshots.py --symbol SENSEX --interval 5 --strikes 6 || true
+          else
             sleep 60
           fi
         done
