@@ -166,7 +166,8 @@
       "Bash(.venv/Scripts/python scripts/backtest_iv_mispricing.py --mode iv_rv_low --threshold 0.85 --target-premium 170)",
       "Bash(.venv/Scripts/python scripts/backtest_iv_mispricing.py --mode iv_rv_high --threshold 1.5 --target-premium 170)",
       "Bash(.venv/Scripts/python scripts/replay_multi_strategy.py --csv results_q5_live.csv)",
-      "Bash(.venv/Scripts/python scripts/replay_multi_strategy.py)"
+      "Bash(.venv/Scripts/python scripts/replay_multi_strategy.py)",
+      "Bash(.venv/Scripts/python scripts/replay_multi_strategy.py --csv results_q5_latest.csv)"
     ]
   }
 }

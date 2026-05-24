@@ -60,7 +60,10 @@ def _round_trip_cost(entry_premium: float, exit_premium: float,
     exch_txn  = (entry_premium + exit_premium) * qty * EXCH_TXN_RATE
     gst       = (brokerage + exch_txn) * GST_RATE
     return round(brokerage + stt + exch_txn + gst + MISC_PER_TRIP, 2)
+
+
 TRADING_DAYS_PER_YEAR = 252
+CALENDAR_DAYS_PER_YEAR = 365
 BARS_PER_DAY = 75         # 5-min bars between 09:15 and 15:30
 SL_DIST = 10.0
 RR = 2.25
@@ -159,7 +162,7 @@ def _compute_features(bars: pd.DataFrame) -> pd.DataFrame:
     for r in bars.itertuples(index=False):
         bar_date = datetime.strptime(r.date, "%Y-%m-%d").date()
         days_to_expiry = max(1, (r.expiry - bar_date).days)
-        T = days_to_expiry / TRADING_DAYS_PER_YEAR
+        T = days_to_expiry / CALENDAR_DAYS_PER_YEAR
         iv_ce = _implied_vol(r.atm_ce_ltp, r.spot, r.atm_strike, T,
                               RISK_FREE_RATE, "CE")
         iv_pe = _implied_vol(r.atm_pe_ltp, r.spot, r.atm_strike, T,
@@ -174,6 +177,7 @@ def _compute_features(bars: pd.DataFrame) -> pd.DataFrame:
 
     # Realised vol: rolling stddev of log returns × √annualisation
     log_returns = np.log(bars["spot"] / bars["spot"].shift(1))
+    log_returns[bars["date"] != bars["date"].shift(1)] = np.nan  # strip overnight gap
     bars["log_ret"] = log_returns
     bars_per_year = TRADING_DAYS_PER_YEAR * BARS_PER_DAY
     bars["rv_60m"] = (log_returns.groupby(bars["date"])

@@ -61,7 +61,10 @@
       "Bash(.venv/Scripts/python.exe scripts/backtest_iv_mispricing.py)",
       "Bash(.venv/Scripts/python.exe scripts/backtest_iv_mispricing.py --mode iv_mom3 --threshold 0.005)",
       "Bash(.venv/Scripts/python.exe scripts/backtest_iv_mispricing.py --mode iv_rv_high --threshold 1.5)",
-      "Bash(.venv/Scripts/python.exe scripts/backtest_iv_mispricing.py --threshold 0.85)"
+      "Bash(.venv/Scripts/python.exe scripts/backtest_iv_mispricing.py --threshold 0.85)",
+      "Bash(.venv/Scripts/python.exe scripts/check_signal_overlap.py)",
+      "Bash(.venv/Scripts/python.exe -c \"import py_compile; py_compile.compile\\('data/angel_websocket.py', doraise=True\\); print\\('OK Phase 1'\\)\")",
+      "Bash(.venv/Scripts/python.exe -c \"import py_compile; py_compile.compile\\('scripts/collect_option_snapshots.py', doraise=True\\); print\\('OK'\\)\")"
     ]
   }
 }
