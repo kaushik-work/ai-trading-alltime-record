@@ -28,7 +28,7 @@ services:
         while true; do
           NOW=$$(date -u +%H%M)
           if [ "$$NOW" -ge "0330" ] && [ "$$NOW" -lt "1005" ]; then
-            python scripts/collect_option_snapshots.py --symbol NIFTY --interval 5 --strikes 6 || true
+            python scripts/collect_option_snapshots.py --symbol NIFTY --interval 5 --strikes 8 || true
           else
             sleep 60
           fi
@@ -50,7 +50,7 @@ services:
         while true; do
           NOW=$$(date -u +%H%M)
           if [ "$$NOW" -ge "0330" ] && [ "$$NOW" -lt "1005" ]; then
-            python scripts/collect_option_snapshots.py --symbol BANKNIFTY --interval 5 --strikes 6 || true
+            python scripts/collect_option_snapshots.py --symbol BANKNIFTY --interval 5 --strikes 8 || true
           else
             sleep 60
           fi
@@ -72,7 +72,7 @@ services:
         while true; do
           NOW=$$(date -u +%H%M)
           if [ "$$NOW" -ge "0330" ] && [ "$$NOW" -lt "1005" ]; then
-            python scripts/collect_option_snapshots.py --symbol FINNIFTY --interval 5 --strikes 6 || true
+            python scripts/collect_option_snapshots.py --symbol FINNIFTY --interval 5 --strikes 8 || true
           else
             sleep 60
           fi
@@ -94,7 +94,7 @@ services:
         while true; do
           NOW=$$(date -u +%H%M)
           if [ "$$NOW" -ge "0330" ] && [ "$$NOW" -lt "1005" ]; then
-            python scripts/collect_option_snapshots.py --symbol SENSEX --interval 5 --strikes 6 || true
+            python scripts/collect_option_snapshots.py --symbol SENSEX --interval 5 --strikes 8 || true
           else
             sleep 60
           fi

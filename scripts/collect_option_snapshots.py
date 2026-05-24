@@ -33,7 +33,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 p = argparse.ArgumentParser()
 p.add_argument("--symbol",   default="NIFTY",     choices=["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX"])
 p.add_argument("--interval", type=int, default=5, help="snapshot interval minutes")
-p.add_argument("--strikes",  type=int, default=6, help="ATM +/- N strikes (default 6 → 13 strikes × 2 sides = 26 contracts per bar)")
+p.add_argument("--strikes",  type=int, default=8, help="ATM +/- N strikes (default 8 → 17 strikes × 2 sides = 34 contracts per bar)")
 p.add_argument("--dry-run",  action="store_true", help="skip market hours check")
 args = p.parse_args()
 
