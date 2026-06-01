@@ -46,7 +46,10 @@ app = FastAPI(title="Trading Bot API", lifespan=lifespan)
 
 _cors_origins = [
     origin.strip()
-    for origin in os.getenv("DASHBOARD_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
+    for origin in os.getenv(
+        "DASHBOARD_ORIGINS",
+        "http://localhost:3000,http://127.0.0.1:3000,https://ai-trading-alltime-record.vercel.app",
+    ).split(",")
     if origin.strip()
 ]
 

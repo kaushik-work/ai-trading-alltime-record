@@ -167,7 +167,11 @@
       "Bash(.venv/Scripts/python scripts/backtest_iv_mispricing.py --mode iv_rv_high --threshold 1.5 --target-premium 170)",
       "Bash(.venv/Scripts/python scripts/replay_multi_strategy.py --csv results_q5_live.csv)",
       "Bash(.venv/Scripts/python scripts/replay_multi_strategy.py)",
-      "Bash(.venv/Scripts/python scripts/replay_multi_strategy.py --csv results_q5_latest.csv)"
+      "Bash(.venv/Scripts/python scripts/replay_multi_strategy.py --csv results_q5_latest.csv)",
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\anura\\\\Desktop\\\\github-kaushik\\\\ai-trading-alltime-record\" -Force | Select-Object Name, @{Name='Type';Expression={if\\($_.PSIsContainer\\){'Directory'}else{'File'}}} | Sort-Object Type, Name)",
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\anura\\\\Desktop\\\\github-kaushik\\\\ai-trading-alltime-record\\\\frontend\" -Force | Select-Object Name, @{Name='Type';Expression={if\\($_.PSIsContainer\\){'Directory'}else{'File'}}} | Sort-Object Type, Name)",
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\anura\\\\Desktop\\\\github-kaushik\\\\ai-trading-alltime-record\\\\api\" -Force | Select-Object Name, @{Name='Type';Expression={if\\($_.PSIsContainer\\){'Directory'}else{'File'}}} | Sort-Object Type, Name)",
+      "PowerShell(Get-ChildItem -Path \"c:\\\\Users\\\\anura\\\\Desktop\\\\github-kaushik\\\\ai-trading-alltime-record\\\\frontend\\\\app\" -Recurse -Force | Where-Object { $_.Name -match '\\\\.\\(env|tsx|ts\\)$' } | Select-Object FullName | Sort-Object FullName)"
     ]
   }
 }
