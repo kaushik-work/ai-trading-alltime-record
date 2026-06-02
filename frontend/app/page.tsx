@@ -89,6 +89,17 @@ export default function Home() {
       <div className="flex-1 overflow-y-auto">
         <div className="max-w-5xl mx-auto p-3 md:p-5">
 
+          {/* Switch to crypto dashboard */}
+          <div className="flex justify-end mb-3">
+            <button
+              onClick={() => router.push("/crypto")}
+              className="px-4 py-2 text-xs font-medium rounded-lg text-white shadow-sm hover:opacity-90 transition-opacity"
+              style={{ background: "linear-gradient(135deg,#f7931a 0%,#627eea 100%)" }}
+            >
+              Switch to Crypto →
+            </button>
+          </div>
+
           {/* Strategy explainer — what's running */}
           <StrategyExplainer />
 

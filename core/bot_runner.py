@@ -147,30 +147,26 @@ class BotRunner:
             logger.error("BotRunner: failed to start live tick stack — "
                           "signals will fall back to Mongo reads: %s", e, exc_info=True)
 
-        # Shadow signal tick — every 30 s during market hours
-        self.scheduler.add_job(
-            self._shadow_signal_tick, "interval", seconds=30,
-            id="shadow_signal_tick",
-        )
         # Option chain panel refresh — every 15 min (dashboard widget)
         self.scheduler.add_job(
             self._option_chain_refresh, "cron", minute="*/15", second=20,
             id="option_chain_refresh",
         )
         # Daily Angel One JWT refresh — 08:30 / 12:00 / 14:00 IST
+        # KEPT: required for the option_snapshots collector to authenticate.
         for h, m in [(8, 30), (12, 0), (14, 0)]:
             self.scheduler.add_job(
                 self._daily_token_refresh, "cron", hour=h, minute=m,
                 id=f"token_refresh_{h:02d}{m:02d}",
             )
-        # Daily shadow-summary journal — 15:25 IST (after market close)
-        self.scheduler.add_job(
-            self._save_journal, "cron", hour=15, minute=25, id="journal",
-        )
+
+        # NSE shadow strategies (Q5 ensemble) — REMOVED per user direction.
+        # Data collection (scripts/collect_option_snapshots.py) + Angel One
+        # auth remain. Crypto strategies run via core/crypto_runner.py.
 
         self.scheduler.start()
-        logger.info("BotRunner started — Shadow(30s) OptionChain(15m) "
-                    "TokenRefresh(x3) Journal(15:25)")
+        logger.info("BotRunner started — OptionChain(15m) TokenRefresh(x3) "
+                    "(NSE strategies removed; data collection only)")
 
     def stop(self) -> None:
         self.scheduler.shutdown(wait=False)
@@ -212,13 +208,15 @@ class BotRunner:
                a. If position is open: fetch live LTP, tick book for SL/TP/EOD
                b. Else: compute signal; if it fires, fetch live ITM-CE LTP and open
         """
+        # NSE shadow strategies removed — this method is kept as a no-op stub
+        # so any leftover scheduler references don't crash. Crypto strategies
+        # live in core/crypto_runner.py.
+        return
+        # legacy code below intentionally unreachable
         if self._paused or not _is_market_hours():
             return
         self.last_heartbeat = datetime.now(IST).isoformat()
         try:
-            from strategies.feature_signals import (
-                ALL_SIGNALS, _today_bars, _atm_strike_for, _chosen_strike_for,
-            )
             from core.shadow_book import ShadowBook
             from core import mongo as _mongo
             from data.angel_fetcher import AngelFetcher
@@ -328,14 +326,8 @@ class BotRunner:
     # ── Daily shadow journal (15:25 IST) ────────────────────────────────────
 
     async def _save_journal(self):
-        """Save a daily summary of shadow performance to Mongo."""
-        try:
-            from core.journal import save_daily_journal
-            loop = asyncio.get_event_loop()
-            path = await loop.run_in_executor(None, save_daily_journal)
-            logger.info("Journal saved: %s", path)
-        except Exception as e:
-            logger.error("Journal save failed: %s", e, exc_info=True)
+        """No-op stub — NSE shadow journal removed."""
+        return
 
 
 # ── Singleton accessor ──────────────────────────────────────────────────────
