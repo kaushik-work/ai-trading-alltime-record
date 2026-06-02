@@ -70,7 +70,14 @@ export default function CryptoHome() {
 
   return (
     <div className="min-h-screen bg-[#0a0a14] text-gray-200">
-      <Header />
+      <Header
+        mode="crypto"
+        connected={signals.length > 0 || lastTick !== ""}
+        botStatus={portfolio?.open_positions ? "running" : "idle"}
+        onBotToggle={() => { /* crypto bot toggle TBD via /api/crypto/toggle */ }}
+        errorCount={0}
+        settings={{ min_lots: 1 }}
+      />
       <main className="max-w-6xl mx-auto px-6 py-8">
 
         {/* ── Header bar ──────────────────────────────────────────────────── */}
