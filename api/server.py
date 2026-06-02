@@ -7,13 +7,6 @@ import json
 import logging
 import math
 
-from core.crypto_runner import init_crypto_runner
-from api.routes_crypto import router as crypto_router
-
-# inside whatever sets up the scheduler:
-init_crypto_runner(scheduler)
-app.include_router(crypto_router)
-
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s - %(message)s",
