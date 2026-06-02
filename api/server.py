@@ -26,8 +26,10 @@ from core.memory import init_db, TradeMemory
 from core.records import init_records_db, RecordTracker
 from core import ipc
 from core.bot_runner import get_runner
+from core.crypto_runner import init_crypto_runner
 from data.market import RealMarketData
 from api.broadcaster import manager
+from api.routes_crypto import router as crypto_router
 
 
 @asynccontextmanager
@@ -37,6 +39,7 @@ async def lifespan(app: FastAPI):
     init_records_db()
     runner = get_runner()
     runner.start()
+    init_crypto_runner(runner.scheduler)
     yield
     # ── shutdown ─────────────────────────────────────────────────────────────
     runner.stop()
@@ -72,6 +75,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(crypto_router)
 
 memory = TradeMemory()
 records = RecordTracker()
