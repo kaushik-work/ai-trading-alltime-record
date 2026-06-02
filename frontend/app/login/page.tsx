@@ -47,7 +47,9 @@ export default function LoginPage() {
       if (!res.ok) { setError("Invalid username or password"); setLoading(false); return; }
       const { access_token } = await res.json();
       localStorage.setItem("aq_token", access_token);
-      router.push("/");
+      // route based on which side the user clicked (set just before submit)
+      const dest = localStorage.getItem("aq_post_login_dest") || "/";
+      router.push(dest);
     } catch {
       setError("Could not connect to server");
       setLoading(false);
@@ -153,9 +155,26 @@ export default function LoginPage() {
 
             {error && <p className="text-red-400 text-xs">{error}</p>}
 
-            <button type="submit" disabled={loading} className="aq-btn-primary mt-2">
-              {loading ? "Signing in..." : "Log in"}
-            </button>
+            {/* Market choice — destination set before submit */}
+            <div className="grid grid-cols-2 gap-3 mt-2">
+              <button
+                type="submit"
+                disabled={loading}
+                onClick={() => localStorage.setItem("aq_post_login_dest", "/")}
+                className="aq-btn-primary"
+              >
+                {loading ? "..." : "→ NSE"}
+              </button>
+              <button
+                type="submit"
+                disabled={loading}
+                onClick={() => localStorage.setItem("aq_post_login_dest", "/crypto")}
+                className="aq-btn-primary"
+                style={{ background: "linear-gradient(135deg,#f7931a 0%,#627eea 100%)" }}
+              >
+                {loading ? "..." : "→ Crypto"}
+              </button>
+            </div>
           </form>
 
         </div>
