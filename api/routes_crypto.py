@@ -147,3 +147,43 @@ def crypto_portfolio():
         "rolling_sharpe": 0.0,
         "max_dd_pct": 0.0,
     }
+
+
+@router.get("/state")
+def crypto_state():
+    """Live runner state — open positions, day P&L, kill switch status."""
+    try:
+        from core.crypto_runner import get_state
+        return get_state()
+    except Exception as e:
+        return {"enabled": False, "error": str(e),
+                "mode": "unknown", "strategies": [], "open_positions": {}}
+
+
+@router.post("/kill")
+def crypto_kill():
+    """EMERGENCY STOP — closes all open positions and halts new entries.
+
+    Calls crypto_runner.manual_kill() which:
+      1. Places reduce_only orders for every open position (market_order)
+      2. Sets _KILLED=True so the scheduler halts new entries
+      3. Logs the kill event
+
+    Returns the positions that were closed.
+    """
+    try:
+        from core.crypto_runner import manual_kill, get_state
+        before = get_state()
+        positions_before = list(before.get("open_positions", {}).keys())
+        manual_kill()
+        after = get_state()
+        return {
+            "ok": True,
+            "killed_strategies": positions_before,
+            "open_after": list(after.get("open_positions", {}).keys()),
+            "kill_switch_armed": after.get("killed", True),
+            "message": f"Killed {len(positions_before)} position(s). "
+                       f"Bot will not enter new positions until restart.",
+        }
+    except Exception as e:
+        return {"ok": False, "error": str(e)}

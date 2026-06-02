@@ -5,6 +5,15 @@ import Header from "../components/Header";
 
 const _API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+type KillResult = {
+  ok: boolean;
+  killed_strategies?: string[];
+  open_after?: string[];
+  kill_switch_armed?: boolean;
+  message?: string;
+  error?: string;
+};
+
 // Each signal row: which expiry, predicted move %, n strikes, ATM strike
 type SignalRow = {
   underlying: string;     // BTC, ETH, XAUT
@@ -32,6 +41,28 @@ export default function CryptoHome() {
   const [signals, setSignals] = useState<SignalRow[]>([]);
   const [portfolio, setPortfolio] = useState<PortfolioState | null>(null);
   const [lastTick, setLastTick] = useState<string>("");
+  const [killConfirm, setKillConfirm] = useState(false);
+  const [killBusy, setKillBusy] = useState(false);
+  const [killResult, setKillResult] = useState<KillResult | null>(null);
+
+  async function handleKill() {
+    setKillBusy(true);
+    setKillResult(null);
+    try {
+      const token = localStorage.getItem("aq_token");
+      const r = await fetch(`${_API}/api/crypto/kill`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const j: KillResult = await r.json();
+      setKillResult(j);
+    } catch (e: any) {
+      setKillResult({ ok: false, error: e?.message || "Network error" });
+    } finally {
+      setKillBusy(false);
+      setKillConfirm(false);
+    }
+  }
 
   useEffect(() => {
     if (!localStorage.getItem("aq_token")) {
@@ -90,13 +121,94 @@ export default function CryptoHome() {
               v5 synthetic-forward · BTC/ETH/XAUT · {lastTick && `last update ${lastTick}`}
             </p>
           </div>
-          <button
-            onClick={() => router.push("/")}
-            className="px-4 py-2 text-xs text-gray-400 hover:text-white border border-[#1e1e30] rounded-lg"
-          >
-            → switch to NSE
-          </button>
+          <div className="flex items-center gap-3">
+            {/* EMERGENCY KILL — always visible */}
+            <button
+              onClick={() => setKillConfirm(true)}
+              disabled={killBusy}
+              className="px-4 py-2 text-xs font-semibold text-white rounded-lg shadow-md hover:opacity-90 disabled:opacity-50"
+              style={{ background: "linear-gradient(135deg,#dc2626 0%,#7f1d1d 100%)" }}
+            >
+              {killBusy ? "Killing..." : "🛑 KILL CRYPTO BOT"}
+            </button>
+            <button
+              onClick={() => router.push("/")}
+              className="px-4 py-2 text-xs text-gray-400 hover:text-white border border-[#1e1e30] rounded-lg"
+            >
+              → switch to NSE
+            </button>
+          </div>
         </div>
+
+        {/* ── Kill result banner ────────────────────────────────────────── */}
+        {killResult && (
+          <div className={`border rounded-lg p-4 mb-6 ${
+            killResult.ok ? "border-red-700 bg-red-950/30" : "border-yellow-700 bg-yellow-950/30"
+          }`}>
+            <div className="flex items-baseline justify-between">
+              <div>
+                <p className="font-semibold text-white">
+                  {killResult.ok ? "✓ Kill executed" : "✗ Kill failed"}
+                </p>
+                <p className="text-xs text-gray-400 mt-1">
+                  {killResult.message || killResult.error}
+                </p>
+                {killResult.killed_strategies && killResult.killed_strategies.length > 0 && (
+                  <p className="text-xs text-gray-400 mt-1">
+                    Closed: {killResult.killed_strategies.join(", ")}
+                  </p>
+                )}
+              </div>
+              <button
+                onClick={() => setKillResult(null)}
+                className="text-xs text-gray-500 hover:text-white"
+              >
+                dismiss
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* ── Kill confirmation modal ───────────────────────────────────── */}
+        {killConfirm && (
+          <div
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/70"
+            onClick={() => setKillConfirm(false)}
+          >
+            <div
+              className="bg-[#13131f] border border-red-700 rounded-2xl p-6 max-w-md mx-4"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-lg font-bold text-red-400 mb-2">
+                🛑 Confirm: Kill Crypto Bot
+              </h3>
+              <p className="text-sm text-gray-300 mb-1">
+                This will <strong>immediately close all open crypto positions</strong>
+                {" "}at market price and halt new entries until the bot is restarted.
+              </p>
+              <p className="text-xs text-gray-500 mb-4">
+                Use this when you suspect a bug, market event, or want manual control.
+                Cannot be undone via UI.
+              </p>
+              <div className="flex justify-end gap-3 mt-4">
+                <button
+                  onClick={() => setKillConfirm(false)}
+                  className="px-4 py-2 text-sm text-gray-400 hover:text-white border border-[#1e1e30] rounded-lg"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleKill}
+                  disabled={killBusy}
+                  className="px-5 py-2 text-sm font-semibold text-white rounded-lg shadow-md hover:opacity-90 disabled:opacity-50"
+                  style={{ background: "linear-gradient(135deg,#dc2626 0%,#7f1d1d 100%)" }}
+                >
+                  {killBusy ? "Killing..." : "Yes — kill bot"}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
 
         {/* ── Portfolio ribbon ────────────────────────────────────────────── */}
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-8">

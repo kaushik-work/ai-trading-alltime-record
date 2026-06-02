@@ -51,18 +51,31 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Trading Bot API", lifespan=lifespan)
 
-_cors_origins = [
+# Hard-coded origins that must ALWAYS work regardless of env overrides.
+# Prevents accidental misconfiguration of DASHBOARD_ORIGINS from breaking prod.
+_ALWAYS_ALLOWED_ORIGINS = {
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+    "https://ai-trading-alltime-record.vercel.app",
+}
+
+_env_origins = {
     origin.strip()
-    for origin in os.getenv(
-        "DASHBOARD_ORIGINS",
-        "http://localhost:3000,http://127.0.0.1:3000,https://ai-trading-alltime-record.vercel.app",
-    ).split(",")
+    for origin in os.getenv("DASHBOARD_ORIGINS", "").split(",")
     if origin.strip()
-]
+}
+
+_cors_origins = sorted(_ALWAYS_ALLOWED_ORIGINS | _env_origins)
+
+# Also allow Vercel preview deployments — every PR gets a unique URL like
+# ai-trading-alltime-record-git-<branch>-<team>.vercel.app
+_VERCEL_PREVIEW_REGEX = r"^https://ai-trading-alltime-record(-[a-z0-9\-]+)?\.vercel\.app$"
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
+    allow_origin_regex=_VERCEL_PREVIEW_REGEX,
+    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
