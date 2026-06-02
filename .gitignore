@@ -17,3 +17,8 @@ build/
 
 backtest_cache/
 backtest_results.json
+
+# Backtest research — local only, never deploy to server
+delta_exchange/data/
+delta_exchange/.venv/
+delta_exchange/results_*.csv
