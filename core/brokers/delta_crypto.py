@@ -46,7 +46,7 @@ class DeltaCryptoBroker:
         api_key: str = "",
         api_secret: str = "",
         base_url: str = "",
-        mode: str = "paper",
+        mode: str = "",
     ):
         self.api_key    = api_key or os.environ.get("DELTA_API_KEY", "").strip()
         self.api_secret = api_secret or os.environ.get("DELTA_API_SECRET", "").strip()
