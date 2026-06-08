@@ -50,6 +50,9 @@ BASE_EQUITY_USD       = float(os.environ.get("CRYPTO_EQUITY_USD", "10000"))
 DAILY_LOSS_KILL_PCT   = float(os.environ.get("CRYPTO_DAILY_LOSS_KILL_PCT", "0.05"))
 MAX_LIVE_CONTRACTS    = int(os.environ.get("CRYPTO_MAX_LIVE_CONTRACTS", "200"))
 MAX_HOLD_HOURS        = 72
+# Leverage applied per order. Safe range for this strategy: 5–20×.
+# At 200× liquidation is at 0.5% — less than our stop loss distance.
+LEVERAGE              = int(os.environ.get("CRYPTO_LEVERAGE", "10"))
 
 # Delta India BTCUSD/ETHUSD perp contract size = 0.001 underlying
 CONTRACT_SIZE_BY_ASSET = {"BTCUSD": 0.001, "ETHUSD": 0.001, "XAUTUSD": 0.001}
@@ -257,6 +260,7 @@ def tick_crypto_strategies() -> None:
         order = broker.place_order(
             symbol=decision.symbol, side=decision.side, size=contracts,
             order_type="market_order", tag=f"{name}_entry",
+            leverage=LEVERAGE,
         )
         if not order.get("ok"):
             logger.error("%s entry failed: %s", name, order); continue

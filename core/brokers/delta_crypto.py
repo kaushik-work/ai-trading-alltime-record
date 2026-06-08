@@ -209,6 +209,20 @@ class DeltaCryptoBroker:
             logger.error("get_balance: %s", e)
         return None
 
+    def set_leverage(self, symbol: str, leverage: int) -> bool:
+        """Set leverage for a product before placing orders. No-op in paper mode."""
+        if self.mode == "paper":
+            return True
+        try:
+            resp = self._request("POST", "/v2/products/orders/leverage",
+                                 body={"product_symbol": symbol, "leverage": leverage},
+                                 authed=True)
+            logger.info("leverage set: %s → %d×", symbol, leverage)
+            return resp.get("success", False)
+        except Exception as e:
+            logger.warning("set_leverage(%s, %d) failed: %s", symbol, leverage, e)
+            return False
+
     def place_order(
         self,
         symbol: str,
@@ -219,6 +233,7 @@ class DeltaCryptoBroker:
         post_only: bool = False,
         reduce_only: bool = False,
         tag: str = "",
+        leverage: Optional[int] = None,
     ) -> dict:
         """Place an order. Paper mode → journal write, no broker call."""
         if self.mode == "paper":
@@ -230,6 +245,8 @@ class DeltaCryptoBroker:
                 "fill_price": mark, "tag": tag,
                 "timestamp": int(time.time()),
             }
+        if leverage is not None:
+            self.set_leverage(symbol, leverage)
         body = {
             "product_symbol": symbol,
             "size": int(size),
