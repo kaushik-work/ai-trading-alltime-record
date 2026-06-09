@@ -51,6 +51,13 @@ logger = logging.getLogger(__name__)
 # any deploy was silently downgrading the bot to 60-min polling.
 TICK_INTERVAL_SECONDS = max(1, int(os.environ.get("CRYPTO_TICK_SECONDS", "2")))
 BASE_EQUITY_USD       = float(os.environ.get("CRYPTO_EQUITY_USD", "10000"))
+# Minimum free wallet balance for live entries. Below this we skip the
+# trade rather than place an order that Delta will reject for insufficient
+# margin. Default $100 ≈ 1 BTC contract at 5x leverage on a $63k underlying.
+MIN_WALLET_USD        = float(os.environ.get("CRYPTO_MIN_WALLET_USD", "100"))
+# Safety buffer applied to live wallet balance for sizing — leaves room
+# for fees, slippage, and partial margin requirements.
+WALLET_SAFETY_BUFFER  = float(os.environ.get("CRYPTO_WALLET_BUFFER", "0.95"))
 DAILY_LOSS_KILL_PCT   = float(os.environ.get("CRYPTO_DAILY_LOSS_KILL_PCT", "0.05"))
 MAX_LIVE_CONTRACTS    = int(os.environ.get("CRYPTO_MAX_LIVE_CONTRACTS", "200"))
 MAX_HOLD_HOURS        = 72
@@ -255,7 +262,29 @@ def tick_crypto_strategies() -> None:
         # sizing
         mark = broker.get_perp_mark(decision.symbol)
         if mark is None or mark <= 0: continue
-        notional = BASE_EQUITY_USD * decision.size_mult
+
+        # Cap effective equity at real wallet balance (live mode only). Paper
+        # mode keeps BASE_EQUITY_USD so backtest-style sizing works without a
+        # funded account. In live mode we read the cached wallet and either
+        # skip (under the floor) or size to whichever is smaller.
+        effective_equity = BASE_EQUITY_USD
+        if broker.mode == "live":
+            balance = broker.get_balance()
+            if balance is None:
+                logger.warning("%s: wallet balance unavailable — skipping entry",
+                               name); continue
+            if balance < MIN_WALLET_USD:
+                logger.warning("%s: wallet $%.2f < min $%.0f — skipping entry "
+                               "(fund Delta to enable trading)",
+                               name, balance, MIN_WALLET_USD); continue
+            wallet_cap = balance * WALLET_SAFETY_BUFFER
+            if wallet_cap < BASE_EQUITY_USD:
+                logger.info("%s: sizing capped by wallet $%.2f -> $%.0f "
+                            "(env cap $%.0f)",
+                            name, balance, wallet_cap, BASE_EQUITY_USD)
+                effective_equity = wallet_cap
+
+        notional = effective_equity * decision.size_mult
         contracts = _contracts_for_notional(decision.symbol, notional, mark)
         if contracts <= 0:
             logger.warning("%s: sizing produced 0 contracts (notional %.0f, mark %s)",
