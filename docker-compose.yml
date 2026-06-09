@@ -21,8 +21,12 @@ services:
   # MongoDB (option_snapshots collection) for queryable historical premium data.
   # The script auto-exits on weekends/holidays; the wrapper restarts it daily
   # at 09:00 IST so we don't need to script docker restart externally.
+  # NSE collectors are gated behind the "nse" compose profile so a regular
+  # `docker compose up -d` only starts the crypto api on a small droplet.
+  # To enable them: `docker compose --profile nse up -d`.
   collector:
     build: .
+    profiles: ["nse"]
     command: >
       sh -c '
         while true; do
@@ -45,6 +49,7 @@ services:
 
   collector-banknifty:
     build: .
+    profiles: ["nse"]
     command: >
       sh -c '
         while true; do
@@ -67,6 +72,7 @@ services:
 
   collector-finnifty:
     build: .
+    profiles: ["nse"]
     command: >
       sh -c '
         while true; do
@@ -89,6 +95,7 @@ services:
 
   collector-sensex:
     build: .
+    profiles: ["nse"]
     command: >
       sh -c '
         while true; do
