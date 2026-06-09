@@ -37,6 +37,7 @@ _CHAIN_CACHE_TTL = 30
 _PERP_CACHE_TTL  = 5
 _POS_CACHE_TTL   = 15
 _BAL_CACHE_TTL   = 15
+_FUTS_CACHE_TTL  = 30
 
 
 class DeltaCryptoBroker:
@@ -59,6 +60,7 @@ class DeltaCryptoBroker:
         self._perp_cache: dict[str, dict] = {}
         self._pos_cache: dict[str, dict] = {"data": None, "ts": 0.0}
         self._bal_cache: dict[str, float] = {"value": -1.0, "ts": 0.0}
+        self._futs_cache: dict = {"data": None, "ts": 0.0}
         self._has_auth = bool(self.api_key and self.api_secret)
         if self.mode == "live" and not self._has_auth:
             raise RuntimeError(
@@ -189,16 +191,47 @@ class DeltaCryptoBroker:
 
     def get_funding_rate(self, symbol: str) -> Optional[float]:
         """Current annualized funding rate for perp."""
+        stats = self.get_futures_stats().get(symbol)
+        return stats.get("funding_rate") if stats else None
+
+    def get_futures_stats(self) -> dict[str, dict]:
+        """Fan-out futures market stats for all perps in one REST call,
+        cached 30s. Returns {symbol: {funding_rate, open_interest,
+        open_interest_usd, mark_price, volume_24h_usd, oi_change_24h}}.
+
+        Funding rate sign convention (Delta India):
+            positive = longs paying shorts  → market is heavy-long, mean-revert risk
+            negative = shorts paying longs  → market is heavy-short, squeeze risk
+        """
+        cached = self._futs_cache
+        if cached["data"] is not None and time.time() - cached["ts"] < _FUTS_CACHE_TTL:
+            return cached["data"]
+        out: dict[str, dict] = {}
         try:
             data = self._request("GET", "/v2/tickers",
                                   params={"contract_types": "perpetual_futures"})
             for row in data.get("result", []):
-                if row.get("symbol") == symbol:
-                    fr = row.get("funding_rate")
-                    return float(fr) if fr is not None else None
+                sym = row.get("symbol")
+                if not sym: continue
+                def _f(k):
+                    v = row.get(k)
+                    try: return float(v) if v is not None and v != "" else None
+                    except (TypeError, ValueError): return None
+                mark = _f("mark_price")
+                oi   = _f("oi")
+                out[sym] = {
+                    "funding_rate":     _f("funding_rate"),
+                    "open_interest":    oi,
+                    "open_interest_usd": (oi * mark) if (oi is not None and mark is not None) else None,
+                    "mark_price":       mark,
+                    "volume_24h_usd":   _f("volume") or _f("turnover_usd"),
+                    "mark_change_24h":  _f("mark_change_24h"),
+                }
+            self._futs_cache = {"data": out, "ts": time.time()}
+            return out
         except Exception as e:
-            logger.error("get_funding_rate(%s): %s", symbol, e)
-        return None
+            logger.error("get_futures_stats: %s", e)
+        return out
 
     # ── Authenticated / live trading ────────────────────────────────────────
     def get_positions(self) -> list[dict]:

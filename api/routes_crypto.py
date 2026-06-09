@@ -119,22 +119,36 @@ def _build_crypto_snapshot() -> dict:
     """Single source of truth for both /api/crypto/signals and /ws/crypto.
 
     Bundles everything the crypto dashboard needs in one round-trip: live
-    signals, portfolio state, perp marks, and stream diagnostics.
+    signals, portfolio state, perp marks, futures market stats (funding
+    rate + OI), and stream diagnostics.
     """
     signals, perp_marks = _signals_from_broker()
     portfolio = _portfolio_snapshot()
+    futures_stats = _futures_stats_for_dashboard()
     try:
         from core.ws.delta_stream import get_stream
         stream = get_stream().diagnostics()
     except Exception:
         stream = {"connected": False}
     return {
-        "ts":         datetime.now(timezone.utc).isoformat(),
-        "perp_marks": perp_marks,
-        "signals":    signals,
-        "portfolio":  portfolio,
-        "stream":     stream,
+        "ts":            datetime.now(timezone.utc).isoformat(),
+        "perp_marks":    perp_marks,
+        "signals":       signals,
+        "portfolio":     portfolio,
+        "futures_stats": futures_stats,
+        "stream":        stream,
     }
+
+
+def _futures_stats_for_dashboard() -> dict:
+    """Just the BTC + ETH perp stats — funding rate + OI in USD + 24h vol."""
+    try:
+        from core.brokers.delta_crypto import get_broker
+        broker = get_broker()
+        all_stats = broker.get_futures_stats()
+        return {sym: all_stats.get(sym, {}) for sym in ("BTCUSD", "ETHUSD")}
+    except Exception:
+        return {}
 
 
 def _portfolio_snapshot() -> dict:

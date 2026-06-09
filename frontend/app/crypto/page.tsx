@@ -41,9 +41,19 @@ type StreamDiag = {
   last_msg_age_s?: number | null;
 };
 
+type FuturesStat = {
+  funding_rate?: number | null;
+  open_interest?: number | null;
+  open_interest_usd?: number | null;
+  mark_price?: number | null;
+  volume_24h_usd?: number | null;
+  mark_change_24h?: number | null;
+};
+
 type Snapshot = {
   ts: string;
   perp_marks: Record<string, number>;
+  futures_stats?: Record<string, FuturesStat>;
   signals: SignalRow[];
   portfolio: PortfolioState;
   stream: StreamDiag;
@@ -126,11 +136,31 @@ export default function CryptoHome() {
   const firing = signals.filter(s => Math.abs(s.pred_pct) >= GATE_PCT);
   const liveBtc = snap?.perp_marks?.["BTCUSD"];
   const liveEth = snap?.perp_marks?.["ETHUSD"];
+  const btcFutures = snap?.futures_stats?.["BTCUSD"];
+  const ethFutures = snap?.futures_stats?.["ETHUSD"];
 
   // Max signal strength across current expiries — used for the strip stat
   const maxAbsPred = signals.length
     ? Math.max(...signals.map(s => Math.abs(s.pred_pct)))
     : 0;
+
+  const fmtUsd = (v?: number | null) => {
+    if (v == null) return "—";
+    if (Math.abs(v) >= 1_000_000) return `$${(v / 1_000_000).toFixed(2)}M`;
+    if (Math.abs(v) >= 1_000)     return `$${(v / 1_000).toFixed(1)}K`;
+    return `$${v.toFixed(0)}`;
+  };
+  const fmtFunding = (fr?: number | null) => {
+    if (fr == null) return { text: "—", color: "#475569", hint: "" };
+    const pct = fr * 100;
+    const sign = pct >= 0 ? "+" : "";
+    const text = `${sign}${pct.toFixed(4)}%`;
+    // Positive funding -> longs paying shorts -> heavy-long, mean-revert risk
+    // Negative funding -> shorts paying longs -> heavy-short, squeeze risk
+    const color = pct > 0.01 ? "#ef4444" : pct < -0.01 ? "#22c55e" : "#94a3b8";
+    const hint  = pct > 0.01 ? "longs paying" : pct < -0.01 ? "shorts paying" : "neutral";
+    return { text, color, hint };
+  };
 
   return (
     <div className="min-h-screen bg-[#0a0a14] text-gray-200">
@@ -268,6 +298,22 @@ export default function CryptoHome() {
           <StatCard label="Max |pred|" value={`${maxAbsPred.toFixed(3)}%`} />
         </div>
 
+        {/* Futures market stats — perp-specific signals not in NIFTY land */}
+        <div className="border border-[#1e1e30] rounded-2xl p-4 mb-6 bg-[#0e0e1a]">
+          <div className="flex items-baseline justify-between mb-3">
+            <h2 className="text-sm font-semibold text-gray-300">Futures · Perp Stats</h2>
+            <span className="text-[10px] text-gray-600">
+              funding sign: + longs paying (heavy-long) · − shorts paying (heavy-short)
+            </span>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            <FuturesCard label="BTCUSD" futures={btcFutures} color="#f7931a"
+                         fmtUsd={fmtUsd} fmtFunding={fmtFunding} />
+            <FuturesCard label="ETHUSD" futures={ethFutures} color="#627eea"
+                         fmtUsd={fmtUsd} fmtFunding={fmtFunding} />
+          </div>
+        </div>
+
         {/* Live BTC/ETH chart — Signal Radar below covers the pred% per expiry */}
         <div className="mb-6">
           <CryptoChart livePrice={liveBtc ?? liveEth} />
@@ -363,6 +409,52 @@ function StatCard({ label, value, accent, customColor }: {
          style={customColor ? { color: customColor } : undefined}>
         {value}
       </p>
+    </div>
+  );
+}
+
+function FuturesCard({
+  label, futures, color, fmtUsd, fmtFunding,
+}: {
+  label: string;
+  futures?: FuturesStat;
+  color: string;
+  fmtUsd: (v?: number | null) => string;
+  fmtFunding: (fr?: number | null) => { text: string; color: string; hint: string };
+}) {
+  const fund = fmtFunding(futures?.funding_rate);
+  const chg = futures?.mark_change_24h ?? null;
+  const chgPct = chg != null ? chg * 100 : null;
+  return (
+    <div className="border border-[#1e1e30] rounded-lg p-4">
+      <div className="flex items-baseline justify-between mb-2">
+        <span className="text-sm font-semibold" style={{ color }}>{label}</span>
+        <span className="text-xs text-gray-500 font-mono">
+          {futures?.mark_price != null
+            ? `$${futures.mark_price.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+            : "—"}
+        </span>
+      </div>
+      <div className="grid grid-cols-3 gap-3 text-xs">
+        <div>
+          <p className="text-gray-500 mb-0.5">Funding</p>
+          <p className="font-semibold font-mono" style={{ color: fund.color }}>{fund.text}</p>
+          <p className="text-[10px] text-gray-600 mt-0.5">{fund.hint}</p>
+        </div>
+        <div>
+          <p className="text-gray-500 mb-0.5">Open Interest</p>
+          <p className="font-semibold text-white font-mono">{fmtUsd(futures?.open_interest_usd)}</p>
+        </div>
+        <div>
+          <p className="text-gray-500 mb-0.5">24h Change</p>
+          <p className={`font-semibold font-mono ${
+            chgPct == null ? "text-white"
+              : chgPct > 0 ? "text-green-400" : "text-red-400"
+          }`}>
+            {chgPct == null ? "—" : `${chgPct >= 0 ? "+" : ""}${chgPct.toFixed(2)}%`}
+          </p>
+        </div>
+      </div>
     </div>
   );
 }
