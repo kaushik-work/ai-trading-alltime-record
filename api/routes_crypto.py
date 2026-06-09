@@ -201,16 +201,125 @@ _candles_cache: dict[tuple[str, str], dict] = {}
 _CANDLES_TTL = 60
 
 
+def _compute_poc_inline(df, bucket_size: float):
+    """Volume-Profile POC / VAH / VAL via candle-body bucket overlap. Inlined
+    here to avoid importing api.server (which pulls JWT deps unnecessarily)."""
+    try:
+        opens  = df["Open"].astype(float).values
+        closes = df["Close"].astype(float).values
+        if len(opens) < 10: return None, None, None
+        p_min = float(min(min(opens), min(closes))) - bucket_size
+        p_max = float(max(max(opens), max(closes))) + bucket_size
+        buckets: dict = {}
+        p = p_min
+        while p <= p_max:
+            buckets[round(p, 4)] = 0
+            p += bucket_size
+        bkeys = sorted(buckets.keys())
+        for i in range(len(opens)):
+            b_top = max(opens[i], closes[i])
+            b_bot = min(opens[i], closes[i])
+            if b_top == b_bot: continue
+            for bk in bkeys:
+                if bk < b_top and bk + bucket_size > b_bot:
+                    buckets[bk] += 1
+        if not any(buckets.values()): return None, None, None
+        poc_key = max(buckets, key=buckets.get)
+        poc = round(poc_key + bucket_size / 2, 2)
+        total  = sum(buckets.values())
+        target = total * 0.70
+        accum  = 0
+        included = set()
+        for bk in sorted(buckets, key=buckets.get, reverse=True):
+            included.add(bk); accum += buckets[bk]
+            if accum >= target: break
+        vah = round(max(included) + bucket_size, 2)
+        val = round(min(included), 2)
+        return poc, vah, val
+    except Exception:
+        return None, None, None
+
+
+def _compute_chart_extras(candles: list, asset: str) -> dict:
+    """HPS-style overlays on crypto candles: supply/demand zones, S/R levels,
+    EMAs, POC/VAH/VAL. Reuses the generic core.sr_levels algorithm —
+    tolerance + bucket_size scale by asset price so BTC's ~$63k and ETH's
+    ~$1700 both get usable zone widths.
+    """
+    if not candles or len(candles) < 30:
+        return {}
+    try:
+        import pandas as pd
+        from core.sr_levels import compute_sr_levels
+
+        df = pd.DataFrame(candles)
+        df.columns = [c.capitalize() if c in ("open", "high", "low", "close",
+                                              "volume") else c for c in df.columns]
+        df["dt"] = pd.to_datetime(df["time"], unit="s", utc=True)
+        df = df.set_index("dt")
+
+        mean_price = float(df["Close"].mean())
+        # Tolerance for level-clustering: 0.087% of mean price (matches NIFTY
+        # 20 / 23000). bucket_size for POC: 0.11% of mean price.
+        tolerance   = max(0.5, mean_price * 0.00087)
+        bucket_size = max(0.5, mean_price * 0.0011)
+
+        sr = compute_sr_levels(df.tail(200), tolerance=tolerance)
+        poc, vah, val = _compute_poc_inline(df, bucket_size=bucket_size)
+
+        # Sum volume traded WITHIN each zone's price band — supply zones with
+        # more selling volume are stronger resistance; demand zones with more
+        # buying volume are stronger support. Used by the frontend to scale
+        # the rendered band opacity / outline weight per zone.
+        def _zone_volume(z: dict) -> float:
+            top, bot = z["top"], z["bottom"]
+            mask = (df["High"] >= bot) & (df["Low"] <= top)
+            return float(df.loc[mask, "Volume"].sum()) if mask.any() else 0.0
+
+        for z in sr.get("supply_zones", []): z["volume"] = _zone_volume(z)
+        for z in sr.get("demand_zones", []): z["volume"] = _zone_volume(z)
+
+        max_vol = max(
+            [z["volume"] for z in sr.get("supply_zones", [])
+                              + sr.get("demand_zones", [])] or [1.0]
+        )
+        for z in sr.get("supply_zones", []): z["volume_norm"] = z["volume"] / max_vol
+        for z in sr.get("demand_zones", []): z["volume_norm"] = z["volume"] / max_vol
+
+        closes = df["Close"].astype(float)
+        times  = [int(t) for t in (df.index.astype("int64") // 10**9)]
+        def _ema(period: int) -> list:
+            vals = closes.ewm(span=period, adjust=False).mean()
+            return [{"time": t, "value": round(float(v), 2)}
+                    for t, v in zip(times, vals) if v == v]
+
+        return {
+            "levels":             sr["levels"],
+            "supply_zones":       sr["supply_zones"],
+            "demand_zones":       sr["demand_zones"],
+            "structure":          sr["structure"],
+            "position":           sr["position"],
+            "current_price":      sr["current_price"],
+            "nearest_support":    sr["nearest_support"],
+            "nearest_resistance": sr["nearest_resistance"],
+            "ema20":              _ema(20),
+            "ema50":              _ema(50),
+            "ema200":             _ema(200),
+            "poc":                poc,
+            "vah":                vah,
+            "val":                val,
+        }
+    except Exception as e:
+        return {"extras_error": str(e)}
+
+
 @router.get("/candles")
 def crypto_candles(
     asset: str = Query("BTC", pattern="^(BTC|ETH)$"),
     resolution: str = Query("5m", pattern="^(1m|5m|15m|1h|4h|1d)$"),
     hours: int = Query(24, ge=1, le=720),
 ):
-    """Historical OHLCV candles for chart. Hits Delta /v2/history/candles.
-
-    Default: last 24 hours of 5-min BTC candles. Cached 60s.
-    """
+    """Historical OHLCV + HPS overlays (zones, S/R, EMAs, POC). 60s cache."""
     key = (asset, resolution, hours)
     cached = _candles_cache.get(key)
     if cached and time.time() - cached["ts"] < _CANDLES_TTL:
@@ -240,6 +349,7 @@ def crypto_candles(
                 continue
         candles.sort(key=lambda c: c["time"])
         payload = {"asset": asset, "resolution": resolution, "candles": candles}
+        payload.update(_compute_chart_extras(candles, asset))
         _candles_cache[key] = {"data": payload, "ts": time.time()}
         return payload
     except Exception as e:
