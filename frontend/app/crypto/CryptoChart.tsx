@@ -130,16 +130,21 @@ export default function CryptoChart({ livePrice, liveSignals, gatePct = 0.6 }: P
         axisLabelVisible: false, title: "",
       });
 
-      // Sync time scales between the two charts
+      // The price chart owns the time axis (it has the full 24h of candles).
+      // The signal chart follows — its trace data is only a few minutes wide
+      // at startup, so without this anchor it would zoom itself down to that
+      // tiny window and (via reverse-sync) drag the price chart with it.
+      priceChart.timeScale().fitContent();
+      const earliestT = candles[0]?.time;
+      const latestT   = candles[candles.length - 1]?.time;
+      if (earliestT && latestT) {
+        sigChart.timeScale().setVisibleRange({
+          from: earliestT as any, to: latestT as any,
+        });
+      }
       priceChart.timeScale().subscribeVisibleLogicalRangeChange(r => {
         if (r) sigChart.timeScale().setVisibleLogicalRange(r);
       });
-      sigChart.timeScale().subscribeVisibleLogicalRangeChange(r => {
-        if (r) priceChart.timeScale().setVisibleLogicalRange(r);
-      });
-
-      priceChart.timeScale().fitContent();
-      sigChart.timeScale().fitContent();
 
       const ro = new ResizeObserver(() => {
         if (containerRef.current) priceChart.applyOptions({ width: containerRef.current.clientWidth });
