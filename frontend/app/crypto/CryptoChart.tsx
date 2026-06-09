@@ -105,7 +105,29 @@ export default function CryptoChart({ livePrices }: Props) {
         grid:   { vertLines: { color: "#1e1e30" }, horzLines: { color: "#1e1e30" } },
         crosshair: { mode: CrosshairMode.Normal },
         rightPriceScale: { borderColor: "#1e1e30" },
-        timeScale: { borderColor: "#1e1e30", timeVisible: true, secondsVisible: false },
+        timeScale: {
+          borderColor: "#1e1e30",
+          timeVisible: true,
+          secondsVisible: false,
+          // Render in the browser's LOCAL timezone (IST for India). Without
+          // this, lightweight-charts defaults to UTC which is off by 5h30
+          // and made the time labels look "wrong".
+          tickMarkFormatter: (t: number) => {
+            const d = new Date(t * 1000);
+            const hh = d.getHours().toString().padStart(2, "0");
+            const mm = d.getMinutes().toString().padStart(2, "0");
+            return `${hh}:${mm}`;
+          },
+        },
+        localization: {
+          timeFormatter: (t: number) => {
+            const d = new Date(t * 1000);
+            return d.toLocaleString(undefined, {
+              day: "2-digit", month: "short",
+              hour: "2-digit", minute: "2-digit", hour12: false,
+            });
+          },
+        },
       });
       chartRef.current = chart;
 
