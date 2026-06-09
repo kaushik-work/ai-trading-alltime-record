@@ -29,25 +29,37 @@ export default function CryptoChart({ livePrice, liveSignals, gatePct = 0.6 }: P
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
-  // Fetch candles + signal history when asset changes
+  // Fetch candles + signal history on asset change, then refresh every 30s.
+  // Without periodic refresh the chart freezes at the page-load timestamp —
+  // live price updates extend the LAST loaded candle but the chart x-axis
+  // never advances to current time, so you end up looking at a 6h-old window.
   useEffect(() => {
-    setLoading(true);
-    setErr(null);
-    const token = localStorage.getItem("aq_token");
-    const headers = { Authorization: `Bearer ${token}` };
-    Promise.all([
-      fetch(`${API_URL}/api/crypto/candles?asset=${asset}&resolution=${RESOLUTION}&hours=${LOOKBACK_HOURS}`, { headers })
-        .then(r => r.json()),
-      fetch(`${API_URL}/api/crypto/signal-history?asset=${asset}&hours=${LOOKBACK_HOURS}`, { headers })
-        .then(r => r.json()),
-    ])
-      .then(([candleRes, sigRes]) => {
-        if (candleRes.error) setErr(candleRes.error);
-        setCandles(candleRes.candles || []);
-        setSigSamples(sigRes.samples || []);
-        setLoading(false);
-      })
-      .catch(e => { setErr(e?.message || "Network error"); setLoading(false); });
+    let cancelled = false;
+    const load = (initial: boolean) => {
+      if (initial) { setLoading(true); setErr(null); }
+      const token = localStorage.getItem("aq_token");
+      const headers = { Authorization: `Bearer ${token}` };
+      Promise.all([
+        fetch(`${API_URL}/api/crypto/candles?asset=${asset}&resolution=${RESOLUTION}&hours=${LOOKBACK_HOURS}`, { headers })
+          .then(r => r.json()),
+        fetch(`${API_URL}/api/crypto/signal-history?asset=${asset}&hours=${LOOKBACK_HOURS}`, { headers })
+          .then(r => r.json()),
+      ])
+        .then(([candleRes, sigRes]) => {
+          if (cancelled) return;
+          if (candleRes.error && initial) setErr(candleRes.error);
+          setCandles(candleRes.candles || []);
+          setSigSamples(sigRes.samples || []);
+          if (initial) setLoading(false);
+        })
+        .catch(e => {
+          if (cancelled) return;
+          if (initial) { setErr(e?.message || "Network error"); setLoading(false); }
+        });
+    };
+    load(true);
+    const iv = setInterval(() => load(false), 30_000);
+    return () => { cancelled = true; clearInterval(iv); };
   }, [asset]);
 
   // Build/rebuild chart when candles arrive
