@@ -82,9 +82,20 @@ class CryptoStrategy:
             return None
 
     def signal_persistence_hours(self, lookback_hours: float = 2.0) -> int:
-        """How many recent ticks have a same-direction signal."""
-        cutoff = time.time() - lookback_hours * 3600
-        recent = [p for t, p in self._sig_history if t >= cutoff]
-        if not recent: return 0
-        latest_sign = (1 if recent[-1] > 0 else -1)
-        return sum(1 for p in recent if (1 if p > 0 else -1) == latest_sign)
+        """Approximate number of hourly observations with same sign as latest.
+
+        Tick-rate independent: span_hours+1 yields the same answer whether
+        the strategy is ticking at 60min or 5s. Backtest semantic (60min bars,
+        N consecutive same-sign bars = 2) maps to (span 1h => returns 2),
+        so the existing PERSIST_HOURS=2 gate continues to require ~1h of
+        real-time signal persistence regardless of tick rate.
+        """
+        if not self._sig_history: return 0
+        latest_t, latest_pred = self._sig_history[-1]
+        latest_sign = 1 if latest_pred > 0 else -1
+        cutoff = latest_t - lookback_hours * 3600
+        same_ts = [t for t, p in self._sig_history
+                   if t >= cutoff and (1 if p > 0 else -1) == latest_sign]
+        if not same_ts: return 0
+        span_h = (max(same_ts) - min(same_ts)) / 3600
+        return int(span_h) + 1

@@ -24,7 +24,7 @@ Required env:
     CRYPTO_TRADING_MODE=live          # or paper
     DELTA_API_KEY=...                  # for live
     DELTA_API_SECRET=...
-    CRYPTO_TICK_MINUTES=60             # default 60
+    CRYPTO_TICK_SECONDS=5              # default 5 (was 60min — now WS-fed)
     CRYPTO_EQUITY_USD=10000            # base equity for sizing
     CRYPTO_DAILY_LOSS_KILL_PCT=0.05    # kill at -5% day P&L
     CRYPTO_MAX_LIVE_CONTRACTS=200      # absolute cap per asset
@@ -45,7 +45,16 @@ from strategies.crypto_base import CryptoSignalDecision
 
 logger = logging.getLogger(__name__)
 
-TICK_INTERVAL_MINUTES = int(os.environ.get("CRYPTO_TICK_MINUTES", "60"))
+# Default 5s — the runner is now WS-fed (core/ws/delta_stream.py), so the
+# tick is cheap and we can react to real-time mark changes. Falls back to
+# legacy CRYPTO_TICK_MINUTES if explicitly set (e.g., for paper-mode debug).
+def _resolve_tick_seconds() -> int:
+    if (s := os.environ.get("CRYPTO_TICK_SECONDS")) is not None:
+        return max(1, int(s))
+    if (m := os.environ.get("CRYPTO_TICK_MINUTES")) is not None:
+        return max(1, int(m) * 60)
+    return 5
+TICK_INTERVAL_SECONDS = _resolve_tick_seconds()
 BASE_EQUITY_USD       = float(os.environ.get("CRYPTO_EQUITY_USD", "10000"))
 DAILY_LOSS_KILL_PCT   = float(os.environ.get("CRYPTO_DAILY_LOSS_KILL_PCT", "0.05"))
 MAX_LIVE_CONTRACTS    = int(os.environ.get("CRYPTO_MAX_LIVE_CONTRACTS", "200"))
@@ -294,16 +303,17 @@ def init_crypto_runner(scheduler) -> None:
         return
     broker = get_crypto_broker()
     mode = broker.mode
-    logger.info("crypto runner enabled — mode=%s tick=%dmin equity=$%.0f "
+    logger.info("crypto runner enabled — mode=%s tick=%ds equity=$%.0f "
                 "kill=-%.1f%% max_contracts=%d",
-                mode, TICK_INTERVAL_MINUTES, BASE_EQUITY_USD,
+                mode, TICK_INTERVAL_SECONDS, BASE_EQUITY_USD,
                 DAILY_LOSS_KILL_PCT * 100, MAX_LIVE_CONTRACTS)
     try:
         scheduler.add_job(
             tick_crypto_strategies, "interval",
-            minutes=TICK_INTERVAL_MINUTES,
+            seconds=TICK_INTERVAL_SECONDS,
             id="crypto_synth_forward_tick", replace_existing=True,
             next_run_time=datetime.now(timezone.utc),
+            max_instances=1, coalesce=True,
         )
     except Exception as e:
         logger.error("crypto runner init failed: %s", e)

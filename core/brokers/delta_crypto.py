@@ -116,7 +116,14 @@ class DeltaCryptoBroker:
 
     # ── Read-only / public ──────────────────────────────────────────────────
     def get_perp_mark(self, symbol: str) -> Optional[float]:
-        """Current perp mark. Cached."""
+        """Current perp mark. Prefers live WS stream; falls back to REST cache."""
+        try:
+            from core.ws.delta_stream import get_stream
+            stream_mark = get_stream().get_perp_mark(symbol)
+            if stream_mark is not None:
+                return stream_mark
+        except Exception as e:
+            logger.debug("stream perp lookup failed (%s); falling back to REST", e)
         cached = self._perp_cache.get(symbol)
         if cached and time.time() - cached["ts"] < _PERP_CACHE_TTL:
             return cached["mark"]
@@ -133,7 +140,19 @@ class DeltaCryptoBroker:
         return None
 
     def get_option_chain(self, underlying: str) -> list[dict]:
-        """All call+put options for an underlying. Returns normalized list."""
+        """All call+put options for an underlying. Returns normalized list.
+
+        Prefers live WS stream when it has a usable chain (>=6 fresh marks);
+        falls back to REST cache otherwise. v5 strategy only consumes the
+        {symbol, mark} fields, so the stream-built chain is feature-complete.
+        """
+        try:
+            from core.ws.delta_stream import get_stream
+            stream_chain = get_stream().get_option_chain(underlying)
+            if len(stream_chain) >= 6:
+                return stream_chain
+        except Exception as e:
+            logger.debug("stream chain lookup failed (%s); falling back to REST", e)
         cached = self._chain_cache.get(underlying)
         if cached and time.time() - cached["ts"] < _CHAIN_CACHE_TTL:
             return cached["chain"]

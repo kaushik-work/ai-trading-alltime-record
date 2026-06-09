@@ -27,6 +27,7 @@ from core.records import init_records_db, RecordTracker
 from core import ipc
 from core.bot_runner import get_runner
 from core.crypto_runner import init_crypto_runner
+from core.ws.delta_stream import start_stream, stop_stream
 from data.market import RealMarketData
 from api.broadcaster import manager
 from api.routes_crypto import router as crypto_router
@@ -39,10 +40,15 @@ async def lifespan(app: FastAPI):
     init_records_db()
     runner = get_runner()
     runner.start()
+    # Delta WS stream feeds the crypto runner with real-time perp + option
+    # marks. Must start BEFORE the runner so the first tick has fresh data.
+    if os.environ.get("ENABLE_CRYPTO_RUNNER") == "1":
+        start_stream()
     init_crypto_runner(runner.scheduler)
     yield
     # ── shutdown ─────────────────────────────────────────────────────────────
     runner.stop()
+    stop_stream()
 
 
 app = FastAPI(title="Trading Bot API", lifespan=lifespan)
@@ -1014,6 +1020,32 @@ async def websocket_endpoint(ws: WebSocket, token: str = Query(default="")):
     except Exception as e:
         logger.error("WebSocket error (disconnecting): %s", e)
         manager.disconnect(ws)
+
+
+@app.websocket("/ws/crypto")
+async def crypto_websocket_endpoint(ws: WebSocket, token: str = Query(default="")):
+    """Live crypto dashboard stream. Pushes the full snapshot every second.
+
+    Snapshot = signals + portfolio + perp_marks + stream diagnostics.
+    Source data is the WS-backed broker, so payloads reflect sub-second mark
+    changes without any REST hits.
+    """
+    await ws.accept()
+    try:
+        decode_token(token)
+    except Exception:
+        await ws.close(code=1008, reason="Invalid or expired token")
+        return
+    from api.routes_crypto import _build_crypto_snapshot
+    try:
+        await ws.send_text(_safe_json(_build_crypto_snapshot()))
+        while True:
+            await asyncio.sleep(1)
+            await ws.send_text(_safe_json(_build_crypto_snapshot()))
+    except WebSocketDisconnect:
+        return
+    except Exception as e:
+        logger.error("crypto WebSocket error (disconnecting): %s", e)
 
 
 # ── Run ───────────────────────────────────────────────────────────────────────

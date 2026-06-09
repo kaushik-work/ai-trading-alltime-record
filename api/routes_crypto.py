@@ -1,24 +1,23 @@
 """
-Crypto API routes — to be registered in api/server.py.
+Crypto API routes — registered in api/server.py.
 
-Hits the live Delta India REST API (same logic as delta_exchange/live_signal.py)
-and computes the current synthetic-forward signals across BTC, ETH, XAUT.
-
-Routes:
-  GET /api/crypto/signals     — current signal radar (per asset, per expiry)
-  GET /api/crypto/portfolio   — paper-trade equity, PnL, sharpe, DD (stub for now)
-
-Integration (in server.py):
-  from api.routes_crypto import router as crypto_router
-  app.include_router(crypto_router)
+Reads signals + portfolio state from the stream-backed broker (no REST hits
+on the hot path). Routes:
+  GET  /api/crypto/signals          — signal radar (per asset, per expiry)
+  GET  /api/crypto/snapshot         — full dashboard payload (signals + portfolio + marks)
+  GET  /api/crypto/portfolio        — equity, day P&L, open positions
+  GET  /api/crypto/state            — runner state (kill switch, open positions detail)
+  GET  /api/crypto/candles          — historical OHLCV for chart (Delta REST + 60s cache)
+  GET  /api/crypto/signal-history   — recent pred_pct samples for chart overlay
+  POST /api/crypto/kill             — emergency stop
 """
 
 from __future__ import annotations
 import os
+import time
 from datetime import datetime, timezone
-from typing import List, Optional
 import requests
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.security import HTTPBearer
 import numpy as np
 
@@ -44,45 +43,6 @@ def _parse_option_symbol(sym: str):
     except Exception:
         return None
     return side, asset, strike, expiry
-
-
-def _fetch_chain(underlying: str) -> tuple[float, list]:
-    """Return (spot, list of option contracts) for one underlying."""
-    # perp mark
-    r = requests.get(f"{DELTA_BASE}/v2/tickers",
-                     params={"contract_types": "perpetual_futures",
-                             "underlying_asset_symbols": underlying},
-                     timeout=10)
-    r.raise_for_status()
-    perps = r.json().get("result", [])
-    spot = None
-    target_perp = f"{underlying}USD"
-    for p in perps:
-        if p.get("symbol") == target_perp:
-            try: spot = float(p["mark_price"])
-            except (KeyError, TypeError, ValueError): pass
-            break
-    if spot is None: return None, []
-
-    # options
-    r = requests.get(f"{DELTA_BASE}/v2/tickers",
-                     params={"contract_types": "call_options,put_options",
-                             "underlying_asset_symbols": underlying},
-                     timeout=10)
-    r.raise_for_status()
-    out = []
-    for o in r.json().get("result", []):
-        sym = o.get("symbol")
-        parsed = _parse_option_symbol(sym) if sym else None
-        if not parsed: continue
-        side, asset, strike, expiry = parsed
-        if asset != underlying: continue
-        try: mark = float(o.get("mark_price") or 0)
-        except (TypeError, ValueError): mark = 0
-        if mark <= 0: continue
-        out.append({"side": side, "strike": strike, "expiry": expiry, "mark": mark,
-                    "symbol": sym})
-    return spot, out
 
 
 def _compute_per_expiry(spot: float, chain: list, now: datetime) -> list:
@@ -114,39 +74,106 @@ def _compute_per_expiry(spot: float, chain: list, now: datetime) -> list:
     return out
 
 
+def _signals_from_broker() -> tuple[list, dict]:
+    """Stream-backed signal compute. Returns (signals, perp_marks).
+
+    Replaces REST fetch in /signals: reads marks from the broker (which prefers
+    the WS stream), so the dashboard and the runner see the exact same data.
+    Same shape as legacy _fetch_chain → _compute_per_expiry pipeline.
+    """
+    from core.brokers.delta_crypto import get_broker
+    broker = get_broker()
+    now = datetime.now(timezone.utc)
+    signals: list = []
+    perp_marks: dict = {}
+    for underlying in ("BTC", "ETH"):
+        sym = f"{underlying}USD"
+        spot = broker.get_perp_mark(sym)
+        if spot is None: continue
+        perp_marks[sym] = spot
+        # Build chain rows compatible with _compute_per_expiry: it expects
+        # {side, strike, expiry, mark, symbol}. Broker (stream or REST) returns
+        # {symbol, mark} (and possibly extras); we parse the symbol locally.
+        chain: list = []
+        for c in broker.get_option_chain(underlying):
+            parsed = _parse_option_symbol(c.get("symbol", ""))
+            if not parsed: continue
+            side, asset, strike, expiry = parsed
+            if asset != underlying: continue
+            try: mark = float(c.get("mark") or 0)
+            except (TypeError, ValueError): mark = 0
+            if mark <= 0: continue
+            chain.append({"side": side, "strike": strike, "expiry": expiry,
+                          "mark": mark, "symbol": c["symbol"]})
+        for s in _compute_per_expiry(spot, chain, now):
+            signals.append({
+                "underlying": underlying, "spot": spot,
+                "expiry": s["expiry"], "pred_pct": s["pred_pct"],
+                "n_strikes": s["n_strikes"], "atm_strike": s["atm_strike"],
+                "tte_hours": s["tte_hours"],
+            })
+    return signals, perp_marks
+
+
+def _build_crypto_snapshot() -> dict:
+    """Single source of truth for both /api/crypto/signals and /ws/crypto.
+
+    Bundles everything the crypto dashboard needs in one round-trip: live
+    signals, portfolio state, perp marks, and stream diagnostics.
+    """
+    signals, perp_marks = _signals_from_broker()
+    portfolio = _portfolio_snapshot()
+    try:
+        from core.ws.delta_stream import get_stream
+        stream = get_stream().diagnostics()
+    except Exception:
+        stream = {"connected": False}
+    return {
+        "ts":         datetime.now(timezone.utc).isoformat(),
+        "perp_marks": perp_marks,
+        "signals":    signals,
+        "portfolio":  portfolio,
+        "stream":     stream,
+    }
+
+
+def _portfolio_snapshot() -> dict:
+    """Live portfolio: equity, today P&L, open positions count."""
+    try:
+        from core.crypto_runner import get_state, BASE_EQUITY_USD
+        state = get_state()
+        return {
+            "equity":         float(BASE_EQUITY_USD) + float(state.get("day_pnl_usd", 0) or 0),
+            "day_pnl":        float(state.get("day_pnl_usd", 0) or 0),
+            "open_positions": len(state.get("open_positions", {})),
+            "rolling_sharpe": 0.0,
+            "max_dd_pct":     0.0,
+            "killed":         bool(state.get("killed", False)),
+            "mode":           state.get("mode", "unknown"),
+        }
+    except Exception:
+        return {"equity": 10_000.0, "day_pnl": 0.0, "open_positions": 0,
+                "rolling_sharpe": 0.0, "max_dd_pct": 0.0,
+                "killed": False, "mode": "unknown"}
+
+
 @router.get("/signals")
 def crypto_signals():
-    """Current synth-forward signals across BTC, ETH, XAUT."""
-    out = []
-    now = datetime.now(timezone.utc)
-    for underlying in ("BTC", "ETH", "XAUT"):
-        try:
-            spot, chain = _fetch_chain(underlying)
-            if spot is None: continue
-            sigs = _compute_per_expiry(spot, chain, now)
-            for s in sigs:
-                out.append({
-                    "underlying": underlying, "spot": spot,
-                    "expiry": s["expiry"], "pred_pct": s["pred_pct"],
-                    "n_strikes": s["n_strikes"], "atm_strike": s["atm_strike"],
-                    "tte_hours": s["tte_hours"],
-                })
-            # XAUT has no options → spot only, no signals
-        except Exception:
-            continue
-    return out
+    """Current synth-forward signals across BTC, ETH."""
+    signals, _ = _signals_from_broker()
+    return signals
+
+
+@router.get("/snapshot")
+def crypto_snapshot():
+    """Full crypto dashboard payload: signals + portfolio + perp marks + stream."""
+    return _build_crypto_snapshot()
 
 
 @router.get("/portfolio")
 def crypto_portfolio():
-    """Paper-trade portfolio state — stub. Wire to real journal in next iteration."""
-    return {
-        "equity": 10_000.0,
-        "day_pnl": 0.0,
-        "open_positions": 0,
-        "rolling_sharpe": 0.0,
-        "max_dd_pct": 0.0,
-    }
+    """Live portfolio state (day P&L + open positions from crypto_runner)."""
+    return _portfolio_snapshot()
 
 
 @router.get("/state")
@@ -158,6 +185,98 @@ def crypto_state():
     except Exception as e:
         return {"enabled": False, "error": str(e),
                 "mode": "unknown", "strategies": [], "open_positions": {}}
+
+
+# ── chart data ───────────────────────────────────────────────────────────────
+_RESOLUTION_SECONDS = {
+    "1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400,
+}
+_candles_cache: dict[tuple[str, str], dict] = {}
+_CANDLES_TTL = 60
+
+
+@router.get("/candles")
+def crypto_candles(
+    asset: str = Query("BTC", pattern="^(BTC|ETH)$"),
+    resolution: str = Query("5m", pattern="^(1m|5m|15m|1h|4h|1d)$"),
+    hours: int = Query(24, ge=1, le=720),
+):
+    """Historical OHLCV candles for chart. Hits Delta /v2/history/candles.
+
+    Default: last 24 hours of 5-min BTC candles. Cached 60s.
+    """
+    key = (asset, resolution, hours)
+    cached = _candles_cache.get(key)
+    if cached and time.time() - cached["ts"] < _CANDLES_TTL:
+        return cached["data"]
+    symbol = f"{asset}USD"
+    end_ts = int(time.time())
+    start_ts = end_ts - hours * 3600
+    try:
+        r = requests.get(f"{DELTA_BASE}/v2/history/candles",
+                         params={"resolution": resolution, "symbol": symbol,
+                                 "start": start_ts, "end": end_ts},
+                         timeout=15)
+        r.raise_for_status()
+        rows = r.json().get("result", []) or []
+        candles = []
+        for row in rows:
+            try:
+                candles.append({
+                    "time":   int(row["time"]),
+                    "open":   float(row["open"]),
+                    "high":   float(row["high"]),
+                    "low":    float(row["low"]),
+                    "close":  float(row["close"]),
+                    "volume": float(row.get("volume") or 0),
+                })
+            except (KeyError, TypeError, ValueError):
+                continue
+        candles.sort(key=lambda c: c["time"])
+        payload = {"asset": asset, "resolution": resolution, "candles": candles}
+        _candles_cache[key] = {"data": payload, "ts": time.time()}
+        return payload
+    except Exception as e:
+        return {"asset": asset, "resolution": resolution, "candles": [],
+                "error": str(e)}
+
+
+@router.get("/signal-history")
+def crypto_signal_history(
+    asset: str = Query("BTC", pattern="^(BTC|ETH)$"),
+    hours: int = Query(24, ge=1, le=168),
+):
+    """Recent pred_pct samples for chart overlay. Reads from Mongo signal_log.
+
+    Returns [{ts, pred_pct, n_strikes}] sorted by ts ascending.
+    """
+    try:
+        from core import mongo
+        from datetime import timedelta
+        db = mongo.get_db()
+        if db is None:
+            return {"asset": asset, "samples": [], "error": "mongo unavailable"}
+        symbol = f"{asset}USD"
+        cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+        rows = list(db["signal_log"].find(
+            {"venue": "delta_india", "symbol": symbol, "ts": {"$gte": cutoff}},
+            projection={"_id": 0, "ts": 1, "pred_pct": 1, "n_strikes": 1},
+        ).sort("ts", 1))
+        samples = []
+        for r in rows:
+            ts = r.get("ts")
+            if hasattr(ts, "timestamp"):
+                ts_unix = int(ts.timestamp())
+            else:
+                continue
+            samples.append({
+                "ts": ts_unix,
+                "pred_pct": float(r.get("pred_pct") or 0),
+                "n_strikes": int(r.get("n_strikes") or 0),
+            })
+        return {"asset": asset, "samples": samples}
+    except Exception as e:
+        return {"asset": asset, "samples": [], "error": str(e)}
 
 
 @router.post("/kill")
