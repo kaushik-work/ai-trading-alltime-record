@@ -101,6 +101,10 @@ class SynthForwardSignal(CryptoStrategy):
         candidates.sort(key=lambda c: -abs(c[0]))
         pred, expiry, n_strikes = candidates[0]
 
+        # Record raw pred for charting BEFORE gating — so the dashboard chart
+        # has a continuous line even when signals are well below the gate.
+        self._record_pred_trace(pred * 100)
+
         # gate
         if abs(pred) < ENTRY_PCT: return None
 

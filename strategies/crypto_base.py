@@ -51,8 +51,17 @@ class CryptoStrategy:
     def __init__(self, broker=None):
         from core.brokers.delta_crypto import get_broker
         self.broker = broker or get_broker()
-        self._sig_history: list[tuple[float, float]] = []   # (ts, pred_pct)
+        self._sig_history: list[tuple[float, float]] = []   # gated signals only
+        self._pred_trace: list[tuple[float, float]] = []    # raw pred, every tick
         self._last_tick: float = 0.0
+
+    def _record_pred_trace(self, pred_pct: float) -> None:
+        """Subclasses call from _compute_signal to record the raw (un-gated)
+        pred for charting. Distinct from _sig_history which only holds gated
+        signals used by the persistence check."""
+        self._pred_trace.append((time.time(), pred_pct))
+        cutoff = time.time() - 24 * 3600
+        self._pred_trace = [(t, p) for t, p in self._pred_trace if t >= cutoff]
 
     def _compute_signal(self) -> Optional[CryptoSignalDecision]:
         """Override: return SignalDecision or None."""

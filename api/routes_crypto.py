@@ -246,37 +246,59 @@ def crypto_signal_history(
     asset: str = Query("BTC", pattern="^(BTC|ETH)$"),
     hours: int = Query(24, ge=1, le=168),
 ):
-    """Recent pred_pct samples for chart overlay. Reads from Mongo signal_log.
+    """Pred_pct samples for chart overlay. Combines two sources:
 
-    Returns [{ts, pred_pct, n_strikes}] sorted by ts ascending.
+      1. Runner's in-memory _sig_history (every signal compute, all-day).
+      2. Mongo signal_log (only gate-crossings — historic, may be empty).
+
+    The in-memory source ensures the chart has a visible line even when no
+    signals have crossed the gate yet. Returns [{ts, pred_pct}] sorted asc.
     """
+    samples: list[dict] = []
+    # ── 1. in-memory _pred_trace from runner (every tick, ungated) ──────────
+    # Bucket to 5-min boundaries so the chart payload is tractable: at 2s
+    # ticks the raw trace is ~43k samples/day; bucketed it's ~288. We take
+    # the LAST sample per bucket (rather than mean) so the chart reflects
+    # the most recent value in that window.
+    try:
+        from core.crypto_runner import _get_strategies
+        strat_name = "btc_synth_forward" if asset == "BTC" else "eth_synth_forward"
+        strats = _get_strategies()
+        strat = strats.get(strat_name)
+        if strat and getattr(strat, "_pred_trace", None):
+            cutoff_ts = datetime.now(timezone.utc).timestamp() - hours * 3600
+            # Snapshot the list to avoid race with runner thread mutating it
+            trace = list(strat._pred_trace)
+            buckets: dict[int, tuple[float, float]] = {}
+            for t, p in trace:
+                if t < cutoff_ts: continue
+                b = int(t) - (int(t) % 300)
+                buckets[b] = (t, p)
+            for b, (t, p) in sorted(buckets.items()):
+                samples.append({"ts": b, "pred_pct": float(p)})
+    except Exception:
+        pass
+    # ── 2. Mongo signal_log (gate-crossings only) ───────────────────────────
     try:
         from core import mongo
         from datetime import timedelta
         db = mongo.get_db()
-        if db is None:
-            return {"asset": asset, "samples": [], "error": "mongo unavailable"}
-        symbol = f"{asset}USD"
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-        rows = list(db["signal_log"].find(
-            {"venue": "delta_india", "symbol": symbol, "ts": {"$gte": cutoff}},
-            projection={"_id": 0, "ts": 1, "pred_pct": 1, "n_strikes": 1},
-        ).sort("ts", 1))
-        samples = []
-        for r in rows:
-            ts = r.get("ts")
-            if hasattr(ts, "timestamp"):
-                ts_unix = int(ts.timestamp())
-            else:
-                continue
-            samples.append({
-                "ts": ts_unix,
-                "pred_pct": float(r.get("pred_pct") or 0),
-                "n_strikes": int(r.get("n_strikes") or 0),
-            })
-        return {"asset": asset, "samples": samples}
-    except Exception as e:
-        return {"asset": asset, "samples": [], "error": str(e)}
+        if db is not None:
+            symbol = f"{asset}USD"
+            cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+            rows = list(db["signal_log"].find(
+                {"venue": "delta_india", "symbol": symbol, "ts": {"$gte": cutoff}},
+                projection={"_id": 0, "ts": 1, "pred_pct": 1},
+            ).sort("ts", 1))
+            for r in rows:
+                ts = r.get("ts")
+                if not hasattr(ts, "timestamp"): continue
+                samples.append({"ts": int(ts.timestamp()),
+                                "pred_pct": float(r.get("pred_pct") or 0)})
+    except Exception:
+        pass
+    samples.sort(key=lambda s: s["ts"])
+    return {"asset": asset, "samples": samples}
 
 
 @router.post("/kill")

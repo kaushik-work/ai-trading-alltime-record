@@ -172,13 +172,18 @@ export default function CryptoChart({ livePrice, liveSignals, gatePct = 0.6 }: P
     }
   }, [livePrice]);
 
-  // Live updates: append latest signal sample
+  // Live updates: append latest signal sample, bucketed to 5-min boundaries.
+  // Without bucketing, every 2s WS push would advance the time axis and the
+  // chart would scroll left continuously. Bucketing means we only ADVANCE
+  // the x-axis once per 5min — between buckets, update() rewrites the same
+  // point in place.
   useEffect(() => {
     if (!liveSignals || !sigSeriesRef.current) return;
     const matchingSig = liveSignals.find(s => s.underlying === asset);
     if (!matchingSig) return;
     const nowSec = Math.floor(Date.now() / 1000);
-    sigSeriesRef.current.update({ time: nowSec as any, value: matchingSig.pred_pct });
+    const bucketSec = nowSec - (nowSec % 300);
+    sigSeriesRef.current.update({ time: bucketSec as any, value: matchingSig.pred_pct });
   }, [liveSignals, asset]);
 
   return (
