@@ -14,6 +14,8 @@ frontend/.env.local
 *.egg-info/
 dist/
 build/
+.claude/settings.local.json
+
 
 backtest_cache/
 backtest_results.json
