@@ -195,7 +195,8 @@
       "Bash(./node_modules/.bin/next build *)",
       "Bash(git add *)",
       "Bash(git commit -m ' *)",
-      "Bash(git commit -m 'Fix crypto price chart x-axis: price chart owns the time scale *)"
+      "Bash(git commit -m 'Fix crypto price chart x-axis: price chart owns the time scale *)",
+      "Bash(git commit -m 'Make crypto runner robust to partial discovery + stale .env *)"
     ]
   }
 }
