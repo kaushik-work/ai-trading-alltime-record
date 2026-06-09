@@ -73,26 +73,49 @@ class DeltaStream:
 
     # ── symbol discovery ─────────────────────────────────────────────────────
     def _discover_symbols(self) -> list[str]:
+        """Fetch the option-symbol list per underlying. Retries each underlying
+        up to 3x with exponential backoff so a transient SSL hiccup on one
+        asset doesn't strand it without options for the full REDISCOVER
+        window. If any underlying fails ALL retries we leave the timestamp
+        un-bumped so the run_loop will re-attempt on the next iteration."""
         out: list[str] = list(PERP_SYMBOLS)
+        all_ok = True
         for underlying in UNDERLYINGS:
-            try:
-                r = requests.get(
-                    f"{DELTA_REST}/v2/tickers",
-                    params={"contract_types": "call_options,put_options",
-                            "underlying_asset_symbols": underlying},
-                    timeout=10,
-                )
-                r.raise_for_status()
-                syms = [t["symbol"] for t in r.json().get("result", [])
-                        if t.get("symbol")]
-                self._option_symbols[underlying] = syms
-                out.extend(syms)
-                logger.info("delta-stream: discovered %d %s option symbols",
-                            len(syms), underlying)
-            except Exception as e:
-                logger.error("delta-stream: discover failed for %s: %s",
-                             underlying, e)
-        self._symbols_last_refresh = time.time()
+            ok = False
+            for attempt in range(3):
+                try:
+                    r = requests.get(
+                        f"{DELTA_REST}/v2/tickers",
+                        params={"contract_types": "call_options,put_options",
+                                "underlying_asset_symbols": underlying},
+                        timeout=10,
+                    )
+                    r.raise_for_status()
+                    syms = [t["symbol"] for t in r.json().get("result", [])
+                            if t.get("symbol")]
+                    self._option_symbols[underlying] = syms
+                    out.extend(syms)
+                    logger.info("delta-stream: discovered %d %s option symbols",
+                                len(syms), underlying)
+                    ok = True
+                    break
+                except Exception as e:
+                    if attempt < 2:
+                        wait = 2 ** attempt
+                        logger.warning("delta-stream: discover %s attempt %d/3 "
+                                       "failed (%s), retry in %ds",
+                                       underlying, attempt + 1, e, wait)
+                        time.sleep(wait)
+                    else:
+                        logger.error("delta-stream: discover failed for %s "
+                                     "after 3 attempts: %s", underlying, e)
+            if not ok:
+                all_ok = False
+        # Only bump the refresh timestamp when EVERY underlying succeeded.
+        # On partial failure, the next run_loop iteration will re-discover
+        # so we don't stay degraded for the full REDISCOVER_SECONDS window.
+        if all_ok:
+            self._symbols_last_refresh = time.time()
         return out
 
     # ── ws lifecycle ─────────────────────────────────────────────────────────
@@ -122,8 +145,13 @@ class DeltaStream:
         delay = 1.0
         while not self._stop_event.is_set():
             try:
-                if (time.time() - self._symbols_last_refresh > REDISCOVER_SECONDS
-                        or not self._subscribed):
+                # Trigger discovery if: (a) it's been REDISCOVER_SECONDS,
+                # (b) we have no subscription yet, or (c) any underlying
+                # came back empty — that's a partial failure we want to
+                # heal on the next loop iteration, not wait 4h to retry.
+                stale   = time.time() - self._symbols_last_refresh > REDISCOVER_SECONDS
+                missing = any(not self._option_symbols.get(u) for u in UNDERLYINGS)
+                if stale or missing or not self._subscribed:
                     discovered = self._discover_symbols()
                     self._subscribed = set(discovered)
 

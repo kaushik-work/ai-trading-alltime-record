@@ -45,16 +45,11 @@ from strategies.crypto_base import CryptoSignalDecision
 
 logger = logging.getLogger(__name__)
 
-# Default 5s — the runner is now WS-fed (core/ws/delta_stream.py), so the
-# tick is cheap and we can react to real-time mark changes. Falls back to
-# legacy CRYPTO_TICK_MINUTES if explicitly set (e.g., for paper-mode debug).
-def _resolve_tick_seconds() -> int:
-    if (s := os.environ.get("CRYPTO_TICK_SECONDS")) is not None:
-        return max(1, int(s))
-    if (m := os.environ.get("CRYPTO_TICK_MINUTES")) is not None:
-        return max(1, int(m) * 60)
-    return 5
-TICK_INTERVAL_SECONDS = _resolve_tick_seconds()
+# Default 2s — the runner is now WS-fed (core/ws/delta_stream.py), so the
+# tick is cheap and we react to real-time mark changes. The legacy
+# CRYPTO_TICK_MINUTES env var is deliberately ignored: a stale .env on
+# any deploy was silently downgrading the bot to 60-min polling.
+TICK_INTERVAL_SECONDS = max(1, int(os.environ.get("CRYPTO_TICK_SECONDS", "2")))
 BASE_EQUITY_USD       = float(os.environ.get("CRYPTO_EQUITY_USD", "10000"))
 DAILY_LOSS_KILL_PCT   = float(os.environ.get("CRYPTO_DAILY_LOSS_KILL_PCT", "0.05"))
 MAX_LIVE_CONTRACTS    = int(os.environ.get("CRYPTO_MAX_LIVE_CONTRACTS", "200"))
