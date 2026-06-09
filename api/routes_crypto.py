@@ -138,22 +138,28 @@ def _build_crypto_snapshot() -> dict:
 
 
 def _portfolio_snapshot() -> dict:
-    """Live portfolio: equity, today P&L, open positions count."""
+    """Live portfolio: real Delta wallet balance, day P&L, open positions."""
     try:
-        from core.crypto_runner import get_state, BASE_EQUITY_USD
+        from core.crypto_runner import get_state
+        from core.brokers.delta_crypto import get_broker
         state = get_state()
+        broker = get_broker()
+        # In live mode pull the real Delta wallet balance (cached 15s in the
+        # broker); paper mode has no wallet so report None — the dashboard
+        # treats that as "n/a".
+        wallet = None
+        if broker.mode == "live":
+            try: wallet = broker.get_balance()
+            except Exception: wallet = None
         return {
-            "equity":         float(BASE_EQUITY_USD) + float(state.get("day_pnl_usd", 0) or 0),
+            "wallet_usd":     float(wallet) if wallet is not None else None,
             "day_pnl":        float(state.get("day_pnl_usd", 0) or 0),
             "open_positions": len(state.get("open_positions", {})),
-            "rolling_sharpe": 0.0,
-            "max_dd_pct":     0.0,
             "killed":         bool(state.get("killed", False)),
             "mode":           state.get("mode", "unknown"),
         }
     except Exception:
-        return {"equity": 10_000.0, "day_pnl": 0.0, "open_positions": 0,
-                "rolling_sharpe": 0.0, "max_dd_pct": 0.0,
+        return {"wallet_usd": None, "day_pnl": 0.0, "open_positions": 0,
                 "killed": False, "mode": "unknown"}
 
 

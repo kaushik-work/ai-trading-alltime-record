@@ -27,11 +27,9 @@ type SignalRow = {
 };
 
 type PortfolioState = {
-  equity: number;
+  wallet_usd: number | null;
   day_pnl: number;
   open_positions: number;
-  rolling_sharpe: number;
-  max_dd_pct: number;
   killed?: boolean;
   mode?: string;
 };
@@ -129,16 +127,10 @@ export default function CryptoHome() {
   const liveBtc = snap?.perp_marks?.["BTCUSD"];
   const liveEth = snap?.perp_marks?.["ETHUSD"];
 
-  // Signal severity for "regime indicator": max |pred| across all current signals
+  // Max signal strength across current expiries — used for the strip stat
   const maxAbsPred = signals.length
     ? Math.max(...signals.map(s => Math.abs(s.pred_pct)))
     : 0;
-  const regime = maxAbsPred >= GATE_PCT ? "firing"
-              :  maxAbsPred >= 0.4      ? "warming"
-              :  maxAbsPred >= 0.2      ? "active" : "calm";
-  const regimeColor = regime === "firing"  ? "#f7931a"
-                    : regime === "warming" ? "#fbbf24"
-                    : regime === "active"  ? "#3b82f6" : "#475569";
 
   return (
     <div className="min-h-screen bg-[#0a0a14] text-gray-200">
@@ -261,23 +253,24 @@ export default function CryptoHome() {
         )}
 
         {/* Portfolio ribbon */}
-        <div className="grid grid-cols-2 md:grid-cols-6 gap-3 mb-6">
-          <StatCard label="Equity" value={portfolio ? `$${portfolio.equity.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : "—"} />
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+          <StatCard
+            label="Delta Wallet"
+            value={portfolio?.wallet_usd != null
+              ? `$${portfolio.wallet_usd.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+              : portfolio?.mode === "paper" ? "paper" : "—"}
+            accent={portfolio?.wallet_usd != null && portfolio.wallet_usd < 100 ? "red" : undefined}
+          />
           <StatCard label="Today P&L" value={portfolio ? `${portfolio.day_pnl >= 0 ? "+" : ""}$${portfolio.day_pnl.toFixed(0)}` : "—"}
                     accent={portfolio && portfolio.day_pnl > 0 ? "green" : portfolio && portfolio.day_pnl < 0 ? "red" : undefined} />
           <StatCard label="Open positions" value={portfolio ? `${portfolio.open_positions}` : "—"} />
           <StatCard label="Mode" value={portfolio?.mode ?? "—"} accent={portfolio?.mode === "live" ? "green" : undefined} />
-          <StatCard label="Regime" value={regime} customColor={regimeColor} />
           <StatCard label="Max |pred|" value={`${maxAbsPred.toFixed(3)}%`} />
         </div>
 
-        {/* Chart with signal overlay */}
+        {/* Live BTC/ETH chart — Signal Radar below covers the pred% per expiry */}
         <div className="mb-6">
-          <CryptoChart
-            livePrice={liveBtc ?? liveEth}
-            liveSignals={signals}
-            gatePct={GATE_PCT}
-          />
+          <CryptoChart livePrice={liveBtc ?? liveEth} />
         </div>
 
         {/* Signal Radar */}
