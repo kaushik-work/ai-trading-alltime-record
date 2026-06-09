@@ -316,7 +316,7 @@ export default function CryptoHome() {
 
         {/* Live BTC/ETH chart — Signal Radar below covers the pred% per expiry */}
         <div className="mb-6">
-          <CryptoChart livePrice={liveBtc ?? liveEth} />
+          <CryptoChart livePrices={{ BTC: liveBtc, ETH: liveEth }} />
         </div>
 
         {/* Signal Radar */}

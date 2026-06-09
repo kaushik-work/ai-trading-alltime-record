@@ -28,7 +28,12 @@ type ChartData = {
   error?: string;
 };
 
-type Props = { livePrice?: number };
+type Props = {
+  // Asset → live mark mapping. The chart picks the correct one based on
+  // its internal asset toggle, so the LIVE line and candle extension never
+  // get the WRONG asset's price.
+  livePrices?: { BTC?: number | null; ETH?: number | null };
+};
 
 const RESOLUTION = "5m";
 const LOOKBACK_HOURS = 24;
@@ -47,7 +52,7 @@ const POSITION_LABELS: Record<string, { label: string; color: string }> = {
   open_air:      { label: "Open air — between zones", color: "#94a3b8" },
 };
 
-export default function CryptoChart({ livePrice }: Props) {
+export default function CryptoChart({ livePrices }: Props) {
   const [asset, setAsset] = useState<"BTC" | "ETH">("BTC");
   const containerRef   = useRef<HTMLDivElement>(null);
   const chartRef       = useRef<any>(null);
@@ -56,6 +61,11 @@ export default function CryptoChart({ livePrice }: Props) {
   const [data, setData] = useState<ChartData | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
+
+  // Pick the live price for the asset currently shown — this is the bug that
+  // caused the ETH chart to render with BTC's $63k LIVE line crushing the
+  // ETH candles to invisibility.
+  const livePrice = livePrices?.[asset] ?? undefined;
 
   // Fetch on asset change + every 30s
   useEffect(() => {

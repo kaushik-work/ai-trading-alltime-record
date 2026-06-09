@@ -251,12 +251,13 @@ class DeltaCryptoBroker:
         return []
 
     def get_balance(self) -> Optional[float]:
-        """Free USD balance in trading account, cached 15s.
+        """Free USD-equivalent balance in trading account, cached 15s.
 
-        Returns Delta's `available_balance` field (balance minus margin
-        already locked in open positions) when present, falling back to
-        `balance`. Returns None in paper mode so the runner knows to use
-        its env-configured equity unchanged.
+        Delta India settles in USDT / USDC / USD depending on the account
+        type — sums whichever stablecoin balance exists (they're all
+        roughly $1). Prefers `available_balance` (already net of margin
+        locked in open positions) and falls back to `balance`. Returns
+        None in paper mode so the runner uses its env-configured equity.
         """
         if self.mode == "paper":
             return None
@@ -265,21 +266,22 @@ class DeltaCryptoBroker:
             return cached["value"]
         try:
             data = self._request("GET", "/v2/wallet/balances", authed=True)
+            total = 0.0
+            found = False
             for row in data.get("result", []):
-                if row.get("asset_symbol") != "USD":
+                asset = (row.get("asset_symbol") or "").upper()
+                if asset not in ("USD", "USDT", "USDC"):
                     continue
-                # Prefer available_balance (already net of locked margin);
-                # otherwise fall back to balance (which may overstate what
-                # we can actually spend on a new entry).
                 raw = row.get("available_balance")
                 if raw is None or raw == "":
                     raw = row.get("balance", 0)
-                try:
-                    val = float(raw)
-                except (TypeError, ValueError):
-                    continue
-                self._bal_cache = {"value": val, "ts": time.time()}
-                return val
+                try: val = float(raw)
+                except (TypeError, ValueError): continue
+                total += val
+                found = True
+            if found:
+                self._bal_cache = {"value": total, "ts": time.time()}
+                return total
         except Exception as e:
             logger.error("get_balance: %s", e)
         return None
