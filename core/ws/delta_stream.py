@@ -27,6 +27,9 @@ import threading
 import time
 from typing import Optional
 
+from datetime import datetime, timezone
+import re
+
 import requests
 import websocket
 
@@ -38,10 +41,22 @@ DELTA_REST   = os.environ.get("DELTA_BASE_URL", "https://api.india.delta.exchang
 UNDERLYINGS  = ("BTC", "ETH")
 PERP_SYMBOLS = ("BTCUSD", "ETHUSD")
 
-REDISCOVER_SECONDS    = 4 * 3600   # refresh option symbol list every 4h
+REDISCOVER_SECONDS    = 3600       # refresh option symbol list every 1h (was 4h)
 STALE_SECONDS         = 60         # mark considered stale after 60s no update
 RECONNECT_BACKOFF_MAX = 60         # cap reconnect delay at 60s
 SUBSCRIBE_CHUNK_SIZE  = 200        # symbols per subscribe message
+
+# Subscription filter: only subscribe to near-money strikes so the WS
+# message rate stays tractable on a 1 vCPU box. Strategy uses ±5% strikes
+# for signal compute; we subscribe to ±7 strikes around spot plus the ATM
+# strike, both Call and Put sides — that's ~15 strikes per expiry,
+# typically wider than ±5% in dollar terms so the strategy always has
+# enough corroborating data even after spot drift between rediscoveries.
+SUB_STRIKES_BELOW   = 7   # ITM-for-call / OTM-for-put count
+SUB_STRIKES_ABOVE   = 7   # OTM-for-call / ITM-for-put count
+SUB_MAX_TTE_HOURS   = 96  # only subscribe to expiries within 4 days
+
+_SYMBOL_RE = re.compile(r"^([CP])-([A-Z]+)-(\d+)-(\d{6})$")
 
 
 class DeltaStream:
@@ -72,15 +87,73 @@ class DeltaStream:
         return cls._instance
 
     # ── symbol discovery ─────────────────────────────────────────────────────
+    def _fetch_spots(self) -> dict[str, float]:
+        """One REST call returning current perp spot for both underlyings."""
+        out: dict[str, float] = {}
+        try:
+            r = requests.get(
+                f"{DELTA_REST}/v2/tickers",
+                params={"contract_types": "perpetual_futures"},
+                timeout=10,
+            )
+            r.raise_for_status()
+            for t in r.json().get("result", []):
+                sym = t.get("symbol", "")
+                for u in UNDERLYINGS:
+                    if sym == f"{u}USD":
+                        try: out[u] = float(t["mark_price"])
+                        except (KeyError, TypeError, ValueError): pass
+        except Exception as e:
+            logger.warning("delta-stream: fetch_spots failed: %s", e)
+        return out
+
+    def _filter_near_money(
+        self, all_symbols: list[str], underlying: str, spot: float,
+    ) -> list[str]:
+        """Pick ~15 strikes per expiry: 7 below spot + 7 above + ATM, both
+        Call and Put. Skips expiries beyond SUB_MAX_TTE_HOURS."""
+        now = datetime.now(timezone.utc)
+        # by_expiry[expiry] = {"C": {strike: sym}, "P": {strike: sym}}
+        by_expiry: dict[datetime, dict[str, dict[int, str]]] = {}
+        for sym in all_symbols:
+            m = _SYMBOL_RE.match(sym)
+            if not m: continue
+            side, asset, strike_s, ddmmyy = m.group(1), m.group(2), m.group(3), m.group(4)
+            if asset != underlying: continue
+            try:
+                strike = int(strike_s)
+                dd, mm, yy = int(ddmmyy[:2]), int(ddmmyy[2:4]), int(ddmmyy[4:6])
+                expiry = datetime(2000 + yy, mm, dd, 12, 0, tzinfo=timezone.utc)
+            except Exception:
+                continue
+            tte_h = (expiry - now).total_seconds() / 3600
+            if not (0 < tte_h <= SUB_MAX_TTE_HOURS): continue
+            by_expiry.setdefault(expiry, {"C": {}, "P": {}})[side][strike] = sym
+
+        selected: list[str] = []
+        for expiry, sides in by_expiry.items():
+            strikes = sorted(set(sides["C"]) | set(sides["P"]))
+            if not strikes: continue
+            below = [k for k in strikes if k < spot][-SUB_STRIKES_BELOW:]
+            above = [k for k in strikes if k > spot][:SUB_STRIKES_ABOVE]
+            atm   = min(strikes, key=lambda k: abs(k - spot))
+            keep  = set(below) | set(above) | {atm}
+            for k in keep:
+                for side in ("C", "P"):
+                    if k in sides[side]:
+                        selected.append(sides[side][k])
+        return selected
+
     def _discover_symbols(self) -> list[str]:
-        """Fetch the option-symbol list per underlying. Retries each underlying
-        up to 3x with exponential backoff so a transient SSL hiccup on one
-        asset doesn't strand it without options for the full REDISCOVER
-        window. If any underlying fails ALL retries we leave the timestamp
-        un-bumped so the run_loop will re-attempt on the next iteration."""
+        """Fetch option symbols per underlying, filter to near-money strikes,
+        and return the subscription set. Retries each underlying up to 3x
+        with exponential backoff. If any underlying fails ALL retries the
+        refresh timestamp stays un-bumped so the run_loop will re-attempt."""
         out: list[str] = list(PERP_SYMBOLS)
         all_ok = True
+        spots = self._fetch_spots()
         for underlying in UNDERLYINGS:
+            spot = spots.get(underlying)
             ok = False
             for attempt in range(3):
                 try:
@@ -91,12 +164,22 @@ class DeltaStream:
                         timeout=10,
                     )
                     r.raise_for_status()
-                    syms = [t["symbol"] for t in r.json().get("result", [])
-                            if t.get("symbol")]
+                    all_syms = [t["symbol"] for t in r.json().get("result", [])
+                                if t.get("symbol")]
+                    # Filter to near-money if we have a fresh spot; otherwise
+                    # subscribe to everything (safer than missing strikes).
+                    if spot is not None and spot > 0:
+                        syms = self._filter_near_money(all_syms, underlying, spot)
+                        logger.info("delta-stream: %s spot=%.0f, selected "
+                                    "%d/%d near-money option symbols",
+                                    underlying, spot, len(syms), len(all_syms))
+                    else:
+                        syms = all_syms
+                        logger.warning("delta-stream: %s spot unavailable, "
+                                       "subscribing to all %d symbols (degraded)",
+                                       underlying, len(syms))
                     self._option_symbols[underlying] = syms
                     out.extend(syms)
-                    logger.info("delta-stream: discovered %d %s option symbols",
-                                len(syms), underlying)
                     ok = True
                     break
                 except Exception as e:
@@ -111,9 +194,6 @@ class DeltaStream:
                                      "after 3 attempts: %s", underlying, e)
             if not ok:
                 all_ok = False
-        # Only bump the refresh timestamp when EVERY underlying succeeded.
-        # On partial failure, the next run_loop iteration will re-discover
-        # so we don't stay degraded for the full REDISCOVER_SECONDS window.
         if all_ok:
             self._symbols_last_refresh = time.time()
         return out
