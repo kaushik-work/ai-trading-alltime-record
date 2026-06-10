@@ -23,7 +23,7 @@ export default function Header(_props: Props) {
   return (
     <header className="w-full bg-white border-b border-gray-200 px-4 md:px-6 py-2 flex items-center justify-between shadow-sm">
       {/* Left — Logo (navigates back to crypto dashboard) */}
-      <div className="flex items-center gap-3 cursor-pointer" onClick={() => router.push("/crypto")}>
+      <div className="flex items-center gap-3 cursor-pointer" onClick={() => router.push("/")}>
         <img src="/tgc-logo-svg.svg" alt="Logo" className="h-10 md:h-16 w-auto" />
       </div>
 

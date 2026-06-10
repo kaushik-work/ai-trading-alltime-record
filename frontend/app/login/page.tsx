@@ -47,7 +47,7 @@ export default function LoginPage() {
       if (!res.ok) { setError("Invalid username or password"); setLoading(false); return; }
       const { access_token } = await res.json();
       localStorage.setItem("aq_token", access_token);
-      router.push("/crypto");
+      router.push("/");
     } catch {
       setError("Could not connect to server");
       setLoading(false);
