@@ -15,8 +15,19 @@ jobs:
           username: root
           key: ${{ secrets.DO_SSH_KEY }}
           script: |
+            set -e
             cd /root/ai-trading-alltime-record
             git pull origin main
+            # Free disk before build. --no-cache builds + frequent pushes
+            # otherwise pile up dangling layers until the 33GB volume runs
+            # out (last failure: 12:13 UTC, 2026-06-10). Safe on a single-
+            # container deploy — only prunes unused images / build cache.
+            df -h /
+            docker system prune -af --volumes
+            df -h /
             docker compose down
-            docker compose build --no-cache
+            # Drop --no-cache: with the new .dockerignore the build context
+            # is small (≈4MB) and layer caching is correct, so cache reuse
+            # cuts deploy time from ~60s to ~10s without staleness risk.
+            docker compose build
             docker compose up -d --force-recreate
