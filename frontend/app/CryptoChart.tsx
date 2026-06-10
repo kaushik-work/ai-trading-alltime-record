@@ -210,18 +210,37 @@ export default function CryptoChart({ livePrices }: Props) {
       });
 
       // ── S/R levels (dashed) ───────────────────────────────────────────────
-      (data.levels || []).forEach((lvl, i) => {
+      // To keep the right axis readable, we cap to the 3 strongest R + 3
+      // strongest S levels and only show axis labels on the NEAREST R + S
+      // to the current live price. The rest are drawn as silent dashed
+      // lines on the chart — visible but not crowding the price scale.
+      const livePxForLabels = livePrice ?? candles[candles.length - 1].close;
+      const allLevels = data.levels || [];
+      const resistances = allLevels.filter(l => l.type === "resistance").slice(0, 3);
+      const supports    = allLevels.filter(l => l.type === "support").slice(0, 3);
+      // nearest above + nearest below live price get axis labels
+      const nearestR = resistances
+        .filter(l => l.price >= livePxForLabels)
+        .sort((a, b) => a.price - b.price)[0];
+      const nearestS = supports
+        .filter(l => l.price <= livePxForLabels)
+        .sort((a, b) => b.price - a.price)[0];
+
+      [...resistances, ...supports].forEach((lvl) => {
         const isR = lvl.type === "resistance";
+        const isNearest = lvl === nearestR || lvl === nearestS;
         candleSeries.createPriceLine({
           price: lvl.price,
           color: isR ? "#ef444466" : "#22c55e66",
           lineWidth: lw1, lineStyle: LineStyle.Dashed,
-          axisLabelVisible: true,
-          title: `${isR ? "R" : "S"}${i + 1}`,
+          axisLabelVisible: isNearest,
+          title: isNearest ? (isR ? "R" : "S") : "",
         });
       });
 
       // ── POC / VAH / VAL (neon blue, volume profile) ───────────────────────
+      // POC gets the axis label (the heaviest-traded price). VAH/VAL are kept
+      // as silent dashed lines — useful visually, redundant on the axis.
       const neon = "#00f5ff";
       if (data.poc) candleSeries.createPriceLine({
         price: data.poc, color: neon, lineWidth: lw1,
@@ -229,26 +248,40 @@ export default function CryptoChart({ livePrices }: Props) {
       });
       if (data.vah) candleSeries.createPriceLine({
         price: data.vah, color: neon, lineWidth: lw1,
-        lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: "VAH",
+        lineStyle: LineStyle.Dashed, axisLabelVisible: false, title: "",
       });
       if (data.val) candleSeries.createPriceLine({
         price: data.val, color: neon, lineWidth: lw1,
-        lineStyle: LineStyle.Dashed, axisLabelVisible: true, title: "VAL",
+        lineStyle: LineStyle.Dashed, axisLabelVisible: false, title: "",
       });
 
       // ── EMAs ──────────────────────────────────────────────────────────────
-      const addEma = (pts: EmaPt[] | undefined, color: string, w: 1 | 2 | 3 | 4, label: string) => {
+      // Last-value axis label only on EMA200 (the trend reference). EMA20 and
+      // EMA50 ride visually as colored lines without crowding the axis. If
+      // any two EMAs are within 0.3% of each other (converged in chop) we
+      // suppress the EMA200 label too — three converged labels stacked on
+      // the same price are pure noise.
+      const emasConverged = (() => {
+        const last = (s?: EmaPt[]) => (s && s.length ? s[s.length - 1].value : null);
+        const a = last(data.ema20), b = last(data.ema50), c = last(data.ema200);
+        if (a == null || b == null || c == null) return false;
+        const spread = Math.max(a, b, c) - Math.min(a, b, c);
+        return spread / Math.max(a, b, c) < 0.003;
+      })();
+      const addEma = (pts: EmaPt[] | undefined, color: string,
+                      w: 1 | 2 | 3 | 4, label: string, showAxisLabel: boolean) => {
         if (!pts?.length) return;
         const s = chart.addLineSeries({
           color, lineWidth: w,
-          priceLineVisible: false, lastValueVisible: true,
-          title: label, crosshairMarkerVisible: false,
+          priceLineVisible: false, lastValueVisible: showAxisLabel,
+          title: showAxisLabel ? label : "",
+          crosshairMarkerVisible: false,
         });
         s.setData(pts.map(p => ({ ...p, time: p.time as any })));
       };
-      addEma(data.ema20,  "#f59e0b", 1, "EMA20");
-      addEma(data.ema50,  "#3b82f6", 1, "EMA50");
-      addEma(data.ema200, "#a855f7", 2, "EMA200");
+      addEma(data.ema20,  "#f59e0b", 1, "EMA20",  false);
+      addEma(data.ema50,  "#3b82f6", 1, "EMA50",  false);
+      addEma(data.ema200, "#a855f7", 2, "EMA200", !emasConverged);
 
       // ── Live price line ───────────────────────────────────────────────────
       livePriceLineRef.current = candleSeries.createPriceLine({
