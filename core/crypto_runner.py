@@ -40,42 +40,21 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from core.brokers.delta_crypto import get_broker as get_crypto_broker
+from core.risk_management import (
+    TICK_INTERVAL_SECONDS, BASE_EQUITY_USD,
+    CAPITAL_USE_PCT, BTC_CAPITAL_PCT, ETH_CAPITAL_PCT, capital_pct_for,
+    DAILY_LOSS_KILL_PCT, MAX_LIVE_CONTRACTS, MAX_HOLD_HOURS,
+    LEVERAGE, CONTRACT_SIZE_BY_ASSET,
+    ENABLE_CRYPTO_RUNNER,
+)
 from strategies.synth_forward import BTCSynthForwardSignal, ETHSynthForwardSignal
 from strategies.crypto_base import CryptoSignalDecision
 
 logger = logging.getLogger(__name__)
 
-# Default 2s — the runner is now WS-fed (core/ws/delta_stream.py), so the
-# tick is cheap and we react to real-time mark changes. The legacy
-# CRYPTO_TICK_MINUTES env var is deliberately ignored: a stale .env on
-# any deploy was silently downgrading the bot to 60-min polling.
-TICK_INTERVAL_SECONDS = max(1, int(os.environ.get("CRYPTO_TICK_SECONDS", "2")))
-BASE_EQUITY_USD       = float(os.environ.get("CRYPTO_EQUITY_USD", "10000"))
-# Per-trade capital allocation as a fraction of the live wallet pool
-# (USD-stable + INR-converted). Tunable per asset; both default to 50%
-# of the pool per cycle. Up to MAX_CONCURRENT (=2) positions can be open
-# simultaneously so worst-case combined deployment = 100% of the pool.
-CAPITAL_USE_PCT       = float(os.environ.get("CRYPTO_CAPITAL_USE_PCT", "0.50"))
-BTC_CAPITAL_PCT       = float(os.environ.get("CRYPTO_BTC_CAPITAL_PCT", "0.50"))
-ETH_CAPITAL_PCT       = float(os.environ.get("CRYPTO_ETH_CAPITAL_PCT", "0.50"))
-
-
-def _capital_pct_for(strategy_name: str) -> float:
-    """Resolve per-strategy capital allocation. Strategy names are e.g.
-    'btc_synth_forward', 'eth_synth_forward' — we match by substring."""
-    n = strategy_name.lower()
-    if "btc" in n: return BTC_CAPITAL_PCT
-    if "eth" in n: return ETH_CAPITAL_PCT
-    return CAPITAL_USE_PCT
-DAILY_LOSS_KILL_PCT   = float(os.environ.get("CRYPTO_DAILY_LOSS_KILL_PCT", "0.05"))
-MAX_LIVE_CONTRACTS    = int(os.environ.get("CRYPTO_MAX_LIVE_CONTRACTS", "200"))
-MAX_HOLD_HOURS        = 72
-# Leverage applied per order. Safe range for this strategy: 5–20×.
-# At 200× liquidation is at 0.5% — less than our stop loss distance.
-LEVERAGE              = int(os.environ.get("CRYPTO_LEVERAGE", "10"))
-
-# Delta India BTCUSD/ETHUSD perp contract size = 0.001 underlying
-CONTRACT_SIZE_BY_ASSET = {"BTCUSD": 0.001, "ETHUSD": 0.001, "XAUTUSD": 0.001}
+# Backwards-compat alias — old code calls _capital_pct_for(name); risk_mgmt
+# exports the public name `capital_pct_for`.
+_capital_pct_for = capital_pct_for
 
 # In-memory runtime state
 _STRATEGY_INSTANCES: dict[str, object] = {}
@@ -442,7 +421,7 @@ def init_crypto_runner(scheduler) -> None:
 
 
 def _is_enabled() -> bool:
-    return os.environ.get("ENABLE_CRYPTO_RUNNER") == "1"
+    return ENABLE_CRYPTO_RUNNER
 
 
 def get_state() -> dict:

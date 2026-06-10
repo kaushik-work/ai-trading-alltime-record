@@ -55,7 +55,11 @@ class DeltaCryptoBroker:
         self.base_url   = base_url or os.environ.get(
             "DELTA_BASE_URL", "https://api.india.delta.exchange"
         )
-        self.mode = mode or os.environ.get("CRYPTO_TRADING_MODE", "paper")
+        if mode:
+            self.mode = mode
+        else:
+            from core.risk_management import CRYPTO_TRADING_MODE
+            self.mode = CRYPTO_TRADING_MODE
         self._chain_cache: dict[str, dict] = {}
         self._perp_cache: dict[str, dict] = {}
         self._pos_cache: dict[str, dict] = {"data": None, "ts": 0.0}

@@ -42,7 +42,8 @@ async def lifespan(app: FastAPI):
     runner.start()
     # Delta WS stream feeds the crypto runner with real-time perp + option
     # marks. Must start BEFORE the runner so the first tick has fresh data.
-    if os.environ.get("ENABLE_CRYPTO_RUNNER") == "1":
+    from core.risk_management import ENABLE_CRYPTO_RUNNER
+    if ENABLE_CRYPTO_RUNNER:
         start_stream()
     init_crypto_runner(runner.scheduler)
     yield
