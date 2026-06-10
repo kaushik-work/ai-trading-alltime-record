@@ -127,11 +127,14 @@ def _build_crypto_snapshot() -> dict:
     portfolio = _portfolio_snapshot()
     futures_stats = _futures_stats_for_dashboard()
     shadow_trades: list = []
+    shadow_summary: dict = {}
     try:
         from core.crypto_runner import get_state
-        shadow_trades = list(get_state().get("shadow_trades", []))
+        rs = get_state()
+        shadow_trades = list(rs.get("shadow_trades", []))
+        shadow_summary = dict(rs.get("shadow_summary", {}))
     except Exception:
-        shadow_trades = []
+        pass
     try:
         from core.ws.delta_stream import get_stream
         stream = get_stream().diagnostics()
@@ -143,8 +146,9 @@ def _build_crypto_snapshot() -> dict:
         "signals":       signals,
         "portfolio":     portfolio,
         "futures_stats": futures_stats,
-        "shadow_trades": shadow_trades,
-        "stream":        stream,
+        "shadow_trades":  shadow_trades,
+        "shadow_summary": shadow_summary,
+        "stream":         stream,
     }
 
 

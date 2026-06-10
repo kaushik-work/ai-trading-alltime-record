@@ -51,10 +51,6 @@ logger = logging.getLogger(__name__)
 # any deploy was silently downgrading the bot to 60-min polling.
 TICK_INTERVAL_SECONDS = max(1, int(os.environ.get("CRYPTO_TICK_SECONDS", "2")))
 BASE_EQUITY_USD       = float(os.environ.get("CRYPTO_EQUITY_USD", "10000"))
-# Minimum free wallet balance for live entries. Below this we skip the
-# trade rather than place an order that Delta will reject for insufficient
-# margin. Default $100 ≈ 1 BTC contract at 5x leverage on a $63k underlying.
-MIN_WALLET_USD        = float(os.environ.get("CRYPTO_MIN_WALLET_USD", "100"))
 # Safety buffer applied to live wallet balance for sizing — leaves room
 # for fees, slippage, and partial margin requirements.
 WALLET_SAFETY_BUFFER  = float(os.environ.get("CRYPTO_WALLET_BUFFER", "0.95"))
@@ -74,12 +70,15 @@ _OPEN_POSITIONS: dict[str, dict] = {}
 _DAY_PNL_USD: float = 0.0
 _DAY_PNL_RESET_DATE: Optional[str] = None
 _KILLED: bool = False
-# Shadow trades: signals that crossed the gate + persistence but were blocked
-# from going live (typically by insufficient wallet). Kept in memory so the
-# dashboard can show "the bot WOULD have entered here" — proof of life when
-# the account is unfunded.
+# Shadow trades: gate-crossed signals that were blocked from going live by
+# an empty wallet. We track the FULL lifecycle (open → stop/TP/trail/max-hold
+# → closed) so the dashboard can show what the bot WOULD have earned.
+# Each entry mutates in place: peak_pct / status / exit_* fields get set as
+# the position progresses. _SHADOW_POSITIONS holds same-references to the
+# open ones for fast tick-time updates.
 _SHADOW_TRADES: list[dict] = []
-_MAX_SHADOW_TRADES = 20
+_SHADOW_POSITIONS: dict[str, dict] = {}
+_MAX_SHADOW_TRADES = 50
 
 
 # ── strategies ────────────────────────────────────────────────────────────────
@@ -229,12 +228,53 @@ def _manage_open_position(strategy_name: str, broker, pos: dict) -> bool:
     return True
 
 
+def _manage_shadow_positions(broker) -> None:
+    """Apply v5 exit logic (stop/trail/max-hold) to each open shadow trade.
+    Same thresholds as real positions; partial_tp is collapsed into a single
+    final exit so the dashboard sees a clean 'closed at X% reason Y' row."""
+    from datetime import datetime as _dt
+    for sid, pos in list(_SHADOW_POSITIONS.items()):
+        try:
+            mark = broker.get_perp_mark(pos["symbol"])
+            if mark is None or mark <= 0: continue
+            sign = 1 if pos["side"] == "buy" else -1
+            entry_px = float(pos["entry_px"])
+            unreal_pct = sign * (mark - entry_px) / entry_px
+            pos["peak_pct"] = max(pos.get("peak_pct", 0.0), unreal_pct)
+            entry_dt = _dt.fromisoformat(pos["entry_ts"].replace("Z", "+00:00"))
+            held_h = (_dt.now(timezone.utc) - entry_dt).total_seconds() / 3600
+            exit_reason = None
+            if held_h >= MAX_HOLD_HOURS:
+                exit_reason = "max_hold"
+            elif unreal_pct < -pos["stop_loss_pct"]:
+                exit_reason = "stop_loss"
+            elif pos["peak_pct"] >= pos["trail_peak_pct"] and \
+                 (pos["peak_pct"] - unreal_pct) > pos["trail_giveback"]:
+                exit_reason = "trail"
+            if exit_reason:
+                pos["status"]      = "closed"
+                pos["exit_ts"]     = _dt.now(timezone.utc).isoformat()
+                pos["exit_px"]     = mark
+                pos["pnl_pct"]     = float(unreal_pct * 100)
+                pos["held_hours"]  = float(held_h)
+                pos["exit_reason"] = exit_reason
+                _SHADOW_POSITIONS.pop(sid, None)
+                logger.info("shadow %s %s closed at %s reason=%s pnl=%+0.2f%%",
+                            pos["strategy"], pos["symbol"], mark, exit_reason,
+                            pos["pnl_pct"])
+        except Exception as e:
+            logger.error("shadow manage error: %s", e)
+
+
 # ── main tick ─────────────────────────────────────────────────────────────────
 def tick_crypto_strategies() -> None:
     """Single tick — runs entry logic + position manager."""
     strategies = _get_strategies()
     broker = get_crypto_broker()
     _reset_day_pnl_if_needed()
+
+    # Manage shadow positions every tick (cheap — just reads marks)
+    _manage_shadow_positions(broker)
 
     # First: manage all open positions
     to_remove = []
@@ -271,18 +311,20 @@ def tick_crypto_strategies() -> None:
 
         # Cap effective equity at real wallet balance (live mode only). Paper
         # mode keeps BASE_EQUITY_USD so backtest-style sizing works without a
-        # funded account. In live mode we read the cached wallet and either
-        # skip (under the floor) or size to whichever is smaller.
+        # funded account. With any non-zero USDT balance we attempt the order
+        # at wallet-scaled size and let Delta accept/reject -- the user wants
+        # visibility that the bot IS trying to trade, even on tiny accounts.
+        # Only when balance is truly zero / unreadable do we shadow-log instead.
         effective_equity = BASE_EQUITY_USD
         wallet_blocked = False
         if broker.mode == "live":
             balance = broker.get_balance()
-            if balance is None or balance < MIN_WALLET_USD:
+            if balance is None or balance <= 0:
                 wallet_blocked = True
                 shown = f"${balance:.2f}" if balance is not None else "unavailable"
-                logger.warning("%s: wallet %s < min $%.0f — recording shadow "
-                               "trade only (fund Delta to go live)",
-                               name, shown, MIN_WALLET_USD)
+                logger.warning("%s: wallet %s — recording shadow trade only "
+                               "(fund Delta with USDT to enable live orders)",
+                               name, shown)
             else:
                 wallet_cap = balance * WALLET_SAFETY_BUFFER
                 if wallet_cap < BASE_EQUITY_USD:
@@ -291,21 +333,34 @@ def tick_crypto_strategies() -> None:
                                 name, balance, wallet_cap, BASE_EQUITY_USD)
                     effective_equity = wallet_cap
 
-        # Record the would-have-fired decision regardless of wallet state so
-        # the dashboard shows the strategy is alive and detecting setups.
-        shadow_event = {
-            "ts":         datetime.now(timezone.utc).isoformat(),
-            "strategy":   name,
-            "symbol":     decision.symbol,
-            "side":       decision.side,
-            "pred_pct":   decision.pred_pct,
-            "size_mult":  decision.size_mult,
-            "mark":       mark,
-            "blocked_by": "wallet_low" if wallet_blocked else None,
-        }
         if wallet_blocked:
-            _SHADOW_TRADES.append(shadow_event)
+            import uuid
+            shadow_id = uuid.uuid4().hex[:8]
+            shadow = {
+                "id":           shadow_id,
+                "entry_ts":     datetime.now(timezone.utc).isoformat(),
+                "strategy":     name,
+                "symbol":       decision.symbol,
+                "side":         decision.side,
+                "entry_px":     mark,
+                "pred_pct":     decision.pred_pct,
+                "size_mult":    decision.size_mult,
+                "status":       "open",
+                "peak_pct":     0.0,
+                "stop_loss_pct":   decision.stop_loss_pct,
+                "trail_peak_pct":  decision.trail_peak_pct,
+                "trail_giveback":  decision.trail_giveback,
+            }
+            _SHADOW_TRADES.append(shadow)
+            _SHADOW_POSITIONS[shadow_id] = shadow
             del _SHADOW_TRADES[:-_MAX_SHADOW_TRADES]
+            # Drop any open positions that fell out of the ring buffer
+            _SHADOW_POSITIONS.update({
+                t["id"]: t for t in _SHADOW_TRADES if t.get("status") == "open"
+            })
+            for k in list(_SHADOW_POSITIONS):
+                if not any(t["id"] == k for t in _SHADOW_TRADES):
+                    _SHADOW_POSITIONS.pop(k, None)
             continue
 
         notional = effective_equity * decision.size_mult
@@ -390,7 +445,29 @@ def get_state() -> dict:
                 "tp_taken": pos.get("tp_taken", False),
             } for name, pos in _OPEN_POSITIONS.items()
         },
-        "shadow_trades": list(_SHADOW_TRADES[-_MAX_SHADOW_TRADES:]),
+        "shadow_trades":   list(_SHADOW_TRADES[-_MAX_SHADOW_TRADES:]),
+        "shadow_summary":  _shadow_summary(),
+    }
+
+
+def _shadow_summary() -> dict:
+    """Aggregate stats across the shadow-trade ring buffer."""
+    open_n   = sum(1 for s in _SHADOW_TRADES if s.get("status") == "open")
+    closed   = [s for s in _SHADOW_TRADES if s.get("status") == "closed"]
+    wins     = [s for s in closed if (s.get("pnl_pct") or 0) > 0]
+    losses   = [s for s in closed if (s.get("pnl_pct") or 0) <= 0]
+    total    = sum((s.get("pnl_pct") or 0) for s in closed)
+    avg_win  = (sum(s["pnl_pct"] for s in wins) / len(wins)) if wins else 0.0
+    avg_loss = (sum(s["pnl_pct"] for s in losses) / len(losses)) if losses else 0.0
+    return {
+        "open":        open_n,
+        "closed":      len(closed),
+        "wins":        len(wins),
+        "losses":      len(losses),
+        "win_rate":    (len(wins) / len(closed) * 100) if closed else 0.0,
+        "total_pct":   float(total),
+        "avg_win_pct":  float(avg_win),
+        "avg_loss_pct": float(avg_loss),
     }
 
 

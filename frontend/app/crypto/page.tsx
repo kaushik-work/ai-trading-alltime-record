@@ -52,14 +52,32 @@ type FuturesStat = {
 };
 
 type ShadowTrade = {
-  ts: string;
+  id: string;
+  entry_ts: string;
   strategy: string;
   symbol: string;
   side: string;
+  entry_px: number;
   pred_pct: number;
   size_mult: number;
-  mark: number;
-  blocked_by?: string | null;
+  status: "open" | "closed";
+  peak_pct: number;
+  exit_ts?: string;
+  exit_px?: number;
+  pnl_pct?: number;
+  held_hours?: number;
+  exit_reason?: string;
+};
+
+type ShadowSummary = {
+  open: number;
+  closed: number;
+  wins: number;
+  losses: number;
+  win_rate: number;
+  total_pct: number;
+  avg_win_pct: number;
+  avg_loss_pct: number;
 };
 
 type Snapshot = {
@@ -67,6 +85,7 @@ type Snapshot = {
   perp_marks: Record<string, number>;
   futures_stats?: Record<string, FuturesStat>;
   shadow_trades?: ShadowTrade[];
+  shadow_summary?: ShadowSummary;
   signals: SignalRow[];
   portfolio: PortfolioState;
   stream: StreamDiag;
@@ -152,6 +171,7 @@ export default function CryptoHome() {
   const btcFutures = snap?.futures_stats?.["BTCUSD"];
   const ethFutures = snap?.futures_stats?.["ETHUSD"];
   const shadowTrades = snap?.shadow_trades ?? [];
+  const shadowSummary = snap?.shadow_summary;
   const lastShadow = shadowTrades.length ? shadowTrades[shadowTrades.length - 1] : null;
 
   // Max signal strength across current expiries — used for the strip stat
@@ -320,29 +340,69 @@ export default function CryptoHome() {
           <StatCard label="Max |pred|" value={`${maxAbsPred.toFixed(3)}%`} />
         </div>
 
-        {/* Shadow-trade banner — proves the bot is actively detecting setups
-            even when the wallet is empty and orders can't actually fire. */}
-        {lastShadow && (
-          <div className="border border-yellow-700/50 bg-yellow-950/20 rounded-lg p-3 mb-6">
-            <div className="flex items-baseline justify-between">
-              <div className="flex items-baseline gap-3">
-                <span className="text-yellow-400 text-sm font-semibold">
-                  ⚡ Bot detected {shadowTrades.length} would-be trade
-                  {shadowTrades.length > 1 ? "s" : ""} — blocked by empty wallet
-                </span>
-                <span className="text-xs text-gray-400 font-mono">
-                  latest: {lastShadow.symbol} {lastShadow.side.toUpperCase()} @
-                  ${lastShadow.mark.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                  · pred {lastShadow.pred_pct >= 0 ? "+" : ""}{lastShadow.pred_pct.toFixed(3)}%
-                  · size {lastShadow.size_mult.toFixed(1)}×
-                </span>
-              </div>
+        {/* Shadow-trade panel — full paper-trading lifecycle.  Tracks each
+            would-be entry through stop/TP/trail/max-hold the same way real
+            trades are managed, so the user sees what the bot WOULD have made. */}
+        {(lastShadow || (shadowSummary && shadowSummary.closed > 0)) && (
+          <div className="border border-yellow-700/40 bg-yellow-950/15 rounded-lg p-4 mb-6">
+            <div className="flex items-baseline justify-between mb-2">
+              <span className="text-yellow-400 text-sm font-semibold">
+                ⚡ Shadow Trading — paper P&L while wallet is empty
+              </span>
               <span className="text-[10px] text-gray-500">
-                {new Date(lastShadow.ts).toLocaleTimeString()}
+                latest signal {lastShadow && new Date(lastShadow.entry_ts).toLocaleTimeString()}
               </span>
             </div>
-            <p className="text-[11px] text-gray-500 mt-1">
-              Fund Delta wallet with USDT to convert these signals into live orders.
+            {shadowSummary && (
+              <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-2 text-xs">
+                <div>
+                  <p className="text-gray-500">Open</p>
+                  <p className="font-semibold text-white">{shadowSummary.open}</p>
+                </div>
+                <div>
+                  <p className="text-gray-500">Closed</p>
+                  <p className="font-semibold text-white">
+                    {shadowSummary.closed} ({shadowSummary.wins}W / {shadowSummary.losses}L)
+                  </p>
+                </div>
+                <div>
+                  <p className="text-gray-500">Win rate</p>
+                  <p className="font-semibold text-white">
+                    {shadowSummary.win_rate.toFixed(0)}%
+                  </p>
+                </div>
+                <div>
+                  <p className="text-gray-500">Avg trade</p>
+                  <p className="font-semibold font-mono text-xs">
+                    <span className="text-green-400">+{shadowSummary.avg_win_pct.toFixed(2)}%</span>
+                    <span className="text-gray-600 mx-1">/</span>
+                    <span className="text-red-400">{shadowSummary.avg_loss_pct.toFixed(2)}%</span>
+                  </p>
+                </div>
+                <div>
+                  <p className="text-gray-500">Cumulative P&L</p>
+                  <p className={`font-semibold font-mono ${
+                    shadowSummary.total_pct > 0 ? "text-green-400"
+                    : shadowSummary.total_pct < 0 ? "text-red-400" : "text-white"
+                  }`}>
+                    {shadowSummary.total_pct >= 0 ? "+" : ""}{shadowSummary.total_pct.toFixed(2)}%
+                  </p>
+                </div>
+              </div>
+            )}
+            {lastShadow && (
+              <p className="text-[11px] text-gray-400 font-mono">
+                latest: {lastShadow.symbol} {lastShadow.side.toUpperCase()}
+                {" @ "}${lastShadow.entry_px.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                {" · pred "}{lastShadow.pred_pct >= 0 ? "+" : ""}{lastShadow.pred_pct.toFixed(3)}%
+                {" · size "}{lastShadow.size_mult.toFixed(1)}×
+                {lastShadow.status === "closed"
+                  ? ` → closed ${lastShadow.exit_reason} ${(lastShadow.pnl_pct ?? 0) >= 0 ? "+" : ""}${(lastShadow.pnl_pct ?? 0).toFixed(2)}%`
+                  : " (open)"}
+              </p>
+            )}
+            <p className="text-[10px] text-gray-600 mt-1">
+              Fund Delta wallet with USDT to convert these into live orders. Same v5 exit logic applied: 1.5% stop / trail 0.25%.
             </p>
           </div>
         )}
