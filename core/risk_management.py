@@ -73,6 +73,19 @@ DAILY_LOSS_KILL_PCT: float = _env_float("CRYPTO_DAILY_LOSS_KILL_PCT", 0.05)
 MAX_LIVE_CONTRACTS: int = _env_int("CRYPTO_MAX_LIVE_CONTRACTS", 50)
 
 
+# ── Exit regime ──────────────────────────────────────────────────────────────
+# "pure_sltp"      — bracket order: full exit on stop OR target. No trail, no
+#                    partial TP. Validated on the 9-day Jun 2-10 backtest:
+#                      pure_sltp:    38 trades, 92.1% WR, +₹14,407
+#                      trail_partial: 42 trades, 90.5% WR, +₹13,443
+#                    Pure SL/TP wins by ₹964 over the sample and is simpler
+#                    to reason about (no peak-tracking, no half-position state).
+# "trail_partial"  — original v5.5: partial TP at +1% closes half, trail arms
+#                    at peak ≥0.5% and exits the rest on 0.25% giveback.
+#                    Lower drawdown per trade but caps winners earlier.
+EXIT_REGIME: str = os.environ.get("CRYPTO_EXIT_REGIME", "pure_sltp")
+
+
 # ── Position management (v5.5 — see strategies/synth_forward.py) ─────────────
 MAX_HOLD_HOURS: int = 72
 

@@ -45,7 +45,7 @@ from core.risk_management import (
     CAPITAL_USE_PCT, BTC_CAPITAL_PCT, ETH_CAPITAL_PCT, capital_pct_for,
     DAILY_LOSS_KILL_PCT, MAX_LIVE_CONTRACTS, MAX_HOLD_HOURS,
     LEVERAGE, CONTRACT_SIZE_BY_ASSET,
-    ENABLE_CRYPTO_RUNNER,
+    ENABLE_CRYPTO_RUNNER, EXIT_REGIME,
 )
 from strategies.synth_forward import BTCSynthForwardSignal, ETHSynthForwardSignal
 from strategies.crypto_base import CryptoSignalDecision
@@ -146,9 +146,16 @@ def _write_trade_event(event: dict) -> None:
         logger.warning("crypto_trades write failed: %s", e)
 
 
-# ── position management — the missing piece from before ───────────────────────
+# ── position management — forks on EXIT_REGIME ────────────────────────────────
 def _manage_open_position(strategy_name: str, broker, pos: dict) -> bool:
-    """Returns True if position was closed and should be removed."""
+    """Returns True if position was closed and should be removed.
+
+    Two exit regimes, set via core.risk_management.EXIT_REGIME:
+      - "pure_sltp"     : full exit on stop or target. dec.partial_tp_pct
+                          is reinterpreted as the target threshold.
+      - "trail_partial" : v5.5 baseline (partial TP at +1%, trail arms at
+                          peak ≥0.5%, exits on 0.25% giveback).
+    """
     global _DAY_PNL_USD
     symbol = pos["symbol"]
     side = pos["side"]                       # "buy" or "sell"
@@ -160,46 +167,55 @@ def _manage_open_position(strategy_name: str, broker, pos: dict) -> bool:
     if current_mark is None: return False
 
     unrealized_pct = sign * (current_mark - entry_px) / entry_px
-    pos["peak_pct"] = max(pos.get("peak_pct", 0.0), unrealized_pct)
     dec = pos["decision"]
 
-    # ── partial TP at +1% (close half once) ──
-    if (not pos.get("tp_taken")) and unrealized_pct >= dec.partial_tp_pct:
-        half = max(1, pos["contracts"] // 2)
-        order = broker.place_order(symbol, "sell" if side == "buy" else "buy",
-                                   size=half, order_type="market_order",
-                                   reduce_only=True, tag=f"{strategy_name}_partial_tp")
-        if order.get("ok"):
-            pnl = sign * half * CONTRACT_SIZE_BY_ASSET.get(symbol, 0.001) * \
-                  (order.get("fill_price", current_mark) - entry_px)
-            _DAY_PNL_USD += pnl
-            pos["contracts"] -= half
-            pos["tp_taken"] = True
-            _write_trade_event({
-                "ts": datetime.now(timezone.utc), "venue": "delta_india",
-                "mode": broker.mode, "strategy": strategy_name,
-                "symbol": symbol, "side": side,
-                "event": "partial_tp", "exit_price": order.get("fill_price"),
-                "contracts_closed": half, "pnl_usd": pnl,
-                "unrealized_pct": unrealized_pct,
-            })
-            logger.info("%s partial_tp at %s, pnl=%.2f", strategy_name,
-                         order.get("fill_price"), pnl)
-        # don't return; remaining half continues
+    if EXIT_REGIME == "pure_sltp":
+        # ── PURE BRACKET — full exit on stop or target ──
+        exit_reason = None
+        if held_h >= MAX_HOLD_HOURS:
+            exit_reason = "max_hold"
+        elif unrealized_pct >= dec.partial_tp_pct:   # +1% target → full exit
+            exit_reason = "target"
+        elif unrealized_pct <= -dec.stop_loss_pct:   # -1.5% stop → full exit
+            exit_reason = "stop_loss"
+        if exit_reason is None: return False
+    else:
+        # ── TRAIL+PARTIAL — original v5.5 ──
+        pos["peak_pct"] = max(pos.get("peak_pct", 0.0), unrealized_pct)
+        # Partial TP at +1% — close half once
+        if (not pos.get("tp_taken")) and unrealized_pct >= dec.partial_tp_pct:
+            half = max(1, pos["contracts"] // 2)
+            order = broker.place_order(symbol, "sell" if side == "buy" else "buy",
+                                       size=half, order_type="market_order",
+                                       reduce_only=True, tag=f"{strategy_name}_partial_tp")
+            if order.get("ok"):
+                pnl = sign * half * CONTRACT_SIZE_BY_ASSET.get(symbol, 0.001) * \
+                      (order.get("fill_price", current_mark) - entry_px)
+                _DAY_PNL_USD += pnl
+                pos["contracts"] -= half
+                pos["tp_taken"] = True
+                _write_trade_event({
+                    "ts": datetime.now(timezone.utc), "venue": "delta_india",
+                    "mode": broker.mode, "strategy": strategy_name,
+                    "symbol": symbol, "side": side,
+                    "event": "partial_tp", "exit_price": order.get("fill_price"),
+                    "contracts_closed": half, "pnl_usd": pnl,
+                    "unrealized_pct": unrealized_pct,
+                })
+                logger.info("%s partial_tp at %s, pnl=%.2f", strategy_name,
+                             order.get("fill_price"), pnl)
+        exit_reason = None
+        if held_h >= MAX_HOLD_HOURS:
+            exit_reason = "max_hold"
+        elif unrealized_pct <= -dec.stop_loss_pct:
+            exit_reason = "stop_loss"
+        elif pos["peak_pct"] >= dec.trail_peak_pct and \
+             (pos["peak_pct"] - unrealized_pct) > dec.trail_giveback:
+            exit_reason = "trail"
+        if exit_reason is None: return False
 
-    # ── full exit conditions ──
-    exit_reason = None
-    if held_h >= MAX_HOLD_HOURS:
-        exit_reason = "max_hold"
-    elif unrealized_pct < -dec.stop_loss_pct:
-        exit_reason = "stop_loss"
-    elif pos["peak_pct"] >= dec.trail_peak_pct and \
-         (pos["peak_pct"] - unrealized_pct) > dec.trail_giveback:
-        exit_reason = "trail"
-    if exit_reason is None: return False
-
-    # close remaining
-    if pos["contracts"] <= 0: return True   # nothing to close
+    # ── execute the full exit (shared by both regimes) ──
+    if pos["contracts"] <= 0: return True
     order = broker.place_order(symbol, "sell" if side == "buy" else "buy",
                                size=pos["contracts"], order_type="market_order",
                                reduce_only=True, tag=f"{strategy_name}_{exit_reason}")
@@ -222,9 +238,11 @@ def _manage_open_position(strategy_name: str, broker, pos: dict) -> bool:
 
 
 def _manage_shadow_positions(broker) -> None:
-    """Apply v5 exit logic (stop/trail/max-hold) to each open shadow trade.
-    Same thresholds as real positions; partial_tp is collapsed into a single
-    final exit so the dashboard sees a clean 'closed at X% reason Y' row."""
+    """Apply the active exit regime to each open shadow trade. Shadow exits
+    are always 'full close' (single row) regardless of regime — simpler for
+    the dashboard. In pure_sltp mode we ignore peak/trail dials entirely and
+    fire on stop or target. In trail_partial mode the original v5.5 trail
+    logic applies (with partial_tp collapsed into the final exit row)."""
     from datetime import datetime as _dt
     for sid, pos in list(_SHADOW_POSITIONS.items()):
         try:
@@ -237,13 +255,19 @@ def _manage_shadow_positions(broker) -> None:
             entry_dt = _dt.fromisoformat(pos["entry_ts"].replace("Z", "+00:00"))
             held_h = (_dt.now(timezone.utc) - entry_dt).total_seconds() / 3600
             exit_reason = None
-            if held_h >= MAX_HOLD_HOURS:
-                exit_reason = "max_hold"
-            elif unreal_pct < -pos["stop_loss_pct"]:
-                exit_reason = "stop_loss"
-            elif pos["peak_pct"] >= pos["trail_peak_pct"] and \
-                 (pos["peak_pct"] - unreal_pct) > pos["trail_giveback"]:
-                exit_reason = "trail"
+            # Use partial_tp_pct as the target threshold under pure_sltp regime
+            # (same numeric value, different semantics — see _manage_open_position).
+            target_pct = pos.get("partial_tp_pct", 0.010)
+            if EXIT_REGIME == "pure_sltp":
+                if held_h >= MAX_HOLD_HOURS:        exit_reason = "max_hold"
+                elif unreal_pct >= target_pct:      exit_reason = "target"
+                elif unreal_pct <= -pos["stop_loss_pct"]: exit_reason = "stop_loss"
+            else:
+                if held_h >= MAX_HOLD_HOURS:        exit_reason = "max_hold"
+                elif unreal_pct <= -pos["stop_loss_pct"]: exit_reason = "stop_loss"
+                elif pos["peak_pct"] >= pos["trail_peak_pct"] and \
+                     (pos["peak_pct"] - unreal_pct) > pos["trail_giveback"]:
+                    exit_reason = "trail"
             if exit_reason:
                 pos["status"]      = "closed"
                 pos["exit_ts"]     = _dt.now(timezone.utc).isoformat()
@@ -419,10 +443,10 @@ def init_crypto_runner(scheduler) -> None:
         return
     broker = get_crypto_broker()
     mode = broker.mode
-    logger.info("crypto runner enabled — mode=%s mgmt_tick=%ds sample=5m "
-                "entry=hourly@HH:00:30 UTC equity=$%.0f kill=-%.1f%% "
+    logger.info("crypto runner enabled — mode=%s regime=%s mgmt_tick=%ds "
+                "sample=5m entry=hourly@HH:00:30 UTC equity=$%.0f kill=-%.1f%% "
                 "max_contracts=%d",
-                mode, TICK_INTERVAL_SECONDS, BASE_EQUITY_USD,
+                mode, EXIT_REGIME, TICK_INTERVAL_SECONDS, BASE_EQUITY_USD,
                 DAILY_LOSS_KILL_PCT * 100, MAX_LIVE_CONTRACTS)
     try:
         # 1) Position-management tick — every 2s. Cheap mark reads + stop/trail.
