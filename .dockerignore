@@ -11,3 +11,10 @@ journals/
 start.bat
 frontend/node_modules/
 frontend/.next/
+# Backtest CSVs and option-chain history — regenerable from Delta REST,
+# no business being in the runtime image.
+delta_exchange/data/
+delta_exchange/.venv/
+*.csv
+!core/**/*.csv
+!api/**/*.csv
