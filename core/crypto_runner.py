@@ -74,6 +74,12 @@ _OPEN_POSITIONS: dict[str, dict] = {}
 _DAY_PNL_USD: float = 0.0
 _DAY_PNL_RESET_DATE: Optional[str] = None
 _KILLED: bool = False
+# Shadow trades: signals that crossed the gate + persistence but were blocked
+# from going live (typically by insufficient wallet). Kept in memory so the
+# dashboard can show "the bot WOULD have entered here" — proof of life when
+# the account is unfunded.
+_SHADOW_TRADES: list[dict] = []
+_MAX_SHADOW_TRADES = 20
 
 
 # ── strategies ────────────────────────────────────────────────────────────────
@@ -268,21 +274,39 @@ def tick_crypto_strategies() -> None:
         # funded account. In live mode we read the cached wallet and either
         # skip (under the floor) or size to whichever is smaller.
         effective_equity = BASE_EQUITY_USD
+        wallet_blocked = False
         if broker.mode == "live":
             balance = broker.get_balance()
-            if balance is None:
-                logger.warning("%s: wallet balance unavailable — skipping entry",
-                               name); continue
-            if balance < MIN_WALLET_USD:
-                logger.warning("%s: wallet $%.2f < min $%.0f — skipping entry "
-                               "(fund Delta to enable trading)",
-                               name, balance, MIN_WALLET_USD); continue
-            wallet_cap = balance * WALLET_SAFETY_BUFFER
-            if wallet_cap < BASE_EQUITY_USD:
-                logger.info("%s: sizing capped by wallet $%.2f -> $%.0f "
-                            "(env cap $%.0f)",
-                            name, balance, wallet_cap, BASE_EQUITY_USD)
-                effective_equity = wallet_cap
+            if balance is None or balance < MIN_WALLET_USD:
+                wallet_blocked = True
+                shown = f"${balance:.2f}" if balance is not None else "unavailable"
+                logger.warning("%s: wallet %s < min $%.0f — recording shadow "
+                               "trade only (fund Delta to go live)",
+                               name, shown, MIN_WALLET_USD)
+            else:
+                wallet_cap = balance * WALLET_SAFETY_BUFFER
+                if wallet_cap < BASE_EQUITY_USD:
+                    logger.info("%s: sizing capped by wallet $%.2f -> $%.0f "
+                                "(env cap $%.0f)",
+                                name, balance, wallet_cap, BASE_EQUITY_USD)
+                    effective_equity = wallet_cap
+
+        # Record the would-have-fired decision regardless of wallet state so
+        # the dashboard shows the strategy is alive and detecting setups.
+        shadow_event = {
+            "ts":         datetime.now(timezone.utc).isoformat(),
+            "strategy":   name,
+            "symbol":     decision.symbol,
+            "side":       decision.side,
+            "pred_pct":   decision.pred_pct,
+            "size_mult":  decision.size_mult,
+            "mark":       mark,
+            "blocked_by": "wallet_low" if wallet_blocked else None,
+        }
+        if wallet_blocked:
+            _SHADOW_TRADES.append(shadow_event)
+            del _SHADOW_TRADES[:-_MAX_SHADOW_TRADES]
+            continue
 
         notional = effective_equity * decision.size_mult
         contracts = _contracts_for_notional(decision.symbol, notional, mark)
@@ -366,6 +390,7 @@ def get_state() -> dict:
                 "tp_taken": pos.get("tp_taken", False),
             } for name, pos in _OPEN_POSITIONS.items()
         },
+        "shadow_trades": list(_SHADOW_TRADES[-_MAX_SHADOW_TRADES:]),
     }
 
 

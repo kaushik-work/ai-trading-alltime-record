@@ -120,11 +120,18 @@ def _build_crypto_snapshot() -> dict:
 
     Bundles everything the crypto dashboard needs in one round-trip: live
     signals, portfolio state, perp marks, futures market stats (funding
-    rate + OI), and stream diagnostics.
+    rate + OI), stream diagnostics, and recent shadow trades (would-have-
+    fired entries blocked by an empty wallet).
     """
     signals, perp_marks = _signals_from_broker()
     portfolio = _portfolio_snapshot()
     futures_stats = _futures_stats_for_dashboard()
+    shadow_trades: list = []
+    try:
+        from core.crypto_runner import get_state
+        shadow_trades = list(get_state().get("shadow_trades", []))
+    except Exception:
+        shadow_trades = []
     try:
         from core.ws.delta_stream import get_stream
         stream = get_stream().diagnostics()
@@ -136,6 +143,7 @@ def _build_crypto_snapshot() -> dict:
         "signals":       signals,
         "portfolio":     portfolio,
         "futures_stats": futures_stats,
+        "shadow_trades": shadow_trades,
         "stream":        stream,
     }
 

@@ -51,10 +51,22 @@ type FuturesStat = {
   mark_change_24h?: number | null;
 };
 
+type ShadowTrade = {
+  ts: string;
+  strategy: string;
+  symbol: string;
+  side: string;
+  pred_pct: number;
+  size_mult: number;
+  mark: number;
+  blocked_by?: string | null;
+};
+
 type Snapshot = {
   ts: string;
   perp_marks: Record<string, number>;
   futures_stats?: Record<string, FuturesStat>;
+  shadow_trades?: ShadowTrade[];
   signals: SignalRow[];
   portfolio: PortfolioState;
   stream: StreamDiag;
@@ -139,6 +151,8 @@ export default function CryptoHome() {
   const liveEth = snap?.perp_marks?.["ETHUSD"];
   const btcFutures = snap?.futures_stats?.["BTCUSD"];
   const ethFutures = snap?.futures_stats?.["ETHUSD"];
+  const shadowTrades = snap?.shadow_trades ?? [];
+  const lastShadow = shadowTrades.length ? shadowTrades[shadowTrades.length - 1] : null;
 
   // Max signal strength across current expiries — used for the strip stat
   const maxAbsPred = signals.length
@@ -153,13 +167,15 @@ export default function CryptoHome() {
   };
   const fmtFunding = (fr?: number | null) => {
     if (fr == null) return { text: "—", color: "#475569", hint: "" };
-    const pct = fr * 100;
-    const sign = pct >= 0 ? "+" : "";
-    const text = `${sign}${pct.toFixed(4)}%`;
+    // Delta India returns funding_rate already in PERCENT units (e.g. 0.0074
+    // = 0.0074% per 8h). We were multiplying by 100 again and showing
+    // 0.7427% instead of 0.0074%. Same trap with mark_change_24h.
+    const sign = fr >= 0 ? "+" : "";
+    const text = `${sign}${fr.toFixed(4)}%`;
     // Positive funding -> longs paying shorts -> heavy-long, mean-revert risk
     // Negative funding -> shorts paying longs -> heavy-short, squeeze risk
-    const color = pct > 0.01 ? "#ef4444" : pct < -0.01 ? "#22c55e" : "#94a3b8";
-    const hint  = pct > 0.01 ? "longs paying" : pct < -0.01 ? "shorts paying" : "neutral";
+    const color = fr > 0.005  ? "#ef4444" : fr < -0.005 ? "#22c55e" : "#94a3b8";
+    const hint  = fr > 0.005  ? "longs paying" : fr < -0.005 ? "shorts paying" : "neutral";
     return { text, color, hint };
   };
 
@@ -304,6 +320,33 @@ export default function CryptoHome() {
           <StatCard label="Max |pred|" value={`${maxAbsPred.toFixed(3)}%`} />
         </div>
 
+        {/* Shadow-trade banner — proves the bot is actively detecting setups
+            even when the wallet is empty and orders can't actually fire. */}
+        {lastShadow && (
+          <div className="border border-yellow-700/50 bg-yellow-950/20 rounded-lg p-3 mb-6">
+            <div className="flex items-baseline justify-between">
+              <div className="flex items-baseline gap-3">
+                <span className="text-yellow-400 text-sm font-semibold">
+                  ⚡ Bot detected {shadowTrades.length} would-be trade
+                  {shadowTrades.length > 1 ? "s" : ""} — blocked by empty wallet
+                </span>
+                <span className="text-xs text-gray-400 font-mono">
+                  latest: {lastShadow.symbol} {lastShadow.side.toUpperCase()} @
+                  ${lastShadow.mark.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                  · pred {lastShadow.pred_pct >= 0 ? "+" : ""}{lastShadow.pred_pct.toFixed(3)}%
+                  · size {lastShadow.size_mult.toFixed(1)}×
+                </span>
+              </div>
+              <span className="text-[10px] text-gray-500">
+                {new Date(lastShadow.ts).toLocaleTimeString()}
+              </span>
+            </div>
+            <p className="text-[11px] text-gray-500 mt-1">
+              Fund Delta wallet with USDT to convert these signals into live orders.
+            </p>
+          </div>
+        )}
+
         {/* Futures market stats — perp-specific signals not in NIFTY land */}
         <div className="border border-[#1e1e30] rounded-2xl p-4 mb-6 bg-[#0e0e1a]">
           <div className="flex items-baseline justify-between mb-3">
@@ -433,8 +476,9 @@ function FuturesCard({
   fmtFunding: (fr?: number | null) => { text: string; color: string; hint: string };
 }) {
   const fund = fmtFunding(futures?.funding_rate);
-  const chg = futures?.mark_change_24h ?? null;
-  const chgPct = chg != null ? chg * 100 : null;
+  // Delta returns mark_change_24h already in PERCENT units (e.g. -3.14 for
+  // -3.14%). We were multiplying by 100 again and showing -316.57%.
+  const chgPct = futures?.mark_change_24h ?? null;
   return (
     <div className="border border-[#1e1e30] rounded-lg p-4">
       <div className="flex items-baseline justify-between mb-2">
@@ -447,7 +491,7 @@ function FuturesCard({
       </div>
       <div className="grid grid-cols-3 gap-3 text-xs">
         <div>
-          <p className="text-gray-500 mb-0.5">Funding</p>
+          <p className="text-gray-500 mb-0.5">Funding <span className="text-gray-700">(per 8h)</span></p>
           <p className="font-semibold font-mono" style={{ color: fund.color }}>{fund.text}</p>
           <p className="text-[10px] text-gray-600 mt-0.5">{fund.hint}</p>
         </div>
