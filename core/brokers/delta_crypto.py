@@ -259,29 +259,50 @@ class DeltaCryptoBroker:
         locked in open positions) and falls back to `balance`. Returns
         None in paper mode so the runner uses its env-configured equity.
         """
+        wallet = self.get_wallet_breakdown()
+        return wallet.get("usd_total") if wallet else None
+
+    def get_wallet_breakdown(self) -> dict:
+        """Full wallet breakdown: USD-stablecoin total + INR balance.
+
+        Returned dict shape:
+            {"usd_total": float,    # tradeable margin (USD+USDT+USDC summed)
+             "inr_balance": float,  # INR sitting in wallet (NOT tradeable for
+                                    #   USDT-margined perps until converted)
+             "by_asset": {symbol: balance}}
+
+        Returns {} in paper mode. Cached 15s.
+        """
         if self.mode == "paper":
-            return None
+            return {}
         cached = self._bal_cache
-        if cached["value"] >= 0 and time.time() - cached["ts"] < _BAL_CACHE_TTL:
-            return cached["value"]
+        if cached.get("value", -1) >= 0 and time.time() - cached["ts"] < _BAL_CACHE_TTL:
+            return cached.get("breakdown", {})
         try:
             data = self._request("GET", "/v2/wallet/balances", authed=True)
-            total = 0.0
-            found = False
+            usd_total = 0.0
+            inr_balance = 0.0
+            by_asset: dict[str, float] = {}
             for row in data.get("result", []):
                 asset = (row.get("asset_symbol") or "").upper()
-                if asset not in ("USD", "USDT", "USDC"):
-                    continue
                 raw = row.get("available_balance")
                 if raw is None or raw == "":
                     raw = row.get("balance", 0)
                 try: val = float(raw)
                 except (TypeError, ValueError): continue
-                total += val
-                found = True
-            if found:
-                self._bal_cache = {"value": total, "ts": time.time()}
-                return total
+                if asset in ("USD", "USDT", "USDC"):
+                    usd_total += val
+                    by_asset[asset] = val
+                elif asset == "INR":
+                    inr_balance = val
+                    by_asset["INR"] = val
+            if usd_total > 0 or inr_balance > 0:
+                breakdown = {"usd_total": usd_total,
+                             "inr_balance": inr_balance,
+                             "by_asset": by_asset}
+                self._bal_cache = {"value": usd_total, "ts": time.time(),
+                                   "breakdown": breakdown}
+                return breakdown
         except Exception as e:
             logger.error("get_balance: %s", e)
         return None

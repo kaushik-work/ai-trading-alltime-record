@@ -152,29 +152,38 @@ def _futures_stats_for_dashboard() -> dict:
 
 
 def _portfolio_snapshot() -> dict:
-    """Live portfolio: real Delta wallet balance, day P&L, open positions."""
+    """Live portfolio: real Delta wallet balance, day P&L, open positions.
+
+    Also surfaces INR balance separately so the dashboard can tell the user
+    'convert to USDT' instead of just showing dash when the only deposit is
+    in INR (which can't margin USDT-denominated perps directly).
+    """
     try:
         from core.crypto_runner import get_state
         from core.brokers.delta_crypto import get_broker
         state = get_state()
         broker = get_broker()
-        # In live mode pull the real Delta wallet balance (cached 15s in the
-        # broker); paper mode has no wallet so report None — the dashboard
-        # treats that as "n/a".
-        wallet = None
+        wallet_usd = None
+        wallet_inr = None
         if broker.mode == "live":
-            try: wallet = broker.get_balance()
-            except Exception: wallet = None
+            try:
+                breakdown = broker.get_wallet_breakdown()
+                wallet_usd = breakdown.get("usd_total")
+                wallet_inr = breakdown.get("inr_balance")
+            except Exception:
+                wallet_usd = None
+                wallet_inr = None
         return {
-            "wallet_usd":     float(wallet) if wallet is not None else None,
+            "wallet_usd":     float(wallet_usd) if wallet_usd else None,
+            "wallet_inr":     float(wallet_inr) if wallet_inr else None,
             "day_pnl":        float(state.get("day_pnl_usd", 0) or 0),
             "open_positions": len(state.get("open_positions", {})),
             "killed":         bool(state.get("killed", False)),
             "mode":           state.get("mode", "unknown"),
         }
     except Exception:
-        return {"wallet_usd": None, "day_pnl": 0.0, "open_positions": 0,
-                "killed": False, "mode": "unknown"}
+        return {"wallet_usd": None, "wallet_inr": None, "day_pnl": 0.0,
+                "open_positions": 0, "killed": False, "mode": "unknown"}
 
 
 @router.get("/signals")

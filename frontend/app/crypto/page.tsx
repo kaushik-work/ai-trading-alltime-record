@@ -28,6 +28,7 @@ type SignalRow = {
 
 type PortfolioState = {
   wallet_usd: number | null;
+  wallet_inr?: number | null;
   day_pnl: number;
   open_positions: number;
   killed?: boolean;
@@ -290,6 +291,11 @@ export default function CryptoHome() {
               ? `$${portfolio.wallet_usd.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
               : portfolio?.mode === "paper" ? "paper" : "—"}
             accent={portfolio?.wallet_usd != null && portfolio.wallet_usd < 100 ? "red" : undefined}
+            footnote={
+              portfolio?.wallet_inr && portfolio.wallet_inr > 0
+                ? `also ₹${portfolio.wallet_inr.toLocaleString("en-IN", { maximumFractionDigits: 0 })} INR — convert to USDT to trade`
+                : undefined
+            }
           />
           <StatCard label="Today P&L" value={portfolio ? `${portfolio.day_pnl >= 0 ? "+" : ""}$${portfolio.day_pnl.toFixed(0)}` : "—"}
                     accent={portfolio && portfolio.day_pnl > 0 ? "green" : portfolio && portfolio.day_pnl < 0 ? "red" : undefined} />
@@ -395,8 +401,9 @@ export default function CryptoHome() {
   );
 }
 
-function StatCard({ label, value, accent, customColor }: {
+function StatCard({ label, value, accent, customColor, footnote }: {
   label: string; value: string; accent?: string; customColor?: string;
+  footnote?: string;
 }) {
   const color = customColor ? "" :
                 accent === "green" ? "text-green-400" :
@@ -409,6 +416,9 @@ function StatCard({ label, value, accent, customColor }: {
          style={customColor ? { color: customColor } : undefined}>
         {value}
       </p>
+      {footnote && (
+        <p className="text-[10px] text-yellow-500/70 mt-1 leading-tight">{footnote}</p>
+      )}
     </div>
   );
 }
