@@ -129,7 +129,7 @@ def _build_crypto_snapshot() -> dict:
     shadow_trades: list = []
     shadow_summary: dict = {}
     try:
-        from core.crypto_runner import get_state
+        from core.execution.crypto_runner import get_state
         rs = get_state()
         shadow_trades = list(rs.get("shadow_trades", []))
         shadow_summary = dict(rs.get("shadow_summary", {}))
@@ -170,7 +170,7 @@ def _portfolio_snapshot() -> dict:
     """
     try:
         import os as _os
-        from core.crypto_runner import get_state, CAPITAL_USE_PCT
+        from core.execution.crypto_runner import get_state, CAPITAL_USE_PCT
         from core.brokers.delta_crypto import get_broker
         state = get_state()
         broker = get_broker()
@@ -225,7 +225,7 @@ def crypto_portfolio():
 def crypto_state():
     """Live runner state — open positions, day P&L, kill switch status."""
     try:
-        from core.crypto_runner import get_state
+        from core.execution.crypto_runner import get_state
         return get_state()
     except Exception as e:
         return {"enabled": False, "error": str(e),
@@ -416,7 +416,7 @@ def crypto_signal_history(
     # the LAST sample per bucket (rather than mean) so the chart reflects
     # the most recent value in that window.
     try:
-        from core.crypto_runner import _get_strategies
+        from core.execution.crypto_runner import _get_strategies
         strat_name = "btc_synth_forward" if asset == "BTC" else "eth_synth_forward"
         strats = _get_strategies()
         strat = strats.get(strat_name)
@@ -468,7 +468,7 @@ def crypto_kill():
     Returns the positions that were closed.
     """
     try:
-        from core.crypto_runner import manual_kill, get_state
+        from core.execution.crypto_runner import manual_kill, get_state
         before = get_state()
         positions_before = list(before.get("open_positions", {}).keys())
         manual_kill()

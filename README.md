@@ -1,116 +1,157 @@
-# AI Trading Bot — Shadow
+# AI Trading All-Time Record
 
-Forward-test platform for **NIFTY** options on Angel One SmartAPI. The bot
-**never places real orders** — every decision is logged to a Mongo
-`shadow_trades` collection for offline evaluation.
+Production crypto-futures trading bot on **Delta Exchange India** + NSE
+option-chain **data collectors** for research.
 
-**Backend:** FastAPI on a DigitalOcean droplet (Docker)
-**Frontend:** Next.js on Vercel
-**Data:** Angel One SmartAPI + persistent option-chain snapshots
+## What this is
 
----
+**Live trading surface:** crypto perpetual futures only (BTCUSD, ETHUSD).
+The strategy is **Synthetic Forward v5.5** — exploits dislocations between
+the options-implied forward price and the perp mark.
 
-## Active strategy: Q5 multi-signal shadow
-
-Three independent signals run in parallel, each with its own ledger:
-
-| Signal | Trigger | Discovered via |
-|--------|---------|----------------|
-| `q5_straddle_level` | ATM straddle > trailing-5d P70 | analyze_option_chain.py (IC +0.132) |
-| `q5_straddle_mom3`  | 3-bar change in ATM straddle > P70 | alpha_mining.py (IC +0.120) |
-| `q5_pcr_mom3`       | 3-bar change in PCR_OI > P70 | alpha_mining.py (IC +0.115) |
-
-**Locked parameters** (from sweep + multi-strategy replay):
-
-| Param | Value | Notes |
-|-------|-------|-------|
-| SL distance | ₹10 | premium points |
-| RR ratio | 2.25 | WR-max from RR fine-tune (38–40%) |
-| Strike | ITM by 50 (CE) | higher delta, lower IV cost |
-| Side | CE only | signed corr was bullish |
-| Trades/day/strategy | 4 | hard cap |
-| Per-strategy daily loss cap | ₹2,000 | 4% of ₹50K |
-| Aggregate daily loss cap | ₹3,500 | 7% of ₹50K |
-| Same-strike correlation guard | ON | prevents triple-betting on a bar |
-| Lot multiplier | 1× default, 2× after 30+ closed trades | Kelly-capped |
-
-**Backtested expectation** (8 days replay):
-
-- Net +₹14,300, WR ~40%, PF 1.52
-- Max DD 2.6% of capital
-- 5 winning days out of 8, worst day −₹1,300
-
----
+**Data surface:** NIFTY / BANKNIFTY / FINNIFTY / SENSEX 5-min option-chain
+snapshots into MongoDB. Pure data collection. No NSE trading, no NSE bot,
+no NSE strategies.
 
 ## Architecture
 
 ```
-collector container       ──→  Mongo option_snapshots (5-min bars, 17 strikes × 2 sides)
-        │
-api container (FastAPI)
-  ├── BotRunner (apscheduler)
-  │   ├── _shadow_signal_tick    every 30 s
-  │   ├── _option_chain_refresh  every 15 m
-  │   ├── _daily_token_refresh   08:30 / 12:00 / 14:00 IST
-  │   └── _save_journal          15:25 IST
-  ├── REST endpoints
-  │   ├── /api/shadow-trades  per-strategy ledger
-  │   ├── /api/risk-budget    today's caps + lot multipliers
-  │   ├── /api/pnl            daily shadow P&L grouping
-  │   ├── /api/journals       saved daily JSONs
-  │   ├── /api/mongo/status   mirror health
-  │   └── /api/health
-  └── WebSocket /ws           5 s snapshot broadcast
-frontend container (Next.js)
-  └── Dashboard               chart + status chips + per-strategy summary + today's trades
+┌─────────────────────────────────────────────────────────────────────┐
+│                           Delta India                               │
+│   WebSocket (perp + option marks)        REST (wallet, orders)      │
+└──────────────────┬──────────────────────────────┬───────────────────┘
+                   │                              │
+                   ▼                              ▼
+       ┌───────────────────────┐      ┌──────────────────────┐
+       │  core/ws/delta_stream │      │  core/brokers/       │
+       │  (993 symbols / 2s)   │      │  delta_crypto.py     │
+       └───────────┬───────────┘      └──────┬───────────────┘
+                   │                          │
+                   └────────────┬─────────────┘
+                                ▼
+       ┌─────────────────────────────────────────┐
+       │  strategies/synth_forward.py (v5.5)     │
+       │  gate 0.6% · persist 1h · ±5% strikes  │
+       └─────────────┬───────────────────────────┘
+                     │
+                     ▼
+       ┌─────────────────────────────────────────┐
+       │  core/execution/crypto_runner.py        │
+       │  tick 2s · stop 1.5% · trail 0.25%      │
+       │  partial TP @ 1% · max hold 72h         │
+       └─────────────┬───────────────────────────┘
+                     │
+                     ▼
+       ┌─────────────────────────────────────────┐
+       │  Dashboard (Next.js, /)                 │
+       │  Live signal radar + chart + KILL btn   │
+       └─────────────────────────────────────────┘
 ```
 
----
+## Strategy: Synthetic Forward v5.5
 
-## Research scripts (scripts/)
+For each near-money strike on a given expiry:
 
-| Script | Purpose |
-|--------|---------|
-| `analyze_option_chain.py`     | Feature → forward-return correlation pass |
-| `backtest_straddle_signal.py` | Single-signal backtest with caps |
-| `sweep_straddle.py`           | 54-combo parameter sweep + LOO |
-| `regime_filter.py`            | Trend-regime classifier (`trend_up` = noise) |
-| `meta_label_q5.py`            | López-de-Prado meta-labeling (needs more data) |
-| `alpha_mining.py`             | WorldQuant-style alpha discovery |
-| `replay_multi_strategy.py`    | Full forward-test simulation |
-| `verify_shadow_signal.py`     | Sanity check (passes) |
-| `collect_option_snapshots.py` | The 5-min option-chain writer |
+```
+synthetic_forward = call_price − put_price + strike
+dislocation       = (synthetic_forward − spot) / spot
+```
 
----
+Then the bot:
 
-## Deploy
+| Step | Rule |
+|---|---|
+| **Aggregate** | median dislocation across ≥3 strikes within ±5% of spot |
+| **Eligible expiry** | 6h ≤ TTE ≤ 72h |
+| **Entry gate** | \|dislocation\| ≥ 0.6% |
+| **Persistence** | signal must hold same direction for ≥1h |
+| **Direction** | positive dislocation → LONG perp · negative → SHORT |
+| **Sizing** | `equity × 50% × (0.5–3× by signal strength)` |
+| **Leverage** | 3× (validated equal returns vs 10× with 3× more liquidation buffer) |
+| **Stop loss** | -1.5% |
+| **Partial TP** | half-close at +1% |
+| **Trail** | give back max 0.25% after reaching +0.5% peak |
+| **Max hold** | 72h |
+| **Daily kill** | -5% of base equity → halt new entries |
 
+Backtest validation (June 2026, 9 days, ₹40k starting):
+- BTC + ETH shared pool: **₹40,000 → ₹51,564 (+28.9%)**
+- Win rate ~94%, only 2 small losers out of 32 trades
+
+## Repo layout
+
+```
+├── api/                       FastAPI app
+│   ├── server.py              Auth, health, /ws/crypto, lifespan
+│   └── routes_crypto.py       /api/crypto/* surfaces (signals, snapshot, kill)
+├── core/
+│   ├── bot_runner.py          APScheduler host (minimal stub)
+│   ├── brokers/
+│   │   └── delta_crypto.py    HMAC-signed REST + WS-first reads
+│   ├── execution/
+│   │   └── crypto_runner.py   Tick loop, entry/exit, kill switch, shadow trades
+│   ├── ws/
+│   │   └── delta_stream.py    Persistent Delta WebSocket client
+│   ├── risk_management.py     Production dials (LEVERAGE, gate, kill thresholds)
+│   ├── memory.py              SQLite trade memory
+│   ├── mongo.py               Mongo connection + collections
+│   ├── ipc.py                 NSE market-holiday helper (used by collectors)
+│   └── utils.py               Date/timezone helpers
+├── strategies/
+│   ├── crypto_base.py         CryptoStrategy base class
+│   └── synth_forward.py       v5.5 production dials
+├── scripts/
+│   └── collect_option_snapshots.py    NSE 5-min OI snapshot collector
+├── data/
+│   └── angel_fetcher.py       Angel One SmartAPI helper (used by collectors)
+├── delta_exchange/            Backtesting playground (CSVs + scripts)
+├── frontend/                  Next.js dashboard (Vercel)
+└── docker-compose.yml         api + 4 NSE collectors (gated behind 'nse' profile)
+```
+
+## Running
+
+**Trade live (production):**
 ```bash
-# Droplet
-git pull
-docker compose build --no-cache api frontend
-docker compose up -d --force-recreate api frontend
-docker compose logs -f api | grep -E "shadow|ShadowBook"
+docker compose up -d              # crypto api only
 ```
 
-You should see, every 30 s during market hours:
-
-```
-shadow[q5_straddle_level]: val=312.5 thr=349.4 fire=False
-shadow[q5_straddle_mom3]:  val=-4.3  thr=0.65  fire=False
-shadow[q5_pcr_mom3]:       val=0.0234 thr=0.0175 fire=True
-ShadowBook[q5_pcr_mom3] OPEN ... strike=23750 prem=Rs 152.30 SL=142.30 TP=174.80
+**Plus the NSE data collectors:**
+```bash
+docker compose --profile nse up -d
 ```
 
----
+**Local backtest:**
+```bash
+cd delta_exchange
+./.venv/Scripts/python.exe backtest_synth_forward_v5_5_sweep.py
+```
 
-## What was retired
+## Required env (in `.env`, not committed)
 
-- **ATR Intraday strategy** — at-break-even (PF 1.03, 25.9% WR). Removed
-  Nov 2026 along with its scorer, scheduler jobs, day-bias panel, force-trade
-  IPC, signal_log, weekly Claude reviews, backtest engine, and dashboard pages.
-- **Paper trading / MockBroker** — removed earlier. The bot is live-only.
-- **VIX-based logic** — never validated, removed.
-- **Real money trading** — currently disabled. Capital is withdrawn from
-  Angel One. Bot can fetch quotes but cannot place orders. Re-fund only after
-  shadow PF stays > 1.5 across 4+ weeks of forward data.
+```
+DELTA_API_KEY=...               # with Read + Trade scopes + IP whitelist
+DELTA_API_SECRET=...
+MONGODB_URL=...
+MONGODB_DB_NAME=...
+JWT_SECRET=...                  # dashboard auth
+ANGEL_*=...                     # only for NSE collectors
+DASHBOARD_ORIGINS=...           # CORS allowlist
+```
+
+Risk dials live in `core/risk_management.py`, not `.env` — change via PR review.
+
+## Mongo collections
+
+| Collection | Owner | Purpose |
+|---|---|---|
+| `crypto_trades` | crypto bot | every entry/exit event |
+| `crypto_signal_log` | crypto bot | gated signal observations |
+| `option_snapshots` | NSE collectors | 5-min option chain dumps (NIFTY/BANKNIFTY/FINNIFTY/SENSEX) |
+
+NSE-side legacy collections (`shadow_trades`, `daily_journals`, etc) are untouched
+but no longer written to.
+
+## License
+
+Private.

@@ -1,3 +1,21 @@
+# Claude Agent Notes
+
+> Project state: **crypto-only live trading** on Delta India (BTCUSD + ETHUSD
+> perps via Synthetic Forward v5.5). NSE/NIFTY trading code retired. NSE
+> option-chain collectors still run for research data, gated behind
+> `docker compose --profile nse up -d`. See `AGENTS.md` for architecture.
+
+## Project-specific rules
+- **Crypto Mongo collections use `crypto_` prefix.** Don't write to legacy
+  NSE collections from crypto code.
+- **Risk dials live in `core/risk_management.py`**, not `.env`. PR review,
+  not silent edits.
+- **No LLM / RL in signal generation.** Strategy is deterministic by design.
+- **Strategy file:** `strategies/synth_forward.py`. Execution: `core/execution/crypto_runner.py`.
+  WS stream: `core/ws/delta_stream.py`.
+
+---
+
 ## 1. Plan First
 - Enter plan mode for ANY non-trivial task (3+ steps or architectural decisions)
 - If something goes sideways, STOP and re-plan immediately — don't keep pushing
