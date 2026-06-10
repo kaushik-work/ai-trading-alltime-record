@@ -418,6 +418,16 @@ def init_crypto_runner(scheduler) -> None:
             next_run_time=datetime.now(timezone.utc),
             max_instances=1, coalesce=True,
         )
+        # Wallet heartbeat — log the live Delta wallet breakdown every 5 min
+        # so the user can verify the API key, asset detection, and INR/USDT
+        # split without needing the dashboard.
+        scheduler.add_job(
+            _wallet_heartbeat, "interval",
+            minutes=5,
+            id="crypto_wallet_heartbeat", replace_existing=True,
+            next_run_time=datetime.now(timezone.utc),
+            max_instances=1, coalesce=True,
+        )
     except Exception as e:
         logger.error("crypto runner init failed: %s", e)
 
@@ -469,6 +479,32 @@ def _shadow_summary() -> dict:
         "avg_win_pct":  float(avg_win),
         "avg_loss_pct": float(avg_loss),
     }
+
+
+def _wallet_heartbeat() -> None:
+    """Log the live Delta wallet breakdown every 5 minutes (scheduled job).
+    Shows the user exactly what assets are held and what's tradeable, even
+    when the dashboard would otherwise display a dash."""
+    broker = get_crypto_broker()
+    if broker.mode != "live":
+        return
+    try:
+        # Bust the 15s cache so the heartbeat fetches a truly current view.
+        broker._bal_cache = {"value": -1.0, "ts": 0.0}
+        breakdown = broker.get_wallet_breakdown()
+    except Exception as e:
+        logger.error("wallet heartbeat error: %s", e)
+        return
+    if not breakdown:
+        logger.warning("wallet heartbeat: empty breakdown — auth or API issue?")
+        return
+    usd = breakdown.get("usd_total", 0)
+    inr = breakdown.get("inr_balance", 0)
+    by_asset = breakdown.get("by_asset", {})
+    logger.info(
+        "wallet heartbeat: tradeable USD=$%.2f  INR=%.2f  by_asset=%s",
+        usd, inr, by_asset,
+    )
 
 
 def manual_kill():

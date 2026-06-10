@@ -269,9 +269,10 @@ class DeltaCryptoBroker:
             {"usd_total": float,    # tradeable margin (USD+USDT+USDC summed)
              "inr_balance": float,  # INR sitting in wallet (NOT tradeable for
                                     #   USDT-margined perps until converted)
-             "by_asset": {symbol: balance}}
-
-        Returns {} in paper mode. Cached 15s.
+             "by_asset": {symbol: balance},
+             "raw_rows": list}      # ALL rows from Delta — for debugging when
+                                    # an asset isn't being detected
+        Cached 15s.
         """
         if self.mode == "paper":
             return {}
@@ -283,19 +284,40 @@ class DeltaCryptoBroker:
             usd_total = 0.0
             inr_balance = 0.0
             by_asset: dict[str, float] = {}
+            raw_rows: list = []
+            # Asset detection — accept everything that looks like a USD
+            # stablecoin (USD, USDT, USDC, USDt, BUSD, TUSD…). Match by
+            # uppercase containment so future stablecoins on Delta still work.
+            USD_LIKE = ("USD", "USDT", "USDC", "USDP", "BUSD", "TUSD", "DAI")
             for row in data.get("result", []):
-                asset = (row.get("asset_symbol") or "").upper()
-                raw = row.get("available_balance")
-                if raw is None or raw == "":
-                    raw = row.get("balance", 0)
-                try: val = float(raw)
-                except (TypeError, ValueError): continue
-                if asset in ("USD", "USDT", "USDC"):
+                asset_raw = row.get("asset_symbol") or row.get("asset") or ""
+                asset = str(asset_raw).upper().strip()
+                bal_raw = row.get("balance") or 0
+                avail_raw = row.get("available_balance")
+                pick = avail_raw if (avail_raw not in (None, "")) else bal_raw
+                try: val = float(pick or 0)
+                except (TypeError, ValueError): val = 0.0
+                if val > 0:
+                    raw_rows.append({"asset": asset, "balance": bal_raw,
+                                     "available": avail_raw})
+                if val <= 0:
+                    continue
+                if asset == "INR":
+                    inr_balance += val
+                    by_asset["INR"] = by_asset.get("INR", 0) + val
+                elif asset in USD_LIKE or "USD" in asset:
                     usd_total += val
-                    by_asset[asset] = val
-                elif asset == "INR":
-                    inr_balance = val
-                    by_asset["INR"] = val
+                    by_asset[asset] = by_asset.get(asset, 0) + val
+                else:
+                    by_asset[asset] = by_asset.get(asset, 0) + val
+            # Log once per cache miss so the user can see exactly what assets
+            # the wallet endpoint returned (helps when something else is in
+            # there — BTC collateral, sub-account, etc.).
+            if raw_rows:
+                logger.info("delta wallet: %s (usd_total=$%.2f, inr=%.2f)",
+                            raw_rows, usd_total, inr_balance)
+            else:
+                logger.info("delta wallet: no non-zero rows in response")
             if usd_total > 0 or inr_balance > 0:
                 breakdown = {"usd_total": usd_total,
                              "inr_balance": inr_balance,
