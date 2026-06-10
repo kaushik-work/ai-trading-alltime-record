@@ -211,12 +211,12 @@ export default function CryptoHome() {
         errorCount={0}
         settings={{ min_lots: 1 }}
       />
-      <main className="max-w-6xl mx-auto px-6 py-8">
+      <main className="max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
 
-        {/* Header bar */}
-        <div className="flex items-baseline justify-between mb-6">
-          <div>
-            <h1 className="text-3xl font-bold bg-gradient-to-r from-[#f7931a] to-[#627eea] bg-clip-text text-transparent">
+        {/* Header bar — stacks on mobile, side-by-side on tablet+ */}
+        <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between gap-3 mb-6">
+          <div className="min-w-0">
+            <h1 className="text-2xl sm:text-3xl font-bold bg-gradient-to-r from-[#f7931a] to-[#627eea] bg-clip-text text-transparent">
               Crypto · Delta India
             </h1>
             <p className="text-xs text-gray-500 mt-1">
@@ -235,20 +235,20 @@ export default function CryptoHome() {
               </span>
             </p>
           </div>
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
             <button
               onClick={() => setKillConfirm(true)}
               disabled={killBusy}
               className="px-4 py-2 text-xs font-semibold text-white rounded-lg shadow-md hover:opacity-90 disabled:opacity-50"
               style={{ background: "linear-gradient(135deg,#dc2626 0%,#7f1d1d 100%)" }}
             >
-              {killBusy ? "Killing..." : "🛑 KILL CRYPTO BOT"}
+              {killBusy ? "Killing..." : <><span className="hidden sm:inline">🛑 KILL CRYPTO BOT</span><span className="sm:hidden">🛑 KILL</span></>}
             </button>
             <button
               onClick={() => router.push("/")}
               className="px-4 py-2 text-xs text-gray-400 hover:text-white border border-[#1e1e30] rounded-lg"
             >
-              → switch to NSE
+<span className="hidden sm:inline">→ switch to NSE</span><span className="sm:hidden">→ NSE</span>
             </button>
           </div>
         </div>
@@ -321,8 +321,8 @@ export default function CryptoHome() {
           </div>
         )}
 
-        {/* Portfolio ribbon */}
-        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
+        {/* Portfolio ribbon — 2 cols on phone, 5 on tablet+ */}
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-2 sm:gap-3 mb-6">
           <StatCard
             label="Tradeable Pool"
             value={portfolio?.wallet_pool_usd != null
@@ -358,7 +358,7 @@ export default function CryptoHome() {
               </span>
             </div>
             {shadowSummary && (
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-2 text-xs">
+              <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2 sm:gap-3 mb-2 text-xs">
                 <div>
                   <p className="text-gray-500">Open</p>
                   <p className="font-semibold text-white">{shadowSummary.open}</p>
@@ -413,13 +413,13 @@ export default function CryptoHome() {
 
         {/* Futures market stats — perp-specific signals not in NIFTY land */}
         <div className="border border-[#1e1e30] rounded-2xl p-4 mb-6 bg-[#0e0e1a]">
-          <div className="flex items-baseline justify-between mb-3">
+          <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between gap-1 mb-3">
             <h2 className="text-sm font-semibold text-gray-300">Futures · Perp Stats</h2>
-            <span className="text-[10px] text-gray-600">
-              funding sign: + longs paying (heavy-long) · − shorts paying (heavy-short)
+            <span className="text-[10px] text-gray-600 leading-tight">
+              funding: + longs paying · − shorts paying
             </span>
           </div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
             <FuturesCard label="BTCUSD" futures={btcFutures} color="#f7931a"
                          fmtUsd={fmtUsd} fmtFunding={fmtFunding} />
             <FuturesCard label="ETHUSD" futures={ethFutures} color="#627eea"
@@ -446,17 +446,18 @@ export default function CryptoHome() {
               {wsState === "open" ? "No signals yet — stream warming up." : "Connecting…"}
             </p>
           ) : (
-            <table className="w-full text-sm">
+            <div className="overflow-x-auto -mx-2 sm:mx-0">
+            <table className="w-full text-xs sm:text-sm min-w-[560px]">
               <thead className="text-gray-500 border-b border-[#1e1e30]">
                 <tr>
-                  <th className="text-left py-2">Asset</th>
-                  <th className="text-right">Spot</th>
-                  <th className="text-right">Expiry (UTC)</th>
-                  <th className="text-right">TTE</th>
-                  <th className="text-right">|pred|</th>
-                  <th className="text-right">Strikes</th>
-                  <th className="text-right">ATM K</th>
-                  <th className="text-right">Action</th>
+                  <th className="text-left py-2 px-2">Asset</th>
+                  <th className="text-right px-2">Spot</th>
+                  <th className="text-right px-2">Expiry</th>
+                  <th className="text-right px-2">TTE</th>
+                  <th className="text-right px-2">|pred|</th>
+                  <th className="text-right px-2 hidden sm:table-cell">Strikes</th>
+                  <th className="text-right px-2 hidden sm:table-cell">ATM K</th>
+                  <th className="text-right px-2">Action</th>
                 </tr>
               </thead>
               <tbody>
@@ -465,23 +466,23 @@ export default function CryptoHome() {
                   return (
                     <tr key={i}
                         className={`border-b border-[#13131f] ${fires ? "bg-[#f7931a08]" : ""}`}>
-                      <td className="py-2">
+                      <td className="py-2 px-2">
                         <span className={`inline-block w-2 h-2 rounded-full mr-2 ${
                           fires ? "bg-[#f7931a]" : "bg-gray-700"
                         }`} />
                         {s.underlying}
                       </td>
-                      <td className="text-right">${s.spot.toLocaleString()}</td>
-                      <td className="text-right text-gray-400">{s.expiry}</td>
-                      <td className="text-right">{s.tte_hours.toFixed(1)}h</td>
-                      <td className={`text-right font-mono ${
+                      <td className="text-right px-2">${s.spot.toLocaleString()}</td>
+                      <td className="text-right px-2 text-gray-400">{s.expiry}</td>
+                      <td className="text-right px-2">{s.tte_hours.toFixed(1)}h</td>
+                      <td className={`text-right px-2 font-mono ${
                         fires ? "text-[#f7931a] font-semibold" : ""
                       }`}>
                         {s.pred_pct > 0 ? "+" : ""}{s.pred_pct.toFixed(3)}%
                       </td>
-                      <td className="text-right">{s.n_strikes}</td>
-                      <td className="text-right">${s.atm_strike.toLocaleString()}</td>
-                      <td className="text-right">
+                      <td className="text-right px-2 hidden sm:table-cell">{s.n_strikes}</td>
+                      <td className="text-right px-2 hidden sm:table-cell">${s.atm_strike.toLocaleString()}</td>
+                      <td className="text-right px-2">
                         {fires ? (
                           <span className={s.pred_pct > 0 ? "text-green-400" : "text-red-400"}>
                             {s.pred_pct > 0 ? "LONG" : "SHORT"}
@@ -495,6 +496,7 @@ export default function CryptoHome() {
                 })}
               </tbody>
             </table>
+            </div>
           )}
         </div>
 
@@ -517,10 +519,11 @@ function StatCard({ label, value, accent, customColor, footnote }: {
                 accent === "red"   ? "text-red-400" :
                 "text-white";
   return (
-    <div className="border border-[#1e1e30] rounded-lg px-4 py-3 bg-[#0e0e1a]">
-      <p className="text-xs text-gray-500">{label}</p>
-      <p className={`text-lg font-semibold ${color} mt-1`}
-         style={customColor ? { color: customColor } : undefined}>
+    <div className="border border-[#1e1e30] rounded-lg px-3 sm:px-4 py-2.5 sm:py-3 bg-[#0e0e1a] min-w-0">
+      <p className="text-[11px] sm:text-xs text-gray-500 truncate">{label}</p>
+      <p className={`text-base sm:text-lg font-semibold ${color} mt-1 truncate`}
+         style={customColor ? { color: customColor } : undefined}
+         title={value}>
         {value}
       </p>
       {footnote && (
@@ -544,28 +547,30 @@ function FuturesCard({
   // -3.14%). We were multiplying by 100 again and showing -316.57%.
   const chgPct = futures?.mark_change_24h ?? null;
   return (
-    <div className="border border-[#1e1e30] rounded-lg p-4">
-      <div className="flex items-baseline justify-between mb-2">
-        <span className="text-sm font-semibold" style={{ color }}>{label}</span>
-        <span className="text-xs text-gray-500 font-mono">
+    <div className="border border-[#1e1e30] rounded-lg p-3 sm:p-4">
+      <div className="flex items-baseline justify-between mb-2 gap-2">
+        <span className="text-sm font-semibold flex-shrink-0" style={{ color }}>{label}</span>
+        <span className="text-[11px] sm:text-xs text-gray-500 font-mono truncate">
           {futures?.mark_price != null
             ? `$${futures.mark_price.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
             : "—"}
         </span>
       </div>
-      <div className="grid grid-cols-3 gap-3 text-xs">
-        <div>
-          <p className="text-gray-500 mb-0.5">Funding <span className="text-gray-700">(per 8h)</span></p>
-          <p className="font-semibold font-mono" style={{ color: fund.color }}>{fund.text}</p>
-          <p className="text-[10px] text-gray-600 mt-0.5">{fund.hint}</p>
+      <div className="grid grid-cols-3 gap-2 sm:gap-3 text-[11px] sm:text-xs">
+        <div className="min-w-0">
+          <p className="text-gray-500 mb-0.5 leading-tight">
+            Funding<span className="hidden sm:inline text-gray-700"> (per 8h)</span>
+          </p>
+          <p className="font-semibold font-mono truncate" style={{ color: fund.color }}>{fund.text}</p>
+          <p className="text-[10px] text-gray-600 mt-0.5 truncate">{fund.hint}</p>
         </div>
-        <div>
-          <p className="text-gray-500 mb-0.5">Open Interest</p>
-          <p className="font-semibold text-white font-mono">{fmtUsd(futures?.open_interest_usd)}</p>
+        <div className="min-w-0">
+          <p className="text-gray-500 mb-0.5 leading-tight">Open Int.</p>
+          <p className="font-semibold text-white font-mono truncate">{fmtUsd(futures?.open_interest_usd)}</p>
         </div>
-        <div>
-          <p className="text-gray-500 mb-0.5">24h Change</p>
-          <p className={`font-semibold font-mono ${
+        <div className="min-w-0">
+          <p className="text-gray-500 mb-0.5 leading-tight">24h Δ</p>
+          <p className={`font-semibold font-mono truncate ${
             chgPct == null ? "text-white"
               : chgPct > 0 ? "text-green-400" : "text-red-400"
           }`}>
