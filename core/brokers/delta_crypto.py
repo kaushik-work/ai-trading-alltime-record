@@ -113,8 +113,20 @@ class DeltaCryptoBroker:
                     wait = int(r.headers.get("X-RATE-LIMIT-RESET", 3))
                     logger.warning("delta rate-limit, sleep %ds", wait)
                     time.sleep(wait); continue
+                # 4xx auth/scope errors don't recover with retry -- raise now
+                # so the caller can show a meaningful message and stop hammering.
+                if 400 <= r.status_code < 500 and r.status_code != 429:
+                    r.raise_for_status()
                 r.raise_for_status()
                 return r.json()
+            except requests.HTTPError as e:
+                if e.response is not None and 400 <= e.response.status_code < 500:
+                    # Don't spam — caller will log the meaningful error.
+                    raise
+                if attempt == 2:
+                    logger.error("delta %s %s failed: %s", method, path, e)
+                    raise
+                time.sleep(2 ** attempt)
             except requests.RequestException as e:
                 if attempt == 2:
                     logger.error("delta %s %s failed: %s", method, path, e)
@@ -283,13 +295,17 @@ class DeltaCryptoBroker:
              "by_asset": {symbol: balance},
              "raw_rows": list}      # ALL rows from Delta — for debugging when
                                     # an asset isn't being detected
-        Cached 15s.
+        Cached 15s on success, 60s on failure (stops 401/timeout spam).
         """
         if self.mode == "paper":
             return {}
         cached = self._bal_cache
+        # Successful cache still valid?
         if cached.get("value", -1) >= 0 and time.time() - cached["ts"] < _BAL_CACHE_TTL:
             return cached.get("breakdown", {})
+        # Failed cache still in cool-down? Avoid hammering Delta on auth errors.
+        if cached.get("error_ts") and time.time() - cached["error_ts"] < 60:
+            return {}
         try:
             data = self._request("GET", "/v2/wallet/balances", authed=True)
             usd_total = 0.0
@@ -337,7 +353,16 @@ class DeltaCryptoBroker:
                                    "breakdown": breakdown}
                 return breakdown
         except Exception as e:
-            logger.error("get_balance: %s", e)
+            # Cache the failure for 60s so we stop hammering Delta on a 401
+            # (which only resolves when the user updates the API key scopes).
+            err_str = str(e)
+            self._bal_cache = {"value": -1.0, "ts": 0.0,
+                               "error_ts": time.time(), "error": err_str}
+            if "401" in err_str:
+                logger.warning("delta wallet: 401 — API key needs 'Wallet Read' "
+                               "permission on delta.exchange (next retry in 60s)")
+            else:
+                logger.error("get_balance: %s (next retry in 60s)", e)
         return None
 
     def set_leverage(self, symbol: str, leverage: int) -> bool:
