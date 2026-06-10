@@ -23,9 +23,15 @@ from strategies.crypto_base import CryptoStrategy, CryptoSignalDecision
 logger = logging.getLogger(__name__)
 
 
-# v5 production dials — validated by backtests + OOS
-ENTRY_PCT     = 0.006     # 0.6% gate
-PERSIST_HOURS = 2
+# v5.5 production dials — see backtest_synth_forward_v5_5_sweep.py.
+# Shortening PERSIST_HOURS 2→1 was the only formula change that increased
+# trade count AND preserved/improved Sharpe on BOTH BTC and ETH:
+#   BTC 92d:  86→110 trades  Sharpe 9.43→10.51  total +103%→+138%
+#   ETH 92d: 135→159 trades  Sharpe 9.94→9.91   total +342%→+425%  WR 87%→89%
+# Every other tweak (gate-lowering, velocity, consensus, RV-adaptive,
+# composite expiries) either degraded edge or only worked on one asset.
+ENTRY_PCT     = 0.006     # 0.6% gate (unchanged)
+PERSIST_HOURS = 1         # was 2 — see v5.5 sweep results
 MIN_STRIKES   = 3
 TT_MIN_HOURS  = 6
 TT_MAX_HOURS  = 72
