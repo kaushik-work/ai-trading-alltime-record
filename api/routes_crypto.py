@@ -404,7 +404,7 @@ def crypto_signal_history(
     """Pred_pct samples for chart overlay. Combines two sources:
 
       1. Runner's in-memory _sig_history (every signal compute, all-day).
-      2. Mongo signal_log (only gate-crossings — historic, may be empty).
+      2. Mongo crypto_signal_log (only gate-crossings — historic, may be empty).
 
     The in-memory source ensures the chart has a visible line even when no
     signals have crossed the gate yet. Returns [{ts, pred_pct}] sorted asc.
@@ -433,7 +433,7 @@ def crypto_signal_history(
                 samples.append({"ts": b, "pred_pct": float(p)})
     except Exception:
         pass
-    # ── 2. Mongo signal_log (gate-crossings only) ───────────────────────────
+    # ── 2. Mongo crypto_signal_log (gate-crossings only) ────────────────────
     try:
         from core import mongo
         from datetime import timedelta
@@ -441,7 +441,7 @@ def crypto_signal_history(
         if db is not None:
             symbol = f"{asset}USD"
             cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
-            rows = list(db["signal_log"].find(
+            rows = list(db["crypto_signal_log"].find(
                 {"venue": "delta_india", "symbol": symbol, "ts": {"$gte": cutoff}},
                 projection={"_id": 0, "ts": 1, "pred_pct": 1},
             ).sort("ts", 1))

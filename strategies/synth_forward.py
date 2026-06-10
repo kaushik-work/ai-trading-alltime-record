@@ -111,6 +111,14 @@ class SynthForwardSignal(CryptoStrategy):
         # has a continuous line even when signals are well below the gate.
         self._record_pred_trace(pred * 100)
 
+        # Seed signal-persistence history with every raw pred (pre-gate), not
+        # just gate-crossings. Otherwise on_tick's gated-only append creates a
+        # chicken-and-egg: gate needs prior history, history needs prior gate
+        # to pass. Matches backtest semantics (see backtest_user_capital_june.py
+        # `sig_history.setdefault(...).append((t, p["pred"]))` — appended for
+        # every raw pred regardless of whether the signal fires).
+        self._record_sig_history(pred * 100)
+
         # gate
         if abs(pred) < ENTRY_PCT: return None
 

@@ -217,7 +217,18 @@ def fetch_active_options() -> pd.DataFrame:
     keep = [c for c in ["symbol", "product_id", "strike_price",
                         "contract_type", "mark_iv", "mark_price",
                         "spot_price", "oi", "oi_value_usd"] if c in df.columns]
-    return df[keep].copy()
+    df = df[keep].copy()
+    # /v2/tickers omits settlement_time, but downstream filters require it.
+    # Symbol encodes expiry as the trailing DDMMYY (e.g. C-BTC-60000-120626).
+    def _parse_expiry(sym: str):
+        try:
+            parts = sym.split("-")
+            dd, mm, yy = parts[-1][:2], parts[-1][2:4], parts[-1][4:6]
+            return pd.Timestamp(f"20{yy}-{mm}-{dd} 12:00:00", tz="UTC")
+        except Exception:
+            return pd.NaT
+    df["settlement_dt"] = df["symbol"].map(_parse_expiry)
+    return df
 
 
 # ── Persistence ───────────────────────────────────────────────────────────────

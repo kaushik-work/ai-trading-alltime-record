@@ -49,39 +49,85 @@ class CryptoStrategy:
     def __init__(self, broker=None):
         from core.brokers.delta_crypto import get_broker
         self.broker = broker or get_broker()
-        self._sig_history: list[tuple[float, float]] = []   # gated signals only
-        self._pred_trace: list[tuple[float, float]] = []    # raw pred, every tick
+        # _sig_history holds the EVERY-TICK pred trace used by the persistence
+        # gate. Backtest matches: appends every raw pred regardless of gate.
+        self._sig_history: list[tuple[float, float]] = []
+        self._pred_trace: list[tuple[float, float]] = []    # mirror for chart
         self._last_tick: float = 0.0
+        self._load_persisted_history()
+
+    def _load_persisted_history(self) -> None:
+        """Restore _sig_history from Mongo on startup so the persistence gate
+        works immediately after a container restart instead of needing a full
+        warm-up window. Reads the last 24h from `crypto_signal_history`."""
+        try:
+            from core import mongo
+            db = mongo.get_db()
+            if db is None: return
+            cutoff = time.time() - 24 * 3600
+            rows = list(db["crypto_signal_history"].find(
+                {"strategy": self.name, "ts": {"$gte": cutoff}},
+                projection={"_id": 0, "ts": 1, "pred_pct": 1},
+            ).sort("ts", 1))
+            for row in rows:
+                self._sig_history.append((float(row["ts"]), float(row["pred_pct"])))
+            if rows:
+                logger.info("%s: restored %d signal-history points from mongo",
+                            self.name, len(rows))
+        except Exception as e:
+            logger.warning("%s: signal history restore failed: %s", self.name, e)
+
+    def _persist_signal_point(self, ts: float, pred_pct: float) -> None:
+        """Append one pred sample to Mongo. Fire-and-forget — write failures
+        don't break the trade loop. TTL on insert ts keeps the collection
+        bounded (24h hot window is what the gate cares about)."""
+        try:
+            from core import mongo
+            db = mongo.get_db()
+            if db is None: return
+            db["crypto_signal_history"].insert_one({
+                "strategy": self.name,
+                "ts": ts,
+                "pred_pct": pred_pct,
+            })
+        except Exception:
+            pass  # silent — never block the trade path on logging
 
     def _record_pred_trace(self, pred_pct: float) -> None:
-        """Subclasses call from _compute_signal to record the raw (un-gated)
-        pred for charting. Distinct from _sig_history which only holds gated
-        signals used by the persistence check."""
+        """Record the raw (un-gated) pred for charting. Trimmed to 24h."""
         self._pred_trace.append((time.time(), pred_pct))
         cutoff = time.time() - 24 * 3600
         self._pred_trace = [(t, p) for t, p in self._pred_trace if t >= cutoff]
+
+    def _record_sig_history(self, pred_pct: float) -> None:
+        """Append a raw pred to the persistence-gate history AND mirror to
+        Mongo so it survives restarts. Trimmed to 24h."""
+        now = time.time()
+        self._sig_history.append((now, pred_pct))
+        cutoff = now - 24 * 3600
+        self._sig_history = [(t, p) for t, p in self._sig_history if t >= cutoff]
+        self._persist_signal_point(now, pred_pct)
 
     def _compute_signal(self) -> Optional[CryptoSignalDecision]:
         """Override: return SignalDecision or None."""
         raise NotImplementedError
 
     def on_tick(self) -> Optional[CryptoSignalDecision]:
-        """Called by scheduler. Caches signal history."""
+        """Called by scheduler. _sig_history is now seeded inside
+        _compute_signal via _record_sig_history (raw pred every call, not
+        gate-crossings only) — see backtest parity fix."""
         self._last_tick = time.time()
         try:
-            sig = self._compute_signal()
+            return self._compute_signal()
         except Exception as e:
             logger.error("%s on_tick error: %s", self.name, e)
             return None
-        if sig is not None:
-            self._sig_history.append((time.time(), sig.pred_pct))
-            # trim to last 24h
-            cutoff = time.time() - 24 * 3600
-            self._sig_history = [(t, p) for t, p in self._sig_history if t >= cutoff]
-        return sig
 
     def signal_now(self) -> Optional[CryptoSignalDecision]:
-        """Convenience: same as on_tick but doesn't update history."""
+        """Run _compute_signal once. The history side-effects (pred trace +
+        persistence history) happen inside _compute_signal itself, so this is
+        functionally the same as on_tick — both are kept for clarity at the
+        scheduler layer (on_tick = top-of-hour, signal_now = 5-min sample)."""
         try:
             return self._compute_signal()
         except Exception as e:

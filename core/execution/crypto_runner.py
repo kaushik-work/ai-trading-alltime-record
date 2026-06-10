@@ -120,7 +120,8 @@ def _log_signal(decision: CryptoSignalDecision) -> None:
         from core import mongo
         db = mongo.get_db()
         if db is None: return
-        db["signal_log"].insert_one({
+        # CLAUDE.md rule: crypto collections use crypto_ prefix.
+        db["crypto_signal_log"].insert_one({
             "ts": datetime.now(timezone.utc),
             "venue": "delta_india",
             "strategy": decision.name,
@@ -132,7 +133,7 @@ def _log_signal(decision: CryptoSignalDecision) -> None:
             "metadata": decision.metadata,
         })
     except Exception as e:
-        logger.warning("signal_log write failed: %s", e)
+        logger.warning("crypto_signal_log write failed: %s", e)
 
 
 def _write_trade_event(event: dict) -> None:
@@ -258,17 +259,20 @@ def _manage_shadow_positions(broker) -> None:
             logger.error("shadow manage error: %s", e)
 
 
-# ── main tick ─────────────────────────────────────────────────────────────────
-def tick_crypto_strategies() -> None:
-    """Single tick — runs entry logic + position manager."""
-    strategies = _get_strategies()
+# ── main ticks (split: 2s position-mgmt, hourly entry-decision) ───────────────
+# Backtest evaluates entries once per hour at HH:00 UTC against smoothed 1h
+# option marks. The previous every-2s entry tick caused live-vs-backtest
+# divergence: noisy real-time WS marks jitter pred above/below the 0.6% gate
+# many times per minute, while backtest sees one clean print. Splitting the
+# ticks closes that gap. Position management (stops/trails) still runs every
+# 2s so exits remain millisecond-fast.
+def tick_position_management() -> None:
+    """Runs every 2s — manages open + shadow positions + kill check + day reset.
+    Cheap (just reads marks). Does NOT consider new entries."""
+    strategies = _get_strategies()  # ensure instantiated for warm-up
     broker = get_crypto_broker()
     _reset_day_pnl_if_needed()
-
-    # Manage shadow positions every tick (cheap — just reads marks)
     _manage_shadow_positions(broker)
-
-    # First: manage all open positions
     to_remove = []
     for name, pos in list(_OPEN_POSITIONS.items()):
         try:
@@ -279,11 +283,32 @@ def tick_crypto_strategies() -> None:
     for name in to_remove:
         del _OPEN_POSITIONS[name]
 
+
+def tick_signal_sample() -> None:
+    """Runs every 5 minutes — samples raw pred into history WITHOUT placing
+    orders. Lets the persistence gate warm up between hourly entry decisions
+    so an hourly entry tick has ~12 prior samples of same-sign context in the
+    1h window, matching how backtest builds sig_history continuously."""
+    strategies = _get_strategies()
+    for name, strat in strategies.items():
+        try:
+            # signal_now() runs _compute_signal once, which records pred to
+            # both _pred_trace (charting) and _sig_history (persistence) via
+            # the base-class helpers. Returns None at the gate — we discard it.
+            strat.signal_now()
+        except Exception as e:
+            logger.error("%s signal sample error: %s", name, e)
+
+
+def tick_entry_decisions() -> None:
+    """Runs at top-of-hour — matches the backtest's hourly decision grid.
+    Same entry logic as before; position management runs in a separate job."""
+    strategies = _get_strategies()
+    broker = get_crypto_broker()
     if _check_kill_switch():
-        logger.warning("kill switch active — no new entries this tick")
+        logger.info("hourly entry tick: kill switch active — skipping entries")
         return
 
-    # Second: check for new entries
     for name, strat in strategies.items():
         if name in _OPEN_POSITIONS: continue
         try:
@@ -394,21 +419,38 @@ def init_crypto_runner(scheduler) -> None:
         return
     broker = get_crypto_broker()
     mode = broker.mode
-    logger.info("crypto runner enabled — mode=%s tick=%ds equity=$%.0f "
-                "kill=-%.1f%% max_contracts=%d",
+    logger.info("crypto runner enabled — mode=%s mgmt_tick=%ds sample=5m "
+                "entry=hourly@HH:00:30 UTC equity=$%.0f kill=-%.1f%% "
+                "max_contracts=%d",
                 mode, TICK_INTERVAL_SECONDS, BASE_EQUITY_USD,
                 DAILY_LOSS_KILL_PCT * 100, MAX_LIVE_CONTRACTS)
     try:
+        # 1) Position-management tick — every 2s. Cheap mark reads + stop/trail.
         scheduler.add_job(
-            tick_crypto_strategies, "interval",
+            tick_position_management, "interval",
             seconds=TICK_INTERVAL_SECONDS,
-            id="crypto_synth_forward_tick", replace_existing=True,
+            id="crypto_position_management_tick", replace_existing=True,
             next_run_time=datetime.now(timezone.utc),
             max_instances=1, coalesce=True,
         )
-        # Wallet heartbeat — log the live Delta wallet breakdown every 5 min
-        # so the user can verify the API key, asset detection, and INR/USDT
-        # split without needing the dashboard.
+        # 2) Signal-history warm-up — every 5 min. Records raw pred to
+        #    _sig_history so the hourly entry tick has prior samples to gate on.
+        scheduler.add_job(
+            tick_signal_sample, "interval",
+            minutes=5,
+            id="crypto_signal_sample_tick", replace_existing=True,
+            next_run_time=datetime.now(timezone.utc),
+            max_instances=1, coalesce=True,
+        )
+        # 3) Hourly entry decision — at HH:00:30 UTC (30s grace for WS marks
+        #    to settle after the hour boundary). Matches backtest grid exactly.
+        scheduler.add_job(
+            tick_entry_decisions, "cron",
+            minute=0, second=30, timezone="UTC",
+            id="crypto_hourly_entry_tick", replace_existing=True,
+            max_instances=1, coalesce=True,
+        )
+        # 4) Wallet heartbeat — every 5 min, log Delta wallet breakdown.
         scheduler.add_job(
             _wallet_heartbeat, "interval",
             minutes=5,
