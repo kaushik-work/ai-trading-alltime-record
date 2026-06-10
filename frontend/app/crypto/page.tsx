@@ -29,6 +29,8 @@ type SignalRow = {
 type PortfolioState = {
   wallet_usd: number | null;
   wallet_inr?: number | null;
+  wallet_pool_usd?: number | null;   // total tradeable pool (USD + INR-converted)
+  capital_use_pct?: number;           // fraction of pool deployed per cycle
   day_pnl: number;
   open_positions: number;
   killed?: boolean;
@@ -322,15 +324,17 @@ export default function CryptoHome() {
         {/* Portfolio ribbon */}
         <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-6">
           <StatCard
-            label="Delta Wallet"
-            value={portfolio?.wallet_usd != null
-              ? `$${portfolio.wallet_usd.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+            label="Tradeable Pool"
+            value={portfolio?.wallet_pool_usd != null
+              ? `$${portfolio.wallet_pool_usd.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
               : portfolio?.mode === "paper" ? "paper" : "—"}
-            accent={portfolio?.wallet_usd != null && portfolio.wallet_usd < 100 ? "red" : undefined}
+            accent={portfolio?.wallet_pool_usd != null && portfolio.wallet_pool_usd <= 0 ? "red" : undefined}
             footnote={
               portfolio?.wallet_inr && portfolio.wallet_inr > 0
-                ? `also ₹${portfolio.wallet_inr.toLocaleString("en-IN", { maximumFractionDigits: 0 })} INR — convert to USDT to trade`
-                : undefined
+                ? `incl. ₹${portfolio.wallet_inr.toLocaleString("en-IN", { maximumFractionDigits: 0 })} INR (auto-converted)`
+                : portfolio?.wallet_usd != null && portfolio.wallet_usd > 0
+                  ? `${(portfolio.capital_use_pct ?? 0.5) * 100}% deployed per cycle`
+                  : undefined
             }
           />
           <StatCard label="Today P&L" value={portfolio ? `${portfolio.day_pnl >= 0 ? "+" : ""}$${portfolio.day_pnl.toFixed(0)}` : "—"}

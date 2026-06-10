@@ -251,16 +251,23 @@ class DeltaCryptoBroker:
         return []
 
     def get_balance(self) -> Optional[float]:
-        """Free USD-equivalent balance in trading account, cached 15s.
+        """Total tradeable balance in USD-equivalents, cached 15s.
 
-        Delta India settles in USDT / USDC / USD depending on the account
-        type — sums whichever stablecoin balance exists (they're all
-        roughly $1). Prefers `available_balance` (already net of margin
-        locked in open positions) and falls back to `balance`. Returns
-        None in paper mode so the runner uses its env-configured equity.
+        Delta India auto-converts INR to USD at trade time for USDT-margined
+        perps -- so INR sitting in the wallet IS tradeable capital for our
+        purposes. We sum USD-stablecoins + (INR / USD_INR_RATE) so the
+        runner's sizing has the full pool to work with, and the user only
+        has to decide what percent of the pool to deploy.
+
+        Returns None in paper mode so the runner uses env equity unchanged.
         """
         wallet = self.get_wallet_breakdown()
-        return wallet.get("usd_total") if wallet else None
+        if not wallet:
+            return None
+        usd = float(wallet.get("usd_total", 0))
+        inr = float(wallet.get("inr_balance", 0))
+        rate = float(os.environ.get("USD_INR_RATE", "86"))
+        return usd + (inr / rate if rate > 0 else 0.0)
 
     def get_wallet_breakdown(self) -> dict:
         """Full wallet breakdown: USD-stablecoin total + INR balance.

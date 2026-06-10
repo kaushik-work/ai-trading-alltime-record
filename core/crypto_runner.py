@@ -51,9 +51,22 @@ logger = logging.getLogger(__name__)
 # any deploy was silently downgrading the bot to 60-min polling.
 TICK_INTERVAL_SECONDS = max(1, int(os.environ.get("CRYPTO_TICK_SECONDS", "2")))
 BASE_EQUITY_USD       = float(os.environ.get("CRYPTO_EQUITY_USD", "10000"))
-# Safety buffer applied to live wallet balance for sizing — leaves room
-# for fees, slippage, and partial margin requirements.
-WALLET_SAFETY_BUFFER  = float(os.environ.get("CRYPTO_WALLET_BUFFER", "0.95"))
+# Per-trade capital allocation as a fraction of the live wallet pool
+# (USD-stable + INR-converted). Tunable per asset; both default to 50%
+# of the pool per cycle. Up to MAX_CONCURRENT (=2) positions can be open
+# simultaneously so worst-case combined deployment = 100% of the pool.
+CAPITAL_USE_PCT       = float(os.environ.get("CRYPTO_CAPITAL_USE_PCT", "0.50"))
+BTC_CAPITAL_PCT       = float(os.environ.get("CRYPTO_BTC_CAPITAL_PCT", "0.50"))
+ETH_CAPITAL_PCT       = float(os.environ.get("CRYPTO_ETH_CAPITAL_PCT", "0.50"))
+
+
+def _capital_pct_for(strategy_name: str) -> float:
+    """Resolve per-strategy capital allocation. Strategy names are e.g.
+    'btc_synth_forward', 'eth_synth_forward' — we match by substring."""
+    n = strategy_name.lower()
+    if "btc" in n: return BTC_CAPITAL_PCT
+    if "eth" in n: return ETH_CAPITAL_PCT
+    return CAPITAL_USE_PCT
 DAILY_LOSS_KILL_PCT   = float(os.environ.get("CRYPTO_DAILY_LOSS_KILL_PCT", "0.05"))
 MAX_LIVE_CONTRACTS    = int(os.environ.get("CRYPTO_MAX_LIVE_CONTRACTS", "200"))
 MAX_HOLD_HOURS        = 72
@@ -309,12 +322,10 @@ def tick_crypto_strategies() -> None:
         mark = broker.get_perp_mark(decision.symbol)
         if mark is None or mark <= 0: continue
 
-        # Cap effective equity at real wallet balance (live mode only). Paper
-        # mode keeps BASE_EQUITY_USD so backtest-style sizing works without a
-        # funded account. With any non-zero USDT balance we attempt the order
-        # at wallet-scaled size and let Delta accept/reject -- the user wants
-        # visibility that the bot IS trying to trade, even on tiny accounts.
-        # Only when balance is truly zero / unreadable do we shadow-log instead.
+        # Sizing: take CAPITAL_USE_PCT of the live wallet pool (USD-stable +
+        # INR-converted) and let Delta handle the on-trade currency conversion.
+        # The user only needs to decide what fraction of capital to deploy via
+        # CRYPTO_CAPITAL_USE_PCT (default 50%). Paper mode keeps BASE_EQUITY.
         effective_equity = BASE_EQUITY_USD
         wallet_blocked = False
         if broker.mode == "live":
@@ -323,15 +334,13 @@ def tick_crypto_strategies() -> None:
                 wallet_blocked = True
                 shown = f"${balance:.2f}" if balance is not None else "unavailable"
                 logger.warning("%s: wallet %s — recording shadow trade only "
-                               "(fund Delta with USDT to enable live orders)",
+                               "(deposit INR/USDT to enable live orders)",
                                name, shown)
             else:
-                wallet_cap = balance * WALLET_SAFETY_BUFFER
-                if wallet_cap < BASE_EQUITY_USD:
-                    logger.info("%s: sizing capped by wallet $%.2f -> $%.0f "
-                                "(env cap $%.0f)",
-                                name, balance, wallet_cap, BASE_EQUITY_USD)
-                    effective_equity = wallet_cap
+                pct = _capital_pct_for(name)
+                effective_equity = balance * pct
+                logger.info("%s: sizing on wallet $%.2f × %.0f%% = $%.2f",
+                            name, balance, pct * 100, effective_equity)
 
         if wallet_blocked:
             import uuid
@@ -498,12 +507,16 @@ def _wallet_heartbeat() -> None:
     if not breakdown:
         logger.warning("wallet heartbeat: empty breakdown — auth or API issue?")
         return
-    usd = breakdown.get("usd_total", 0)
-    inr = breakdown.get("inr_balance", 0)
+    usd = float(breakdown.get("usd_total", 0))
+    inr = float(breakdown.get("inr_balance", 0))
+    rate = float(os.environ.get("USD_INR_RATE", "86"))
+    total_usd = usd + (inr / rate if rate > 0 else 0)
+    deploy = total_usd * CAPITAL_USE_PCT
     by_asset = breakdown.get("by_asset", {})
     logger.info(
-        "wallet heartbeat: tradeable USD=$%.2f  INR=%.2f  by_asset=%s",
-        usd, inr, by_asset,
+        "wallet heartbeat: pool=$%.2f (USD=$%.2f + ₹%.0f @ %s) "
+        "→ deploy %.0f%% = $%.2f per cycle  by_asset=%s",
+        total_usd, usd, inr, rate, CAPITAL_USE_PCT * 100, deploy, by_asset,
     )
 
 

@@ -164,37 +164,41 @@ def _futures_stats_for_dashboard() -> dict:
 
 
 def _portfolio_snapshot() -> dict:
-    """Live portfolio: real Delta wallet balance, day P&L, open positions.
-
-    Also surfaces INR balance separately so the dashboard can tell the user
-    'convert to USDT' instead of just showing dash when the only deposit is
-    in INR (which can't margin USDT-denominated perps directly).
+    """Live portfolio: total tradeable pool (USD + INR-converted), day P&L,
+    open positions, capital-use percent. INR auto-converts on Delta at trade
+    time so we report the combined pool size, not USD-only.
     """
     try:
-        from core.crypto_runner import get_state
+        import os as _os
+        from core.crypto_runner import get_state, CAPITAL_USE_PCT
         from core.brokers.delta_crypto import get_broker
         state = get_state()
         broker = get_broker()
         wallet_usd = None
         wallet_inr = None
+        wallet_pool = None
         if broker.mode == "live":
             try:
                 breakdown = broker.get_wallet_breakdown()
-                wallet_usd = breakdown.get("usd_total")
-                wallet_inr = breakdown.get("inr_balance")
+                wallet_usd = float(breakdown.get("usd_total") or 0)
+                wallet_inr = float(breakdown.get("inr_balance") or 0)
+                rate = float(_os.environ.get("USD_INR_RATE", "86"))
+                wallet_pool = wallet_usd + (wallet_inr / rate if rate > 0 else 0)
             except Exception:
-                wallet_usd = None
-                wallet_inr = None
+                wallet_usd = wallet_inr = wallet_pool = None
         return {
-            "wallet_usd":     float(wallet_usd) if wallet_usd else None,
-            "wallet_inr":     float(wallet_inr) if wallet_inr else None,
-            "day_pnl":        float(state.get("day_pnl_usd", 0) or 0),
-            "open_positions": len(state.get("open_positions", {})),
-            "killed":         bool(state.get("killed", False)),
-            "mode":           state.get("mode", "unknown"),
+            "wallet_usd":       wallet_usd,
+            "wallet_inr":       wallet_inr,
+            "wallet_pool_usd":  wallet_pool,         # USD + INR-converted
+            "capital_use_pct":  float(CAPITAL_USE_PCT),
+            "day_pnl":          float(state.get("day_pnl_usd", 0) or 0),
+            "open_positions":   len(state.get("open_positions", {})),
+            "killed":           bool(state.get("killed", False)),
+            "mode":             state.get("mode", "unknown"),
         }
     except Exception:
-        return {"wallet_usd": None, "wallet_inr": None, "day_pnl": 0.0,
+        return {"wallet_usd": None, "wallet_inr": None, "wallet_pool_usd": None,
+                "capital_use_pct": 0.5, "day_pnl": 0.0,
                 "open_positions": 0, "killed": False, "mode": "unknown"}
 
 
