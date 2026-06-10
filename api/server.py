@@ -47,13 +47,11 @@ async def lifespan(app: FastAPI):
     # APScheduler lives inside BotRunner — we still use it as the host for the
     # crypto runner's tick jobs. NSE jobs (option-chain refresh + journals)
     # have been gutted; BotRunner just provides the scheduler now.
-    from core.memory import init_db
     from core.bot_runner import get_runner
     from core.execution.crypto_runner import init_crypto_runner
     from core.ws.delta_stream import start_stream, stop_stream
     from core.risk_management import ENABLE_CRYPTO_RUNNER
 
-    init_db()
     runner = get_runner()
     runner.start()
     # Delta WS stream feeds the crypto runner with real-time perp + option

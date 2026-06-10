@@ -20,8 +20,6 @@ import time
 from dataclasses import dataclass, field
 from typing import Optional
 
-import config
-
 logger = logging.getLogger(__name__)
 
 
