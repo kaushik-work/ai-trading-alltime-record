@@ -31,7 +31,7 @@ export default function Header(_props: Props) {
       <div className="flex items-center gap-2 md:gap-3">
         <button
           onClick={logout}
-          className="text-sm font-semibold px-3 md:px-4 py-2 border border-red-200 text-red-600 hover:bg-red-50 rounded-lg transition-colors bg-white flex items-center gap-1.5"
+          className="text-sm font-semibold px-3 md:px-4 py-2 border border-gray-200 text-gray-700 hover:bg-gray-50 hover:border-gray-300 rounded-lg transition-colors bg-white flex items-center gap-1.5"
           title="Sign out"
         >
           <span>🚪</span>
