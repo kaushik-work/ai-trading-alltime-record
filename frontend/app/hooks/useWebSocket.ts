@@ -2,6 +2,10 @@
 import { useEffect, useRef, useState } from "react";
 
 const CACHE_KEY = "aq_snapshot";
+// Hard deadline for the first WS open on page load. Past this we treat the
+// session as dead (expired token, server unreachable, cookie wiped, etc.)
+// and send the user to login rather than letting them stare at a stale cache.
+const FIRST_OPEN_DEADLINE_MS = 8000;
 
 export function useWebSocket(url: string) {
   const [data, setData] = useState<any>(() => {
@@ -11,6 +15,12 @@ export function useWebSocket(url: string) {
   const ws = useRef<WebSocket | null>(null);
   const retry = useRef<ReturnType<typeof setTimeout> | null>(null);
   const poll = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Tracks whether the WS has ever reached OPEN state since mount. Mid-session
+  // disconnects (after first open) follow the normal retry path. Only the
+  // FIRST connect attempt within FIRST_OPEN_DEADLINE_MS is treated as a session
+  // health check.
+  const hasEverOpened = useRef(false);
+  const firstOpenDeadline = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   function logout() {
     localStorage.removeItem("aq_token");
@@ -44,6 +54,13 @@ export function useWebSocket(url: string) {
     ws.current.onopen = () => {
       setConnected(true);
       wsFailCount.current = 0;
+      hasEverOpened.current = true;
+      // First open succeeded — cancel the page-load deadline so transient
+      // disconnects later don't trigger an unwanted logout.
+      if (firstOpenDeadline.current) {
+        clearTimeout(firstOpenDeadline.current);
+        firstOpenDeadline.current = null;
+      }
     };
 
     ws.current.onmessage = (e) => {
@@ -69,14 +86,30 @@ export function useWebSocket(url: string) {
 
   useEffect(() => {
     if (!url) return;
+    // No token in localStorage? Don't even attempt — go straight to login.
+    // Saves an unnecessary WS handshake + 8s of stale-cache UI.
+    if (!localStorage.getItem("aq_token")) { logout(); return; }
+
     connect();
     fetchSnapshot();
+    // First-open watchdog: if the WS hasn't reached OPEN within the deadline,
+    // the session is effectively dead (expired token, server unreachable,
+    // cookie cleared in another tab, etc.). Logout instead of letting the
+    // user sit on cached data that may be hours stale.
+    firstOpenDeadline.current = setTimeout(() => {
+      if (!hasEverOpened.current) {
+        console.warn(`Dashboard: WS failed to open within ${FIRST_OPEN_DEADLINE_MS}ms — session likely expired, redirecting to login`);
+        logout();
+      }
+    }, FIRST_OPEN_DEADLINE_MS);
+
     poll.current = setInterval(() => {
       if (!ws.current || ws.current.readyState !== WebSocket.OPEN) {
         fetchSnapshot();
       }
     }, 15000);
     return () => {
+      if (firstOpenDeadline.current) clearTimeout(firstOpenDeadline.current);
       if (retry.current) clearTimeout(retry.current);
       if (poll.current) clearInterval(poll.current);
       ws.current?.close();
