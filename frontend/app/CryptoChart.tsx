@@ -35,8 +35,17 @@ type Props = {
   livePrices?: { BTC?: number | null; ETH?: number | null };
 };
 
-const RESOLUTION = "5m";
-const LOOKBACK_HOURS = 24;
+// Timeframe → (resolution sent to Delta, lookback hours). Tuned to keep
+// the candle count visible without going off the right edge.
+const TIMEFRAMES = {
+  "5m":  { resolution: "5m",  hours:   24, label: "last 24h"   },
+  "15m": { resolution: "15m", hours:   72, label: "last 3d"    },
+  "1h":  { resolution: "1h",  hours:  168, label: "last 7d"    },
+  "4h":  { resolution: "4h",  hours:  720, label: "last 30d"   },
+  "1d":  { resolution: "1d",  hours: 2160, label: "last 90d"   },
+} as const;
+type Timeframe = keyof typeof TIMEFRAMES;
+const DEFAULT_TF: Timeframe = "5m";
 
 const STRUCTURE_COLORS: Record<string, string> = {
   uptrend:   "#22c55e",
@@ -54,6 +63,7 @@ const POSITION_LABELS: Record<string, { label: string; color: string }> = {
 
 export default function CryptoChart({ livePrices }: Props) {
   const [asset, setAsset] = useState<"BTC" | "ETH">("BTC");
+  const [timeframe, setTimeframe] = useState<Timeframe>(DEFAULT_TF);
   const containerRef   = useRef<HTMLDivElement>(null);
   const chartRef       = useRef<any>(null);
   const candleSeriesRef = useRef<any>(null);
@@ -67,14 +77,15 @@ export default function CryptoChart({ livePrices }: Props) {
   // ETH candles to invisibility.
   const livePrice = livePrices?.[asset] ?? undefined;
 
-  // Fetch on asset change + every 30s
+  // Fetch on asset / timeframe change + every 30s
   useEffect(() => {
     let cancelled = false;
+    const tf = TIMEFRAMES[timeframe];
     const load = (initial: boolean) => {
       if (initial) { setLoading(true); setErr(null); }
       const token = localStorage.getItem("aq_token");
       const headers = { Authorization: `Bearer ${token}` };
-      fetch(`${API_URL}/api/crypto/candles?asset=${asset}&resolution=${RESOLUTION}&hours=${LOOKBACK_HOURS}`, { headers })
+      fetch(`${API_URL}/api/crypto/candles?asset=${asset}&resolution=${tf.resolution}&hours=${tf.hours}`, { headers })
         .then(r => r.json())
         .then((d: ChartData) => {
           if (cancelled) return;
@@ -90,7 +101,7 @@ export default function CryptoChart({ livePrices }: Props) {
     load(true);
     const iv = setInterval(() => load(false), 30_000);
     return () => { cancelled = true; clearInterval(iv); };
-  }, [asset]);
+  }, [asset, timeframe]);
 
   // Build/rebuild chart when data arrives
   useEffect(() => {
@@ -334,7 +345,9 @@ export default function CryptoChart({ livePrices }: Props) {
             <span className={asset === "BTC" ? "text-[#f7931a]" : "text-[#627eea]"}>
               {asset}USD
             </span>
-            <span className="text-gray-500 font-normal ml-2 text-xs">5m · last 24h</span>
+            <span className="text-gray-500 font-normal ml-2 text-xs">
+              {timeframe} · {TIMEFRAMES[timeframe].label}
+            </span>
           </h3>
           {livePrice && (
             <span className="text-xs text-gray-400 font-mono">
@@ -353,26 +366,45 @@ export default function CryptoChart({ livePrices }: Props) {
             </span>
           )}
         </div>
-        <div className="flex gap-1">
-          {(["BTC", "ETH"] as const).map(a => (
-            <button
-              key={a}
-              onClick={() => setAsset(a)}
-              className={`px-3 py-1 text-xs rounded ${
-                asset === a
-                  ? a === "BTC" ? "bg-[#f7931a]/20 text-[#f7931a]" : "bg-[#627eea]/20 text-[#627eea]"
-                  : "text-gray-500 hover:text-white"
-              }`}
-            >
-              {a}
-            </button>
-          ))}
+        <div className="flex items-center gap-3">
+          {/* Timeframe selector */}
+          <div className="flex gap-0.5 bg-[#1e1e30]/40 rounded px-0.5 py-0.5">
+            {(Object.keys(TIMEFRAMES) as Timeframe[]).map(tf => (
+              <button
+                key={tf}
+                onClick={() => setTimeframe(tf)}
+                className={`px-2 py-0.5 text-[10px] rounded font-medium transition-colors ${
+                  timeframe === tf
+                    ? "bg-white/10 text-white"
+                    : "text-gray-500 hover:text-gray-300"
+                }`}
+              >
+                {tf}
+              </button>
+            ))}
+          </div>
+          {/* Asset toggle */}
+          <div className="flex gap-1">
+            {(["BTC", "ETH"] as const).map(a => (
+              <button
+                key={a}
+                onClick={() => setAsset(a)}
+                className={`px-3 py-1 text-xs rounded ${
+                  asset === a
+                    ? a === "BTC" ? "bg-[#f7931a]/20 text-[#f7931a]" : "bg-[#627eea]/20 text-[#627eea]"
+                    : "text-gray-500 hover:text-white"
+                }`}
+              >
+                {a}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
       {loading && (
         <div className="h-[520px] flex items-center justify-center text-gray-500 text-sm">
-          Loading {asset} chart…
+          Loading {asset} {timeframe} chart…
         </div>
       )}
       {err && !loading && (
