@@ -70,8 +70,12 @@ def load_data(subdir: str, perp_symbol: str):
     perp["timestamp"] = pd.to_datetime(perp["time"], unit="s", utc=True)
     perp = perp.set_index("timestamp")["close"].sort_index()
     marks, rows = {}, []
-    for p in sorted((base / "options").glob("*_mark_1h.csv")):
-        sym = p.name.replace("_mark_1h.csv", "")
+    # Option marks are now stored at 1m resolution (Delta's 1h archive is
+    # broken — see fetch_delta_history.py OPT_RESOLUTION comment). The
+    # backtest only needs HH:00:00 UTC samples for its hourly decisions,
+    # so we look up exactly those rows from the 1m series.
+    for p in sorted((base / "options").glob("*_mark_1m.csv")):
+        sym = p.name.replace("_mark_1m.csv", "")
         df = pd.read_csv(p)
         if df.empty: continue
         df["timestamp"] = pd.to_datetime(df["time"], unit="s", utc=True)

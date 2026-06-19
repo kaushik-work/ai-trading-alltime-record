@@ -83,7 +83,12 @@ CANDLE_LIMIT  = 2000          # API page size; one call returns up to this many 
 REQ_PAUSE     = 0.05          # seconds between API calls (per-thread; total throughput managed by WORKER_COUNT)
 WORKER_COUNT  = 8             # concurrent threads for per-option pulls
 
-OPT_RESOLUTION  = "1h"        # 1h is plenty for vol-premium / gamma-scalp strategies
+# IMPORTANT: Delta's 1h MARK candles for options are CORRUPTED — the close
+# values don't match the 1m close at the same timestamp. Diagnosed Jun 19
+# 2026: a $1,080 1m mark showed up as $1,846 in 1h. All prior backtests
+# using 1h option marks produced phantom dislocations. Force 1m and let
+# the backtest resample if it needs hourly decisions.
+OPT_RESOLUTION  = "1m"        # WAS "1h" — Delta's 1h archive is broken for options
 PERP_RESOLUTION = "1m"
 MONEYNESS_BAND  = 0.05        # keep strikes within ±5% of spot-at-settlement
 WEEKLY_PLUS_ONLY = True       # drop daily-expiry contracts (Mon–Thu); keep Fri + month-end
