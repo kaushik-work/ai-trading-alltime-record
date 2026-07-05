@@ -19,7 +19,7 @@ type KillResult = {
 type SignalRow = {
   underlying: string;
   spot: number;
-  pred_pct: number;
+  width_pct: number;
   r_high: number;
   r_low: number;
   trend: "bullish" | "bearish" | "neutral";
@@ -70,7 +70,7 @@ type ShadowTrade = {
   symbol: string;
   side: string;
   entry_px: number;
-  pred_pct: number;
+  width_pct: number;
   size_mult: number;
   status: "open" | "closed";
   peak_pct: number;
@@ -198,7 +198,7 @@ export default function CryptoHome() {
 
   // Max 4h S/R range width across assets — used for the strip stat
   const maxRangePct = signals.length
-    ? Math.max(...signals.map(s => Math.abs(s.pred_pct)))
+    ? Math.max(...signals.map(s => Math.abs(s.width_pct)))
     : 0;
 
   const fmtUsd = (v?: number | null) => {
@@ -412,7 +412,7 @@ export default function CryptoHome() {
               <p className="text-[11px] text-gray-400 font-mono">
                 latest: {lastShadow.symbol} {lastShadow.side.toUpperCase()}
                 {" @ "}${lastShadow.entry_px.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-                {" · pred "}{lastShadow.pred_pct >= 0 ? "+" : ""}{lastShadow.pred_pct.toFixed(3)}%
+                {" · width "}{lastShadow.width_pct >= 0 ? "+" : ""}{lastShadow.width_pct.toFixed(3)}%
                 {" · size "}{lastShadow.size_mult.toFixed(1)}×
                 {lastShadow.status === "closed"
                   ? ` → closed ${lastShadow.exit_reason} ${(lastShadow.pnl_pct ?? 0) >= 0 ? "+" : ""}${(lastShadow.pnl_pct ?? 0).toFixed(2)}%`
@@ -441,7 +441,7 @@ export default function CryptoHome() {
           </div>
         </div>
 
-        {/* Live BTC/ETH chart — Signal Radar below covers the pred% per expiry */}
+        {/* Live BTC/ETH chart — Signal Radar below covers 4h S/R width + retest state */}
         <div className="mb-6">
           <CryptoChart livePrices={{ BTC: liveBtc, ETH: liveEth }} />
         </div>
@@ -487,7 +487,7 @@ export default function CryptoHome() {
                         {s.underlying}
                       </td>
                       <td className="text-right px-2">${s.spot.toLocaleString()}</td>
-                      <td className="text-right px-2 font-mono">{s.pred_pct.toFixed(3)}%</td>
+                      <td className="text-right px-2 font-mono">{s.width_pct.toFixed(3)}%</td>
                       <td className={`text-right px-2 ${
                         s.trend === "bullish" ? "text-green-400" :
                         s.trend === "bearish" ? "text-red-400" : "text-gray-400"

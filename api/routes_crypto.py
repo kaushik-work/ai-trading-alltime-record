@@ -8,7 +8,7 @@ on the hot path). Routes:
   GET  /api/crypto/portfolio        — equity, day P&L, open positions
   GET  /api/crypto/state            — runner state (kill switch, open positions detail)
   GET  /api/crypto/candles          — historical OHLCV for chart (Delta REST + 60s cache)
-  GET  /api/crypto/signal-history   — recent pred_pct samples for chart overlay
+  GET  /api/crypto/signal-history   — recent width_pct samples for chart overlay
   POST /api/crypto/kill             — emergency stop
 """
 
@@ -53,7 +53,7 @@ def _signals_from_broker() -> tuple[list, dict]:
         signals.append({
             "underlying": state.get("underlying") or sym.replace("USD", ""),
             "spot": spot,
-            "pred_pct": float(state.get("width_pct", 0) or 0),
+            "width_pct": float(state.get("width_pct", 0) or 0),
             "r_high": float(state.get("r_high", 0) or 0),
             "r_low": float(state.get("r_low", 0) or 0),
             "trend": state.get("trend", "unknown"),
@@ -358,13 +358,13 @@ def crypto_signal_history(
     asset: str = Query("BTC", pattern="^(BTC|ETH)$"),
     hours: int = Query(24, ge=1, le=168),
 ):
-    """Pred_pct samples for chart overlay. Combines two sources:
+    """Width_pct samples for chart overlay. Combines two sources:
 
       1. Runner's in-memory _sig_history (every signal compute, all-day).
       2. Mongo crypto_signal_log (only gate-crossings — historic, may be empty).
 
     The in-memory source ensures the chart has a visible line even when no
-    signals have crossed the gate yet. Returns [{ts, pred_pct}] sorted asc.
+    signals have crossed the gate yet. Returns [{ts, width_pct}] sorted asc.
     """
     samples: list[dict] = []
     # ── 1. in-memory _pred_trace from runner (every tick, ungated) ──────────
@@ -387,7 +387,7 @@ def crypto_signal_history(
                 b = int(t) - (int(t) % 300)
                 buckets[b] = (t, p)
             for b, (t, p) in sorted(buckets.items()):
-                samples.append({"ts": b, "pred_pct": float(p)})
+                samples.append({"ts": b, "width_pct": float(p)})
     except Exception:
         pass
     # ── 2. Mongo crypto_signal_log (gate-crossings only) ────────────────────
@@ -406,7 +406,7 @@ def crypto_signal_history(
                 ts = r.get("ts")
                 if not hasattr(ts, "timestamp"): continue
                 samples.append({"ts": int(ts.timestamp()),
-                                "pred_pct": float(r.get("pred_pct") or 0)})
+                                "width_pct": float(r.get("pred_pct") or 0)})
     except Exception:
         pass
     samples.sort(key=lambda s: s["ts"])

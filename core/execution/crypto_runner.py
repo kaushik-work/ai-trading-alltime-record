@@ -406,7 +406,7 @@ def tick_entry_decisions() -> None:
                 "symbol":       decision.symbol,
                 "side":         decision.side,
                 "entry_px":     mark,
-                "pred_pct":     decision.pred_pct,
+                "width_pct":    decision.pred_pct,
                 "size_mult":    decision.size_mult,
                 "status":       "open",
                 "peak_pct":     0.0,
