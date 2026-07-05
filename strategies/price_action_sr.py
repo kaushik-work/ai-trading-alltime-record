@@ -219,10 +219,6 @@ class PriceActionSRSignal(CryptoStrategy):
         r_high = highs[-LOOKBACK_CANDLES:].max()
         r_low = lows[-LOOKBACK_CANDLES:].min()
         width_pct = (r_high - r_low) / close
-        if width_pct > RANGE_PCT_MAX:
-            return None
-        if RANGE_PCT_MIN > 0 and width_pct < RANGE_PCT_MIN:
-            return None
 
         # daily trend via long-term moving average
         trend_closes = closes[-TREND_CANDLES:]
@@ -240,14 +236,12 @@ class PriceActionSRSignal(CryptoStrategy):
 
         body = abs(closes[idx] - opens[idx])
         rng = highs[idx] - lows[idx]
-        if rng <= 0:
-            return None
         green = closes[idx] > opens[idx]
         red = closes[idx] < opens[idx]
-        close_pos = (closes[idx] - lows[idx]) / rng
+        close_pos = (closes[idx] - lows[idx]) / rng if rng > 0 else 0.5
         upper_wick = highs[idx] - max(closes[idx], opens[idx])
         lower_wick = min(closes[idx], opens[idx]) - lows[idx]
-        wick_pct = (upper_wick + lower_wick) / rng
+        wick_pct = (upper_wick + lower_wick) / rng if rng > 0 else 0.0
 
         avg_body = np.mean([abs(c - o) for c, o in zip(closes[-LOOKBACK_CANDLES:], opens[-LOOKBACK_CANDLES:])])
 
@@ -366,15 +360,20 @@ class PriceActionSRSignal(CryptoStrategy):
             "tp_pct": float(sl_pct * rr_ratio),
         }
 
+        # market-condition / data-quality gates (applied AFTER dashboard snapshot)
+        width_ok = (width_pct <= RANGE_PCT_MAX and
+                    (RANGE_PCT_MIN <= 0 or width_pct >= RANGE_PCT_MIN) and
+                    rng > 0)
+
         side = None
-        if (allow_long and retest_long_ok and strong_green and not in_cooldown and
-                time_ok and not block_long):
+        if (width_ok and allow_long and retest_long_ok and strong_green and
+                not in_cooldown and time_ok and not block_long):
             side = "buy"
             sl = lows[idx] * 0.9998
             sl_dist = max(sl_pct, (close - sl) / close)
             tp = close * (1 + sl_dist * rr_ratio)
-        elif (allow_short and retest_short_ok and strong_red and not in_cooldown and
-                time_ok and not block_short):
+        elif (width_ok and allow_short and retest_short_ok and strong_red and
+                not in_cooldown and time_ok and not block_short):
             side = "sell"
             sl = highs[idx] * 1.0002
             sl_dist = max(sl_pct, (sl - close) / close)
