@@ -1,117 +1,467 @@
 # Agent Guide — AI Trading All-Time Record
 
-> **State as of 2026-06-10:** crypto-only live trading. Legacy NSE/NIFTY
-> trading code has been retired. NSE option-chain collectors are still
-> active for research data but they don't touch the trading API.
+> **State as of 2026-07-04:** crypto-only live trading on Delta Exchange India.
+> Legacy NSE/NIFTY trading code has been retired. NSE option-chain collectors
+> are still active for research data but do not touch the trading API.
 
-## Architecture
+This guide is written for AI coding agents who need to understand, modify, or
+extend the project. Read this file, `README.md`, and `core/risk_management.py`
+first — together they form the project contract.
 
-Production crypto-futures bot on **Delta Exchange India** + NSE option-chain
-**data collectors** running on a single droplet via Docker Compose.
+---
 
-**Stack:** Python 3.12, FastAPI, Next.js (Vercel), MongoDB Atlas, APScheduler,
-Delta India WebSocket + REST.
+## 1. Project overview
 
-## Live strategy: Synthetic Forward v5.5
+This is a production crypto-futures trading bot that trades **BTCUSD** and
+**ETHUSD** perpetual contracts on **Delta Exchange India**. It uses a pure
+price-action strategy called **Price-action S/R retest**, decoded from a Hindi
+livestream:
 
-```
-synthetic_forward = call_price − put_price + strike
-dislocation       = (synthetic_forward − spot) / spot
-```
+1. Daily trend filter (24h moving average) — only trade in the higher-timeframe
+   direction.
+2. Enter only at 4-hour S/R range edges; skip mid-range setups.
+3. Require the candle wick to actually touch or pierce the S/R level
+   (`wick_touch` retest), plus a strong reversal body (close in the top/bottom
+   30% of the range).
+4. Tiny SL, big target (asset-specific: BTC 0.4% / 1:5, ETH 0.5% / 1:7).
+5. Trail stop to breakeven at +1R.
 
-Take the median dislocation across ≥3 near-money strikes (±5% of spot) on
-expiries 6–72h out. If `|median| ≥ 0.6%` for 1 continuous hour, fire a
-perp trade in that direction.
+A separate Next.js dashboard visualizes live signals, positions, charts, and a
+manual kill switch. NSE option-chain collectors run only as data harvesters for
+research/backtest data; they do not trade.
 
-| Dial | Value | File |
-|---|---|---|
-| Entry gate | 0.6% | `strategies/synth_forward.py:33` |
-| Persistence | 1h | `synth_forward.py:34` |
-| Min strikes | 3 | `synth_forward.py:35` |
-| TTE window | 6h–72h | `synth_forward.py:36-37` |
-| Moneyness | ±5% | `synth_forward.py:38` |
-| Size mult | 0.5×–3× by signal strength | `synth_forward.py:39-41` |
-| Stop loss | 1.5% | `crypto_base.py` `CryptoSignalDecision` defaults |
-| Partial TP | half at +1% | same |
-| Trail | give back ≤0.25% after +0.5% peak | same |
-| Max hold | 72h | `risk_management.py:77` |
-| Leverage | 3× | `risk_management.py:66` |
-| Capital per cycle | 50% of pool × size_mult | `risk_management.py:60-62` |
-| Daily kill | -5% of base equity | `risk_management.py:69` |
+Backtest (Apr–Jun 2026, BTC + ETH, 1m data, wick_touch + block-after-loss 180 min):
+- **BTCUSD** SL 0.4% / 1:5: **+15.63%**, PF 1.80, 125 trades, 47.2% WR, MaxDD 1.98%.
+- **ETHUSD** SL 0.5% / 1:7: **+13.19%**, PF 1.80, 84 trades, 44.0% WR, MaxDD 2.46%.
 
-Validated June 2026 (9 days, ₹40k start, shared pool): **+28.9% net**, WR ~94%.
+---
 
-## Trading surface
+## 2. Technology stack
 
-| Surface | Status |
+| Layer | Technology |
 |---|---|
-| `BTCUSD` perpetual on Delta India | LIVE |
-| `ETHUSD` perpetual on Delta India | LIVE |
-| `XAUTUSD` | architecture supports, not registered |
-| NSE NIFTY / BANKNIFTY / SENSEX trading | RETIRED |
+| Runtime | Python 3.12 (Docker base `python:3.12-slim`) |
+| API / bot | FastAPI, Uvicorn, APScheduler, `websocket-client` |
+| Frontend | Next.js 14.2.3 (App Router), React 18, TypeScript 5, Tailwind CSS 3.4 |
+| Charts | `lightweight-charts` (dashboard); `recharts` is installed but unused |
+| Data stores | MongoDB Atlas (mirror), local CSV (`db/oi_snapshots/`), local logs |
+| Exchange | Delta Exchange India (HMAC REST + persistent WebSocket) |
+| NSE data | Angel One SmartAPI (`data/angel_fetcher.py`) |
+| Infra | Docker Compose on a DigitalOcean droplet; nginx reverse proxy with Let's Encrypt; Next.js dashboard hosted on Vercel |
 
-## File map (post-cleanup)
+Key Python dependencies are in `requirements.txt`:
+`fastapi`, `uvicorn[standard]`, `apscheduler`, `websocket-client`, `pymongo`,
+`pandas`, `numpy`, `scipy`, `requests`, `python-jose[cryptography]`,
+`python-multipart`, `python-dotenv`, `cryptography`, `smartapi-python`,
+`logzero`, `pyotp`, `anthropic`, `streamlit`, `mplfinance`.
+
+---
+
+## 3. Repository layout
 
 ```
-api/
-  server.py                Auth, health, /ws/crypto, lifespan startup
-  routes_crypto.py         /api/crypto/* (signals, snapshot, kill, candles)
-  auth.py                  JWT helpers
-core/
-  bot_runner.py            APScheduler host (minimal stub)
-  brokers/delta_crypto.py  HMAC REST + stream-first reads + wallet
-  execution/crypto_runner.py  Tick loop, position mgmt, shadow trades, kill
-  ws/delta_stream.py       Persistent Delta WS client
-  risk_management.py       Production dials (single source of truth)
-  memory.py                SQLite trade memory
-  mongo.py                 Mongo connection + collections
-  ipc.py                   NSE market-holiday helper (collectors use it)
-  utils.py                 now_ist() etc
-strategies/
-  crypto_base.py           CryptoStrategy abstract class + sig_history
-  synth_forward.py         v5.5 production dials, _compute_signal
-scripts/
-  collect_option_snapshots.py   NSE 5-min OI collector (NIFTY/BANKNIFTY/etc)
-data/
-  angel_fetcher.py         Angel One SmartAPI helper (collectors only)
-delta_exchange/            Backtest sandbox — historical CSVs + scripts
-frontend/app/
-  page.tsx                 Crypto dashboard (lives at /)
-  CryptoChart.tsx          Lightweight-charts wrapper
-  components/Header.tsx    Logo + Logout only
-  login/page.tsx           Sign-in → / on success
+.
+├── api/                          FastAPI application
+│   ├── server.py                 App lifespan, CORS, JWT login, /ws/crypto
+│   ├── routes_crypto.py          /api/crypto/* REST routes
+│   ├── auth.py                   JWT helpers (DASHBOARD_SECRET / DASHBOARD_PASS)
+│   └── broadcaster.py            Generic WS connection manager (mostly unused)
+├── core/                         Trading engine
+│   ├── bot_runner.py             APScheduler host
+│   ├── brokers/delta_crypto.py   Delta REST broker + WS-first read caches
+│   ├── execution/crypto_runner.py Tick loop, entry/exit, kill switch, shadow trades
+│   ├── ws/delta_stream.py        Persistent Delta WebSocket client
+│   ├── risk_management.py        Production risk dials (single source of truth)
+│   ├── mongo.py                  MongoDB connection + collection names
+│   ├── ipc.py                    NSE market-holiday helper (collectors only)
+│   ├── utils.py                  now_ist() / today_ist()
+│   └── sr_levels.py              Supply/demand zone math for chart overlays
+├── strategies/                   Signal generation
+│   ├── crypto_base.py            CryptoStrategy abstract base + decision dataclass
+│   └── price_action_sr.py        Price-action S/R retest strategy (live)
+├── data/                         NSE data helpers
+│   └── angel_fetcher.py          Angel One SmartAPI client
+├── scripts/                      Stand-alone utilities
+│   └── collect_option_snapshots.py  NSE 5-min option-chain collector
+├── delta_exchange/               Backtest sandbox (own .venv + CSV data)
+│   ├── backtest_engine.py
+│   ├── backtest_price_action_sweep.py
+│   └── ...                       Other backtest / diagnostic scripts
+├── frontend/                     Next.js dashboard
+│   ├── app/page.tsx              Main dashboard
+│   ├── app/CryptoChart.tsx       Lightweight-charts wrapper
+│   ├── app/login/page.tsx        JWT login
+│   ├── app/components/Header.tsx Logo + logout
+│   └── package.json
+├── config.py                     NSE collector credentials + market holidays
+├── config/assets/                Stale/legacy YAML files (NOT loaded by crypto bot)
+├── docker-compose.yml            api + optional NSE collector services
+├── Dockerfile                    Python 3.12 slim image
+├── nginx/nginx.conf              Production reverse proxy
+├── deploy.sh                     Manual droplet deploy script
+├── .github/workflows/deploy.yml  GitHub Actions → droplet deploy
+└── docs/                         STRATEGY.md / PDF builder
 ```
 
-## Mongo collections
+Note: `core/memory.py` is referenced in older docs but does **not** exist in the
+current codebase. `config/assets/*.yml` is also stale and not loaded by the live
+bot.
+
+---
+
+## 4. Build, run, and test commands
+
+### Production crypto bot
+
+```bash
+# Start only the API / trading bot
+docker compose up -d
+
+# View logs
+docker compose logs -f api
+```
+
+### With NSE data collectors
+
+```bash
+docker compose --profile nse up -d
+```
+
+Collectors run only between **03:30–10:05 UTC** (09:00–15:35 IST) and sleep
+otherwise. They restart daily via `unless-stopped`.
+
+### Manual droplet deploy
+
+```bash
+./deploy.sh
+```
+
+This pulls, prunes old images/containers, rebuilds, and recreates containers.
+
+### Local backend (not recommended for live trading)
+
+```bash
+python -m venv .venv
+pip install -r requirements.txt
+uvicorn api.server:app --host 0.0.0.0 --port 8000 --reload
+```
+
+`core/bot_runner.py` refuses to start APScheduler on non-Linux unless you set
+`ALLOW_LOCAL_SCHEDULER=1`.
+
+### Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev      # localhost:3000
+npm run build    # production build
+npm run start
+```
+
+`NEXT_PUBLIC_API_URL` defaults to `http://localhost:8000`. On Vercel it points
+at `https://thegaintcompany.com`.
+
+### Backtests
+
+```bash
+cd delta_exchange
+# Use the sandbox venv
+./.venv/Scripts/python.exe backtest_price_action_sweep.py
+# or
+python backtest_engine.py 2026-06-10
+```
+
+### Testing
+
+There is **no automated test suite** in this repository. Validation is done
+through backtests in `delta_exchange/` and live shadow/paper trading. If you add
+logic, add backtest scripts or dry-run checks rather than unit tests unless the
+team agrees on a testing framework.
+
+---
+
+## 5. Runtime architecture
+
+```
+┌──────────────────────────────────────────────────────────────────────┐
+│  Vercel (Next.js dashboard)                                          │
+│  NEXT_PUBLIC_API_URL → https://thegaintcompany.com/api/*            │
+└──────────────────────────────────┬───────────────────────────────────┘
+                                   │
+                          nginx (443 ssl, /ws upgrade)
+                                   │
+┌──────────────────────────────────▼───────────────────────────────────┐
+│  Docker host (DigitalOcean droplet)                                  │
+│  ┌─────────────┐  ┌───────────────────────────────────────────────┐  │
+│  │ nginx       │  │ api container (FastAPI + crypto bot)          │  │
+│  │ :80 → :443  │  │  • core/ws/delta_stream ← 224 symbols WS      │  │
+│  │ /api → :8000│  │  • strategies/price_action_sr.py (live signal) │  │
+│  │ /ws  → :8000│  │  • core/execution/crypto_runner.py (orders)   │  │
+│  └─────────────┘  │  • core/risk_management.py (dials)            │  │
+│                   └───────────────────────────────────────────────┘  │
+│  Optional NSE collectors (profile `nse`) ×4                            │
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+### Startup flow (`api/server.py` lifespan)
+
+1. `BotRunner.start()` initializes APScheduler (Linux/cloud only).
+2. `start_stream()` launches `DeltaStream` in a background thread.
+3. If `ENABLE_CRYPTO_RUNNER` is true, four scheduled jobs are added.
+
+### Scheduler jobs (`core/execution/crypto_runner.py`)
+
+| Job | Cadence | Purpose |
+|---|---|---|
+| `tick_position_management` | every 2s | SL, TP, trail, max-hold, shadow positions |
+| `tick_signal_sample` | every 5m | Record raw pred into `_sig_history` for persistence gate |
+| `tick_entry_decisions` | every 15 min UTC (`:00/:15/:30/:45:30`) | New entry decisions only |
+| `_wallet_heartbeat` | every 5m | Log Delta wallet breakdown |
+
+`max_instances=1, coalesce=True` so ticks never overlap.
+
+### WebSocket data flow
+
+- `DeltaStream` subscribes to `MARKET:<symbol>` for BTC/ETH perps + ~15
+  near-money option strikes per expiry.
+- Broker read methods prefer stream marks, falling back to REST caches.
+- `/ws/crypto` pushes `_build_crypto_snapshot()` every second to authenticated
+  dashboard clients.
+- REST `/api/crypto/snapshot` returns the same snapshot builder.
+
+---
+
+## 6. Strategy details
+
+### Price-action S/R retest (`strategies/price_action_sr.py`)
+
+This is the live crypto strategy. It needs only perp OHLC data, so the bot no
+longer subscribes to option-chain marks for signal generation.
+
+Decoded rules from the Hindi livestream:
+
+1. Daily trend filter (24h moving average) — only buy dips in an uptrend, sell
+   rallies in a downtrend.
+2. Trade at the 4-hour S/R range edges only; skip mid-range setups.
+3. Wait for a strong reversal candle (body ≥ 1.3× average, wick ≤ 45%).
+4. Tiny SL (default 0.5%), big target (default 1:7 R:R).
+5. Trail stop to breakeven at +1R.
+
+The strategy builds its own 1-minute candles from live perp mark updates. The
+2-second position-management tick feeds marks into the candle buffer; the
+15-minute entry tick evaluates the signal.
+
+### Production dials
+
+| Dial | Value | Location |
+|---|---|---|
+| S/R lookback | 4h (240 candles) | `strategies/price_action_sr.py` |
+| Trend lookback | 24h (1440 candles) | `strategies/price_action_sr.py` |
+| Range width max | 1.5% | `strategies/price_action_sr.py` |
+| Level zone | ±0.4% of range high/low | `strategies/price_action_sr.py` |
+| Retest mode | `wick_touch` | `strategies/price_action_sr.py` |
+| Wick touch tolerance | 7 bps vs S/R level | `strategies/price_action_sr.py` |
+| Body position threshold | 0.70 (close in top/bottom 30%) | `strategies/price_action_sr.py` |
+| Body multiplier | 1.3× | `strategies/price_action_sr.py` |
+| Wick ratio max | 45% | `strategies/price_action_sr.py` |
+| Stop loss | 0.4% BTC / 0.5% ETH | `strategies/price_action_sr.py` |
+| Target | 2.0% BTC / 3.5% ETH | `strategies/price_action_sr.py` |
+| Cooldown | 60 min | `strategies/price_action_sr.py` |
+| Block after loss | 180 min | `strategies/price_action_sr.py` |
+| Optional WR filters | volume, RSI, trend slope, range min, hours, HTF align, engulfing, pin bar | `strategies/price_action_sr.py` |
+| Leverage | 3× | `core/risk_management.py` |
+| Capital per cycle | 50% of pool | `core/risk_management.py` |
+| Max hold | 4h | `strategies/price_action_sr.py` |
+| Cooldown | 1h between signals | `strategies/price_action_sr.py` |
+| Daily kill | -5% of base equity | `core/risk_management.py` |
+| Max live contracts | 50 | `core/risk_management.py` |
+
+### Exit regime
+
+`EXIT_REGIME` should remain `pure_sltp` for this strategy. The price-action
+strategy sets `partial_tp_pct` to the asset-specific target and `stop_loss_pct`
+to the asset-specific SL, so the position manager executes a clean bracket
+order.
+
+Backtest results on Delta 1m data:
+
+**June 2026 (~19 days, zone retest filter — older snapshot)**
+
+| Asset | Config | Trades | WR | P&L | PF | MaxDD | MaxCL |
+|---|---|---:|---:|---:|---:|---:|---:|
+| BTCUSD | SL 0.5% / 1:7 | 37 | 45.9% | +4.47% | 1.53 | 3.10% | 6 |
+| ETHUSD | SL 0.5% / 1:7 | 25 | 32.0% | +7.21% | 2.35 | 3.17% | 7 |
+
+**April–June 2026 (~80 days, last 3 months)**
+
+| Asset | Config | Trades | WR | P&L | PF | MaxDD | MaxCL |
+|---|---|---:|---:|---:|---:|---:|---:|
+| BTCUSD | SL 0.4% / 1:5 | 125 | 47.2% | +15.63% | 1.80 | 1.98% | 6 |
+| ETHUSD | SL 0.5% / 1:7 | 84 | 44.0% | +13.19% | 1.80 | 2.46% | 7 |
+
+Walk-forward (40% / 60% split) is healthy with the `wick_touch` retest filter
+plus 180-min block-after-loss: BTC PF 1.88 → 1.63, ETH PF 1.63 → 1.63. Both
+assets remain profitable in both halves and Max consecutive losses stay at 5–7.
+
+Additional WR-boost filters (RSI, volume, trend slope, range min, time-of-day,
+15m HTF align, engulfing, pin bar) are exposed as dials in the backtest harness.
+Individually they mostly reduce trade count; the safest global improvement is
+`BLOCK_AFTER_LOSS_MINUTES = 180`.
+
+---
+
+## 7. Configuration
+
+### Hardcoded production dials (preferred)
+
+- `core/risk_management.py` — risk, capital, leverage, exit regime, kill
+  thresholds.
+- `strategies/price_action_sr.py` — S/R lookback, trend filter, SL/TP, candle
+  aggression filters.
+
+Changes to these files should go through PR review. Do **not** put production
+dials in `.env`.
+
+### Environment variables (secrets + optional overrides)
+
+Create a `.env` file in the project root. It is git-ignored and bind-mounted
+into containers.
+
+| Variable | Purpose |
+|---|---|
+| `DELTA_API_KEY` / `DELTA_API_SECRET` | Delta India REST/WS HMAC auth (Read + Trade scopes, IP-whitelisted) |
+| `DELTA_BASE_URL` / `DELTA_WS_URL` | Delta REST/WS endpoints (defaults usually fine) |
+| `MONGODB_URL` | MongoDB Atlas connection string |
+| `MONGODB_DB_NAME` | Database name |
+| `DASHBOARD_SECRET` | JWT signing secret (`api/auth.py`) |
+| `DASHBOARD_USER` | Dashboard login username |
+| `DASHBOARD_PASS` | Dashboard login password |
+| `DASHBOARD_ORIGINS` | Extra CORS allowlist, comma-separated |
+| `ANGEL_API_KEY`, `ANGEL_CLIENT_ID`, `ANGEL_PASSWORD`, `ANGEL_TOTP_TOKEN` | Angel One SmartAPI (NSE collectors only) |
+| `ANGEL_JWT_TOKEN`, `ANGEL_REFRESH_TOKEN`, `ANGEL_FEED_TOKEN` | Runtime Angel tokens (written by collector) |
+| `ENABLE_CRYPTO_RUNNER` | `true`/`false` to start the bot |
+| `CRYPTO_TRADING_MODE` | `live` (default) or `paper` |
+| `CRYPTO_TICK_SECONDS` | Tick interval, default 2 |
+| `CRYPTO_EQUITY_USD` | Paper-mode equity floor, default $1,000 |
+| `CRYPTO_CAPITAL_USE_PCT` | Per-cycle capital fraction, default 0.50 |
+| `CRYPTO_BTC_CAPITAL_PCT` / `CRYPTO_ETH_CAPITAL_PCT` | Per-asset split, default 0.50 each |
+| `CRYPTO_LEVERAGE` | Default 3 |
+| `CRYPTO_DAILY_LOSS_KILL_PCT` | Default 0.05 |
+| `CRYPTO_MAX_LIVE_CONTRACTS` | Default 50 |
+| `CRYPTO_EXIT_REGIME` | `pure_sltp` (recommended for price-action) or `trail_partial` |
+| `USD_INR_RATE` | INR→USD conversion for wallet valuation, default 86 |
+
+`api/auth.py` fails closed with HTTP 500 if `DASHBOARD_SECRET` or
+`DASHBOARD_PASS` still use the placeholder defaults.
+
+### Stale/legacy config
+
+`config/assets/btc_usd.yml` and `eth_usd.yml` exist but are **not loaded** by
+the running code. Do not update them expecting the bot to pick up changes.
+
+---
+
+## 8. Data stores
+
+| Store | Purpose | Critical? |
+|---|---|---|
+| **MongoDB Atlas** | Mirror: `crypto_trades`, `crypto_signal_log`, `crypto_signal_history`, `option_snapshots` | No — failures are swallowed |
+| **Local CSV** | `db/oi_snapshots/YYYY-MM-DD_SYMBOL.csv` from NSE collectors | Yes for collector research |
+| **Local logs** | `logs/YYYY-MM-DD/*.log` | Diagnostic |
+| **`db/flags/`** | File-based IPC for holidays/event blocks/settings | Yes for NSE collector scheduling |
+
+### Mongo collections
 
 | Collection | Owner | Purpose |
 |---|---|---|
 | `crypto_trades` | crypto bot | entry/exit events |
-| `crypto_signal_log` | crypto bot | gated signals (renamed from `signal_log`) |
-| `option_snapshots` | NSE collectors | 5-min OI dumps |
+| `crypto_signal_log` | crypto bot | gated signal observations |
+| `crypto_signal_history` | crypto bot | every raw pred sample (persistence gate recovery) |
+| `option_snapshots` | NSE collectors | 5-min option chain dumps |
 
 Old NSE collections (`shadow_trades`, `daily_journals`, `trades`, `records`)
-still exist on the cluster but are no longer written to. Don't add new
-crypto data there — always prefix `crypto_`.
+still exist but are **not written to**. Always prefix new crypto collections
+with `crypto_`.
 
-## Operational notes
+---
 
-- **Tick interval:** 2s. Driven by APScheduler. `max_instances=1, coalesce=True`
-  so ticks never overlap.
-- **WS stream:** 224 symbols subscribed (BTC + ETH near-money options + 2 perps).
-  Filtered to 7 strikes below + 7 above + ATM per expiry to keep load on the
-  1vCPU droplet manageable.
-- **Wallet:** Delta auto-converts INR → USD at trade time. The broker reads
-  `available_balance` on USD-stablecoin assets + INR balance, sums to a single
-  USD-equivalent pool. `CRYPTO_BTC_CAPITAL_PCT` / `CRYPTO_ETH_CAPITAL_PCT`
-  determine per-cycle deployment.
-- **Wallet heartbeat:** Every 5 min the bot logs the full breakdown to docker
-  logs. Useful for SSH diagnostics.
-- **Kill switches:** `_KILLED` flag. Set by daily-loss kill (-5%) or the
-  manual KILL button on the dashboard. No auto consecutive-loss kill or
-  drawdown kill (user policy).
+## 9. Code style and conventions
 
-## Risks worth knowing
+- **Deterministic signals only.** No LLM/RL/ML in signal generation.
+- **Risk dials are code, not config.** They live in `core/risk_management.py`
+  and `strategies/price_action_sr.py`.
+- **Crypto collections use the `crypto_` prefix.** Do not mix crypto data into
+  legacy NSE collections.
+- **Stream-first reads.** Broker methods prefer WebSocket marks before REST
+  fallback.
+- **Linux-only scheduler.** `core/bot_runner.py` refuses to start APScheduler
+  on non-Linux unless `ALLOW_LOCAL_SCHEDULER=1`.
+- **Paper vs live mode.** `CRYPTO_TRADING_MODE=paper` journals orders but does
+  not hit Delta.
+- **INR is tradeable capital.** Delta auto-converts INR→USD at trade time, so
+  wallet pool = USD stablecoins + INR / `USD_INR_RATE`.
+- **Position management is split from entry decisions.** This matches backtest
+  semantics and reduces noise from real-time WS mark jitter.
+- **15-minute entry grid.** Entries are evaluated at `:00/:15/:30/:45:30 UTC`, the same
+  cadence used for backtests.
+- **No trailing commas or wildcard imports** by convention; follow the existing
+  file style.
+
+---
+
+## 10. Security considerations
+
+- **Live money is on the line.** The bot places real orders in `live` mode.
+  Verify changes in `paper` mode or `delta_exchange/` backtests first.
+- **Placeholder auth is rejected.** `api/auth.py` raises HTTP 500 if the
+  default `DASHBOARD_SECRET` or `DASHBOARD_PASS` is still in place.
+- **Delta API key is IP-whitelisted.** Droplet resize or IP change will break
+  trading until the whitelist is updated on Delta.
+- **`.env` is git-ignored and never committed.** It contains API secrets and
+  tokens.
+- **No NSE trading endpoints.** Do not reintroduce NSE trading in `api/`.
+- **Kill switches:**
+  - Daily-loss kill at -5% of base equity halts new entries.
+  - Manual kill via dashboard closes positions and sets `_KILLED`.
+- **Bounded order size.** `MAX_LIVE_CONTRACTS=50` caps any single order.
+- **JWT tokens expire in 24h.** Dashboard clients must re-login daily.
+- **CORS is configured** in `api/server.py` for known origins including
+  `localhost:3000` and `*.vercel.app`; extra origins come from
+  `DASHBOARD_ORIGINS`.
+
+---
+
+## 11. Deployment
+
+### GitHub Actions (`.github/workflows/deploy.yml`)
+
+- Trigger: push to `main`.
+- Runner: `ubuntu-latest`.
+- Steps: SSH as `root` into the droplet, pull, prune Docker system to free disk,
+  `docker compose down`, `docker compose build`, `docker compose up -d
+  --force-recreate`.
+
+### `deploy.sh`
+
+- Pulls, force-removes lingering containers, builds `--no-cache`, recreates,
+  and tails logs.
+
+### nginx (`nginx/nginx.conf`)
+
+- Redirects HTTP → HTTPS on `thegaintcompany.com`.
+- SSL certs from `/etc/letsencrypt/live/thegaintcompany.com/`.
+- Proxies `/` and `/api` to `api:8000`.
+- Upgrades `/ws` to WebSocket with a 1-hour read timeout.
+
+### Frontend hosting
+
+The Next.js dashboard is deployed to **Vercel**. API calls go directly to
+`NEXT_PUBLIC_API_URL`. The production domain is `https://thegaintcompany.com`.
+
+---
+
+## 12. Known risks and open gaps
 
 | Risk | Mitigation today | Open gap |
 |---|---|---|
@@ -120,21 +470,31 @@ crypto data there — always prefix `crypto_`.
 | Fill price drift from displayed mark | Recorded as mark (small bias) | Real fill not fetched post-order |
 | Backtest ≠ live PnL | Backtest assumes 5bps slippage | Live slippage not measured |
 | Position state drift | Manual KILL button | No 30s reconciliation engine |
-| Wide-spread strike contaminates signal | None | Liquidity filter deferred per user |
+| Wide-spread strike contaminates signal | None | Liquidity filter deferred per user policy |
 
-## How a new agent should orient
+---
 
-1. Read this file + `README.md` + `core/risk_management.py` — that's the contract.
-2. Crypto bot lives in `core/execution/crypto_runner.py` + `strategies/synth_forward.py`.
-3. Delta WS plumbing in `core/ws/delta_stream.py`.
-4. Backtests in `delta_exchange/`. Use `backtest_synth_forward_v5_5_sweep.py` for sweeps.
-5. Dashboard in `frontend/app/page.tsx`. Single-page.
-6. NSE collectors in `scripts/collect_option_snapshots.py`. Gated behind
+## 13. How a new agent should orient
+
+1. Read this file + `README.md` + `core/risk_management.py`.
+2. Crypto bot logic: `core/execution/crypto_runner.py` +
+   `strategies/price_action_sr.py`.
+3. Delta WebSocket plumbing: `core/ws/delta_stream.py`.
+4. Broker/orders: `core/brokers/delta_crypto.py`.
+5. Backtests: `delta_exchange/backtest_price_action_sweep.py`.
+6. Dashboard: `frontend/app/page.tsx` and `frontend/app/CryptoChart.tsx`.
+7. NSE collectors: `scripts/collect_option_snapshots.py`; enable with
    `docker compose --profile nse up -d`.
 
-## Don't do
+---
+
+## 14. Don't do
 
 - Don't write to old NSE Mongo collections from crypto code.
-- Don't put production dials in `.env`. They live in `core/risk_management.py`.
-- Don't add LLM/RL/ML to signal generation. Strategy is deterministic by design.
-- Don't reintroduce NSE trading endpoints in `api/server.py`.
+- Don't put production dials in `.env`. They live in `core/risk_management.py`
+  and `strategies/price_action_sr.py`.
+- Don't add LLM/RL/ML to signal generation. The strategy is deterministic by
+  design.
+- Don't reintroduce NSE trading endpoints in `api/server.py` or elsewhere.
+- Don't rely on `config/assets/*.yml` for live crypto parameters; the bot does
+  not load them.

@@ -91,7 +91,7 @@ WORKER_COUNT  = 8             # concurrent threads for per-option pulls
 OPT_RESOLUTION  = "1m"        # WAS "1h" — Delta's 1h archive is broken for options
 PERP_RESOLUTION = "1m"
 MONEYNESS_BAND  = 0.05        # keep strikes within ±5% of spot-at-settlement
-WEEKLY_PLUS_ONLY = True       # drop daily-expiry contracts (Mon–Thu); keep Fri + month-end
+WEEKLY_PLUS_ONLY = os.environ.get("WEEKLY_PLUS_ONLY", "true").lower() in ("1", "true", "yes")
 
 
 # ── HTTP helper ───────────────────────────────────────────────────────────────

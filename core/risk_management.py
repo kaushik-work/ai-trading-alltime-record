@@ -80,13 +80,13 @@ MAX_LIVE_CONTRACTS: int = _env_int("CRYPTO_MAX_LIVE_CONTRACTS", 50)
 #                      trail_partial: 42 trades, 90.5% WR, +₹13,443
 #                    Pure SL/TP wins by ₹964 over the sample and is simpler
 #                    to reason about (no peak-tracking, no half-position state).
-# "trail_partial"  — original v5.5: partial TP at +1% closes half, trail arms
-#                    at peak ≥0.5% and exits the rest on 0.25% giveback.
-#                    Lower drawdown per trade but caps winners earlier.
+# "trail_partial"  — partial TP at +1% closes half, trail arms at peak ≥0.5%
+#                    and exits the rest on 0.25% giveback. Lower drawdown per
+#                    trade but caps winners earlier.
 EXIT_REGIME: str = os.environ.get("CRYPTO_EXIT_REGIME", "pure_sltp")
 
 
-# ── Position management (v5.5 — see strategies/synth_forward.py) ─────────────
+# ── Position management ──────────────────────────────────────────────────────
 MAX_HOLD_HOURS: int = 72
 
 # Delta India BTC/ETH perp contract size = 0.001 underlying. Used by the
@@ -99,8 +99,7 @@ CONTRACT_SIZE_BY_ASSET: dict[str, float] = {
 
 
 def capital_pct_for(strategy_name: str) -> float:
-    """Resolve per-strategy capital allocation. Strategy names are e.g.
-    'btc_synth_forward', 'eth_synth_forward' — matched by substring."""
+    """Resolve per-strategy capital allocation by asset substring."""
     n = strategy_name.lower()
     if "btc" in n: return BTC_CAPITAL_PCT
     if "eth" in n: return ETH_CAPITAL_PCT

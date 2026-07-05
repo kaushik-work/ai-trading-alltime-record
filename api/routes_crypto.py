@@ -3,7 +3,7 @@ Crypto API routes — registered in api/server.py.
 
 Reads signals + portfolio state from the stream-backed broker (no REST hits
 on the hot path). Routes:
-  GET  /api/crypto/signals          — signal radar (per asset, per expiry)
+  GET  /api/crypto/signals          — signal radar (per asset)
   GET  /api/crypto/snapshot         — full dashboard payload (signals + portfolio + marks)
   GET  /api/crypto/portfolio        — equity, day P&L, open positions
   GET  /api/crypto/state            — runner state (kill switch, open positions detail)
@@ -19,99 +19,56 @@ from datetime import datetime, timezone
 import requests
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.security import HTTPBearer
-import numpy as np
 
 router = APIRouter(prefix="/api/crypto", tags=["crypto"])
 _auth = HTTPBearer(auto_error=False)
 
 DELTA_BASE = os.environ.get("DELTA_BASE_URL", "https://api.india.delta.exchange")
-GATE_PCT   = float(os.environ.get("CRYPTO_GATE_PCT", "0.006"))
-MONEYNESS  = 0.05
-MIN_STRIKES = 3
-TT_MIN_HOURS = 6
-TT_MAX_HOURS = 72
-
-
-def _parse_option_symbol(sym: str):
-    parts = sym.split("-")
-    if len(parts) != 4: return None
-    side, asset, strike, ddmmyy = parts
-    try:
-        strike = int(strike)
-        dd, mm, yy = ddmmyy[:2], ddmmyy[2:4], ddmmyy[4:6]
-        expiry = datetime(2000 + int(yy), int(mm), int(dd), 12, 0, tzinfo=timezone.utc)
-    except Exception:
-        return None
-    return side, asset, strike, expiry
-
-
-def _compute_per_expiry(spot: float, chain: list, now: datetime) -> list:
-    out = []
-    expiries = sorted({c["expiry"] for c in chain})
-    for exp in expiries:
-        tte_h = (exp - now).total_seconds() / 3600
-        if not (TT_MIN_HOURS <= tte_h <= TT_MAX_HOURS): continue
-        same = [c for c in chain if c["expiry"] == exp]
-        calls = {c["strike"]: c for c in same if c["side"] == "C"}
-        puts  = {c["strike"]: c for c in same if c["side"] == "P"}
-        common = sorted(set(calls) & set(puts))
-        near = [K for K in common if abs(K - spot) / spot <= MONEYNESS]
-        if len(near) < MIN_STRIKES: continue
-        devs = []
-        for K in near:
-            cp = calls[K]["mark"]; pp = puts[K]["mark"]
-            if cp <= 0 or pp <= 0: continue
-            devs.append(((cp - pp + K) - spot) / spot)
-        if len(devs) < MIN_STRIKES: continue
-        pos = sum(1 for d in devs if d > 0); neg = sum(1 for d in devs if d < 0)
-        if pos < MIN_STRIKES and neg < MIN_STRIKES: continue
-        atm_K = min(near, key=lambda K: abs(K - spot))
-        out.append({"expiry": exp.strftime("%Y-%m-%d %H:%M"),
-                    "pred_pct": float(np.median(devs)) * 100,
-                    "n_strikes": len(devs),
-                    "atm_strike": atm_K,
-                    "tte_hours": tte_h})
-    return out
 
 
 def _signals_from_broker() -> tuple[list, dict]:
     """Stream-backed signal compute. Returns (signals, perp_marks).
 
-    Replaces REST fetch in /signals: reads marks from the broker (which prefers
-    the WS stream), so the dashboard and the runner see the exact same data.
-    Same shape as legacy _fetch_chain → _compute_per_expiry pipeline.
+    Reads the live price-action S/R strategy state from the runner's strategy
+    instances. The dashboard and the runner see the same perp marks and the
+    same 4h S/R range / trend context.
     """
     from core.brokers.delta_crypto import get_broker
+    from core.execution.crypto_runner import _get_strategies
     broker = get_broker()
-    now = datetime.now(timezone.utc)
     signals: list = []
     perp_marks: dict = {}
-    for underlying in ("BTC", "ETH"):
-        sym = f"{underlying}USD"
+    try:
+        strategies = _get_strategies()
+    except Exception:
+        strategies = {}
+    for name, strat in strategies.items():
+        sym = getattr(strat, "symbol", None)
+        if not sym: continue
         spot = broker.get_perp_mark(sym)
         if spot is None: continue
         perp_marks[sym] = spot
-        # Build chain rows compatible with _compute_per_expiry: it expects
-        # {side, strike, expiry, mark, symbol}. Broker (stream or REST) returns
-        # {symbol, mark} (and possibly extras); we parse the symbol locally.
-        chain: list = []
-        for c in broker.get_option_chain(underlying):
-            parsed = _parse_option_symbol(c.get("symbol", ""))
-            if not parsed: continue
-            side, asset, strike, expiry = parsed
-            if asset != underlying: continue
-            try: mark = float(c.get("mark") or 0)
-            except (TypeError, ValueError): mark = 0
-            if mark <= 0: continue
-            chain.append({"side": side, "strike": strike, "expiry": expiry,
-                          "mark": mark, "symbol": c["symbol"]})
-        for s in _compute_per_expiry(spot, chain, now):
-            signals.append({
-                "underlying": underlying, "spot": spot,
-                "expiry": s["expiry"], "pred_pct": s["pred_pct"],
-                "n_strikes": s["n_strikes"], "atm_strike": s["atm_strike"],
-                "tte_hours": s["tte_hours"],
-            })
+        state = strat.latest_state() if hasattr(strat, "latest_state") else {}
+        decision = state.get("last_decision") or {}
+        signals.append({
+            "underlying": state.get("underlying") or sym.replace("USD", ""),
+            "spot": spot,
+            "pred_pct": float(state.get("width_pct", 0) or 0),
+            "r_high": float(state.get("r_high", 0) or 0),
+            "r_low": float(state.get("r_low", 0) or 0),
+            "trend": state.get("trend", "unknown"),
+            "near_support": bool(state.get("near_support", False)),
+            "near_resistance": bool(state.get("near_resistance", False)),
+            "wick_touch_support": bool(state.get("wick_touch_support", False)),
+            "wick_touch_resistance": bool(state.get("wick_touch_resistance", False)),
+            "strong_green": bool(state.get("strong_green", False)),
+            "strong_red": bool(state.get("strong_red", False)),
+            "in_cooldown": bool(state.get("in_cooldown", False)),
+            "sl_pct": float(state.get("sl_pct", 0) or 0),
+            "tp_pct": float(state.get("tp_pct", 0) or 0),
+            "side": decision.get("side") if decision else None,
+            "ready": bool(state.get("ready", False)),
+        })
     return signals, perp_marks
 
 
@@ -204,7 +161,7 @@ def _portfolio_snapshot() -> dict:
 
 @router.get("/signals")
 def crypto_signals():
-    """Current synth-forward signals across BTC, ETH."""
+    """Current price-action S/R state across BTC, ETH."""
     signals, _ = _signals_from_broker()
     return signals
 
@@ -417,7 +374,7 @@ def crypto_signal_history(
     # the most recent value in that window.
     try:
         from core.execution.crypto_runner import _get_strategies
-        strat_name = "btc_synth_forward" if asset == "BTC" else "eth_synth_forward"
+        strat_name = "btc_price_action_sr" if asset == "BTC" else "eth_price_action_sr"
         strats = _get_strategies()
         strat = strats.get(strat_name)
         if strat and getattr(strat, "_pred_trace", None):

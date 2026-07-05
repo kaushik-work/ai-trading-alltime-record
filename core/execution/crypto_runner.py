@@ -5,7 +5,8 @@ Sibling to core/bot_runner.py. Where BotRunner ticks NSE Q5 ensemble during
 market hours, CryptoRunner ticks crypto strategies 24/7.
 
 Lifecycle:
-  • Hourly tick — runs both strategies + position manager.
+  • 15-minute entry tick — runs both strategies.
+  • 2-second position-management tick — stops, targets, trails.
   • Entry: when strategy emits a SignalDecision, place market order on Delta.
   • Exit: position manager checks every tick for stop / partial TP / trail /
           max-hold / time-stop. ALL exit logic from v5 backtest is preserved.
@@ -47,7 +48,7 @@ from core.risk_management import (
     LEVERAGE, CONTRACT_SIZE_BY_ASSET,
     ENABLE_CRYPTO_RUNNER, EXIT_REGIME,
 )
-from strategies.synth_forward import BTCSynthForwardSignal, ETHSynthForwardSignal
+from strategies.price_action_sr import BTCPriceActionSRSignal, ETHPriceActionSRSignal
 from strategies.crypto_base import CryptoSignalDecision
 
 logger = logging.getLogger(__name__)
@@ -77,7 +78,9 @@ _MAX_SHADOW_TRADES = 50
 def _get_strategies():
     if not _STRATEGY_INSTANCES:
         broker = get_crypto_broker()
-        for cls in (BTCSynthForwardSignal, ETHSynthForwardSignal):
+        classes = (BTCPriceActionSRSignal, ETHPriceActionSRSignal)
+        logger.info("using price-action S/R strategy")
+        for cls in classes:
             inst = cls(broker=broker)
             _STRATEGY_INSTANCES[inst.name] = inst
     return _STRATEGY_INSTANCES
@@ -234,6 +237,13 @@ def _manage_open_position(strategy_name: str, broker, pos: dict) -> bool:
         "unrealized_pct": unrealized_pct, "held_hours": held_h,
     })
     logger.info("%s EXIT (%s) at %s, pnl=%.2f", strategy_name, exit_reason, fill, pnl)
+    # Notify strategy for block-after-loss logic
+    try:
+        strat = _get_strategies().get(strategy_name)
+        if strat and hasattr(strat, "notify_trade_closed"):
+            strat.notify_trade_closed(side, unrealized_pct)
+    except Exception:
+        pass
     return True
 
 
@@ -279,6 +289,13 @@ def _manage_shadow_positions(broker) -> None:
                 logger.info("shadow %s %s closed at %s reason=%s pnl=%+0.2f%%",
                             pos["strategy"], pos["symbol"], mark, exit_reason,
                             pos["pnl_pct"])
+                # Notify strategy for block-after-loss logic in paper mode
+                try:
+                    strat = _get_strategies().get(pos["strategy"])
+                    if strat and hasattr(strat, "notify_trade_closed"):
+                        strat.notify_trade_closed(pos["side"], unreal_pct)
+                except Exception:
+                    pass
         except Exception as e:
             logger.error("shadow manage error: %s", e)
 
@@ -296,6 +313,15 @@ def tick_position_management() -> None:
     strategies = _get_strategies()  # ensure instantiated for warm-up
     broker = get_crypto_broker()
     _reset_day_pnl_if_needed()
+    # Price-action strategies need frequent mark updates to build 1m candles.
+    for name, strat in strategies.items():
+        if hasattr(strat, "update_bars"):
+            try:
+                mark = broker.get_perp_mark(strat.symbol)
+                if mark is not None:
+                    strat.update_bars(mark)
+            except Exception as e:
+                logger.debug("%s bar update error: %s", name, e)
     _manage_shadow_positions(broker)
     to_remove = []
     for name, pos in list(_OPEN_POSITIONS.items()):
@@ -330,7 +356,7 @@ def tick_entry_decisions() -> None:
     strategies = _get_strategies()
     broker = get_crypto_broker()
     if _check_kill_switch():
-        logger.info("hourly entry tick: kill switch active — skipping entries")
+        logger.info("15-min entry tick: kill switch active — skipping entries")
         return
 
     for name, strat in strategies.items():
@@ -444,7 +470,7 @@ def init_crypto_runner(scheduler) -> None:
     broker = get_crypto_broker()
     mode = broker.mode
     logger.info("crypto runner enabled — mode=%s regime=%s mgmt_tick=%ds "
-                "sample=5m entry=hourly@HH:00:30 UTC equity=$%.0f kill=-%.1f%% "
+                "sample=5m entry=15min@HH:00/15/30/45:30 UTC equity=$%.0f kill=-%.1f%% "
                 "max_contracts=%d",
                 mode, EXIT_REGIME, TICK_INTERVAL_SECONDS, BASE_EQUITY_USD,
                 DAILY_LOSS_KILL_PCT * 100, MAX_LIVE_CONTRACTS)
@@ -466,12 +492,13 @@ def init_crypto_runner(scheduler) -> None:
             next_run_time=datetime.now(timezone.utc),
             max_instances=1, coalesce=True,
         )
-        # 3) Hourly entry decision — at HH:00:30 UTC (30s grace for WS marks
-        #    to settle after the hour boundary). Matches backtest grid exactly.
+        # 3) 15-minute entry decision — at :00/:15/:30/:45 + 30s grace for WS marks
+        #    to settle after the boundary. Recalibrated to match the observed
+        #    signal resolution (median dislocations resolve within ~15-30 min).
         scheduler.add_job(
             tick_entry_decisions, "cron",
-            minute=0, second=30, timezone="UTC",
-            id="crypto_hourly_entry_tick", replace_existing=True,
+            minute="0,15,30,45", second=30, timezone="UTC",
+            id="crypto_15min_entry_tick", replace_existing=True,
             max_instances=1, coalesce=True,
         )
         # 4) Wallet heartbeat — every 5 min, log Delta wallet breakdown.

@@ -6,8 +6,9 @@ option-chain **data collectors** for research.
 ## What this is
 
 **Live trading surface:** crypto perpetual futures only (BTCUSD, ETHUSD).
-The strategy is **Synthetic Forward v5.5** — exploits dislocations between
-the options-implied forward price and the perp mark.
+The strategy is **Price-action S/R retest** — a pure perp price-action strategy
+decoded from a Hindi livestream. It trades at 4h S/R levels in the direction of
+the 24h trend, using tiny stops and asymmetric targets.
 
 **Data surface:** NIFTY / BANKNIFTY / FINNIFTY / SENSEX 5-min option-chain
 snapshots into MongoDB. Pure data collection. No NSE trading, no NSE bot,
@@ -30,8 +31,8 @@ no NSE strategies.
                    └────────────┬─────────────┘
                                 ▼
        ┌─────────────────────────────────────────┐
-       │  strategies/synth_forward.py (v5.5)     │
-       │  gate 0.6% · persist 1h · ±5% strikes  │
+       │  strategies/price_action_sr.py          │
+       │  S/R retest · tiny SL · 1:7 R:R         │
        └─────────────┬───────────────────────────┘
                      │
                      ▼
@@ -48,35 +49,31 @@ no NSE strategies.
        └─────────────────────────────────────────┘
 ```
 
-## Strategy: Synthetic Forward v5.5
+## Strategy: Price-action S/R retest
 
-For each near-money strike on a given expiry:
+1. **Trend filter**: only trade in the direction of the 24h moving average.
+2. **Levels**: enter only near the 4h range high/low; skip mid-range.
+3. **Aggression**: require a strong reversal candle (body ≥ 1.3× average, wick ≤ 45%).
+4. **Risk**: tiny SL, big target (BTC 0.4% / 1:5, ETH 0.5% / 1:7).
+5. **Trail**: move stop to breakeven after +1R.
 
-```
-synthetic_forward = call_price − put_price + strike
-dislocation       = (synthetic_forward − spot) / spot
-```
-
-Then the bot:
-
-| Step | Rule |
+| Parameter | Value |
 |---|---|
-| **Aggregate** | median dislocation across ≥3 strikes within ±5% of spot |
-| **Eligible expiry** | 6h ≤ TTE ≤ 72h |
-| **Entry gate** | \|dislocation\| ≥ 0.6% |
-| **Persistence** | signal must hold same direction for ≥1h |
-| **Direction** | positive dislocation → LONG perp · negative → SHORT |
-| **Sizing** | `equity × 50% × (0.5–3× by signal strength)` |
-| **Leverage** | 3× (validated equal returns vs 10× with 3× more liquidation buffer) |
-| **Stop loss** | -1.5% |
-| **Partial TP** | half-close at +1% |
-| **Trail** | give back max 0.25% after reaching +0.5% peak |
-| **Max hold** | 72h |
-| **Daily kill** | -5% of base equity → halt new entries |
+| S/R lookback | 4h |
+| Trend lookback | 24h |
+| Stop loss BTC | -0.4% |
+| Stop loss ETH | -0.5% |
+| Target BTC | +2.0% |
+| Target ETH | +3.5% |
+| Leverage | 3× |
+| Capital per cycle | 50% of pool |
+| Max hold | 4h |
+| Daily kill | -5% of base equity |
 
-Backtest validation (June 2026, 9 days, ₹40k starting):
-- BTC + ETH shared pool: **₹40,000 → ₹51,564 (+28.9%)**
-- Win rate ~94%, only 2 small losers out of 32 trades
+Backtest validation (April–June 2026, ~80 days, $10k per asset,
+`wick_touch` retest + 180-min block-after-loss):
+- BTCUSD SL 0.4% / 1:5: **+15.63%**, PF 1.80, 125 trades, 47.2% WR, MaxDD 1.98%
+- ETHUSD SL 0.5% / 1:7: **+13.19%**, PF 1.80, 84 trades, 44.0% WR, MaxDD 2.46%
 
 ## Repo layout
 
@@ -99,7 +96,7 @@ Backtest validation (June 2026, 9 days, ₹40k starting):
 │   └── utils.py               Date/timezone helpers
 ├── strategies/
 │   ├── crypto_base.py         CryptoStrategy base class
-│   └── synth_forward.py       v5.5 production dials
+│   └── price_action_sr.py     price-action S/R production dials
 ├── scripts/
 │   └── collect_option_snapshots.py    NSE 5-min OI snapshot collector
 ├── data/
@@ -124,7 +121,7 @@ docker compose --profile nse up -d
 **Local backtest:**
 ```bash
 cd delta_exchange
-./.venv/Scripts/python.exe backtest_synth_forward_v5_5_sweep.py
+./.venv/Scripts/python.exe backtest_price_action_sweep.py
 ```
 
 ## Required env (in `.env`, not committed)

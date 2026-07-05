@@ -9,13 +9,21 @@ many trades.' This script proves the math by showing:
   3. Per trade: full lifecycle (entry, intra-bar SL/TP check, exit, PnL)
   4. A worked example showing the formula computed by hand vs the bot
 
+Also writes spreadsheet-friendly CSVs to delta_exchange/audit_csv/ so the
+user can copy/paste into Excel / Sheets for independent verification.
+
 Run:
     python audit_jun_2_to_10.py
 """
 from __future__ import annotations
+import csv
 import sys, os
+from pathlib import Path
 sys.stdout.reconfigure(encoding="utf-8")
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+CSV_DIR = Path(__file__).parent / "audit_csv"
+CSV_DIR.mkdir(exist_ok=True)
 
 import numpy as np
 import pandas as pd
@@ -48,6 +56,7 @@ def audit_hourly_decisions():
 
     summary = {"fired": 0, "no_signal": 0, "gate_fail": 0, "persist_fail": 0}
     near_gate_hours = []
+    csv_rows = []   # written to hourly_decisions.csv at the end
 
     for asset, sub in [("BTC", "june_btc"), ("ETH", "june_eth")]:
         perp, marks, cat = load_data(sub, f"{asset}USD")

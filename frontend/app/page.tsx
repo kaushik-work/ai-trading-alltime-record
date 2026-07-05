@@ -19,11 +19,21 @@ type KillResult = {
 type SignalRow = {
   underlying: string;
   spot: number;
-  expiry: string;
   pred_pct: number;
-  n_strikes: number;
-  atm_strike: number;
-  tte_hours: number;
+  r_high: number;
+  r_low: number;
+  trend: "bullish" | "bearish" | "neutral";
+  near_support: boolean;
+  near_resistance: boolean;
+  wick_touch_support: boolean;
+  wick_touch_resistance: boolean;
+  strong_green: boolean;
+  strong_red: boolean;
+  in_cooldown: boolean;
+  sl_pct: number;
+  tp_pct: number;
+  side: "buy" | "sell" | null;
+  ready: boolean;
 };
 
 type PortfolioState = {
@@ -93,7 +103,17 @@ type Snapshot = {
   stream: StreamDiag;
 };
 
-const GATE_PCT = 0.6;
+function signalState(s: SignalRow): { label: string; color: string } {
+  if (s.side === "buy") return { label: "LONG", color: "text-green-400" };
+  if (s.side === "sell") return { label: "SHORT", color: "text-red-400" };
+  if (!s.ready) return { label: "warmup", color: "text-gray-500" };
+  if (s.in_cooldown) return { label: "cooldown", color: "text-gray-500" };
+  if (s.wick_touch_support && s.trend === "bullish") return { label: "armed long", color: "text-green-600" };
+  if (s.wick_touch_resistance && s.trend === "bearish") return { label: "armed short", color: "text-red-600" };
+  if (s.near_support && s.trend === "bullish") return { label: "near support", color: "text-green-700" };
+  if (s.near_resistance && s.trend === "bearish") return { label: "near resistance", color: "text-red-700" };
+  return { label: "flat", color: "text-gray-500" };
+}
 
 export default function CryptoHome() {
   const router = useRouter();
@@ -167,7 +187,7 @@ export default function CryptoHome() {
   const signals = snap?.signals ?? [];
   const portfolio = snap?.portfolio;
   const stream = snap?.stream;
-  const firing = signals.filter(s => Math.abs(s.pred_pct) >= GATE_PCT);
+  const firing = signals.filter(s => s.side != null);
   const liveBtc = snap?.perp_marks?.["BTCUSD"];
   const liveEth = snap?.perp_marks?.["ETHUSD"];
   const btcFutures = snap?.futures_stats?.["BTCUSD"];
@@ -176,8 +196,8 @@ export default function CryptoHome() {
   const shadowSummary = snap?.shadow_summary;
   const lastShadow = shadowTrades.length ? shadowTrades[shadowTrades.length - 1] : null;
 
-  // Max signal strength across current expiries — used for the strip stat
-  const maxAbsPred = signals.length
+  // Max 4h S/R range width across assets — used for the strip stat
+  const maxRangePct = signals.length
     ? Math.max(...signals.map(s => Math.abs(s.pred_pct)))
     : 0;
 
@@ -220,7 +240,7 @@ export default function CryptoHome() {
               Crypto · Delta India
             </h1>
             <p className="text-xs text-gray-500 mt-1">
-              v5 synthetic-forward · BTC/ETH · {snap?.ts && `last tick ${new Date(snap.ts).toLocaleTimeString()}`}
+              price-action S/R retest · BTC/ETH · {snap?.ts && `last tick ${new Date(snap.ts).toLocaleTimeString()}`}
               <span className="ml-3">
                 ws: <span className={
                   wsState === "open"       ? "text-green-400"
@@ -335,7 +355,7 @@ export default function CryptoHome() {
                     accent={portfolio && portfolio.day_pnl > 0 ? "green" : portfolio && portfolio.day_pnl < 0 ? "red" : undefined} />
           <StatCard label="Open positions" value={portfolio ? `${portfolio.open_positions}` : "—"} />
           <StatCard label="Mode" value={portfolio?.mode ?? "—"} accent={portfolio?.mode === "live" ? "green" : undefined} />
-          <StatCard label="Max |pred|" value={`${maxAbsPred.toFixed(3)}%`} />
+          <StatCard label="Max S/R width" value={`${maxRangePct.toFixed(3)}%`} />
         </div>
 
         {/* Shadow-trade panel — full paper-trading lifecycle.  Tracks each
@@ -400,7 +420,7 @@ export default function CryptoHome() {
               </p>
             )}
             <p className="text-[10px] text-gray-600 mt-1">
-              Fund Delta wallet with USDT to convert these into live orders. Same v5 exit logic applied: 1.5% stop / trail 0.25%.
+              Fund Delta wallet with USDT to convert these into live orders. Same price-action bracket applied: BTC 0.4% SL / 2.0% TP, ETH 0.5% SL / 3.5% TP, breakeven trail at +1R.
             </p>
           </div>
         )}
@@ -431,7 +451,7 @@ export default function CryptoHome() {
           <div className="flex items-baseline justify-between mb-4">
             <h2 className="text-lg font-semibold">Signal Radar</h2>
             <span className="text-xs text-gray-500">
-              gate |pred| ≥ {GATE_PCT}% · {firing.length} firing now
+              {firing.length} firing now · wick-touch retest
             </span>
           </div>
 
@@ -446,17 +466,17 @@ export default function CryptoHome() {
                 <tr>
                   <th className="text-left py-2 px-2">Asset</th>
                   <th className="text-right px-2">Spot</th>
-                  <th className="text-right px-2">Expiry</th>
-                  <th className="text-right px-2">TTE</th>
-                  <th className="text-right px-2">|pred|</th>
-                  <th className="text-right px-2 hidden sm:table-cell">Strikes</th>
-                  <th className="text-right px-2 hidden sm:table-cell">ATM K</th>
-                  <th className="text-right px-2">Action</th>
+                  <th className="text-right px-2">4h Range</th>
+                  <th className="text-right px-2">Trend</th>
+                  <th className="text-right px-2">State</th>
+                  <th className="text-right px-2 hidden sm:table-cell">SL</th>
+                  <th className="text-right px-2 hidden sm:table-cell">TP</th>
                 </tr>
               </thead>
               <tbody>
                 {signals.map((s, i) => {
-                  const fires = Math.abs(s.pred_pct) >= GATE_PCT;
+                  const state = signalState(s);
+                  const fires = s.side != null;
                   return (
                     <tr key={i}
                         className={`border-b border-[#13131f] ${fires ? "bg-[#f7931a08]" : ""}`}>
@@ -467,23 +487,21 @@ export default function CryptoHome() {
                         {s.underlying}
                       </td>
                       <td className="text-right px-2">${s.spot.toLocaleString()}</td>
-                      <td className="text-right px-2 text-gray-400">{s.expiry}</td>
-                      <td className="text-right px-2">{s.tte_hours.toFixed(1)}h</td>
-                      <td className={`text-right px-2 font-mono ${
-                        fires ? "text-[#f7931a] font-semibold" : ""
+                      <td className="text-right px-2 font-mono">{s.pred_pct.toFixed(3)}%</td>
+                      <td className={`text-right px-2 ${
+                        s.trend === "bullish" ? "text-green-400" :
+                        s.trend === "bearish" ? "text-red-400" : "text-gray-400"
                       }`}>
-                        {s.pred_pct > 0 ? "+" : ""}{s.pred_pct.toFixed(3)}%
+                        {s.trend}
                       </td>
-                      <td className="text-right px-2 hidden sm:table-cell">{s.n_strikes}</td>
-                      <td className="text-right px-2 hidden sm:table-cell">${s.atm_strike.toLocaleString()}</td>
-                      <td className="text-right px-2">
-                        {fires ? (
-                          <span className={s.pred_pct > 0 ? "text-green-400" : "text-red-400"}>
-                            {s.pred_pct > 0 ? "LONG" : "SHORT"}
-                          </span>
-                        ) : (
-                          <span className="text-gray-600">flat</span>
-                        )}
+                      <td className={`text-right px-2 ${state.color}`}>
+                        {state.label}
+                      </td>
+                      <td className="text-right px-2 hidden sm:table-cell text-red-400">
+                        {(s.sl_pct * 100).toFixed(2)}%
+                      </td>
+                      <td className="text-right px-2 hidden sm:table-cell text-green-400">
+                        {(s.tp_pct * 100).toFixed(2)}%
                       </td>
                     </tr>
                   );
@@ -495,9 +513,10 @@ export default function CryptoHome() {
         </div>
 
         <p className="text-xs text-gray-500">
-          Signal source: synthetic-forward (C − P + K vs spot) on Delta India options
-          chain. v5 production strategy. Risk controls: 1.5% stop / partial TP at 1% /
-          trail after 0.5% peak.
+          Signal source: price-action S/R retest on Delta India BTC/ETH perps.
+          Enters at 4h S/R edges in the direction of the 24h trend when the wick
+          touches the level and a strong reversal candle forms. Risk controls:
+          BTC 0.4% SL / 2.0% TP (1:5), ETH 0.5% SL / 3.5% TP (1:7), breakeven trail at +1R.
         </p>
       </main>
     </div>
