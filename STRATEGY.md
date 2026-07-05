@@ -16,9 +16,9 @@
 | **Decision cadence** | 15-minute entry tick at :00/:15/:30/:45:30 UTC; 2s bar updates |
 | **Leverage** | 3× isolated |
 | **Per-cycle deploy** | 50% of live wallet pool, BTC/ETH split 50/50 |
-| **Exits** | Pure SL/TP bracket: BTC −0.4% / +2.0%, ETH −0.5% / +3.5% |
+| **Exits** | Pure SL/TP bracket: BTC −0.6% / +4.2%, ETH −0.7% / +4.9% |
 | **Daily kill switch** | Halt new entries if day P&L < −5% of base equity |
-| **Backtest** | Apr–Jun 2026: BTC +15.63% (WR 47.2%), ETH +13.19% (WR 44.0%) |
+| **Backtest** | Apr–Jun 2026: BTC +17.28% (WR 57.3%), ETH +18.10% (WR 56.6%) |
 
 ---
 
@@ -34,7 +34,7 @@ Decode the Hindi livestream in three rules:
    average body, wick ≤ 45%) confirms that buyers (at support) or sellers
    (at resistance) have stepped in.
 
-Then: tiny stop, big target, trail to breakeven.
+Then: wider stop, big target, trail to breakeven.
 
 We are not predicting moves. We are entering where the last defence of a level
 happened, with a stop just beyond that defence and a target at the opposite
@@ -81,8 +81,8 @@ edge of the range.
 | Body position threshold | 0.70 (close in top/bottom 30%) | `strategies/price_action_sr.py` |
 | Body multiplier | 1.3× | `strategies/price_action_sr.py` |
 | Wick ratio max | 45% | `strategies/price_action_sr.py` |
-| BTC SL / target | 0.4% / 2.0% (1:5) | `strategies/price_action_sr.py` |
-| ETH SL / target | 0.5% / 3.5% (1:7) | `strategies/price_action_sr.py` |
+| BTC SL / target | 0.6% / 4.2% (1:7) | `strategies/price_action_sr.py` |
+| ETH SL / target | 0.7% / 4.9% (1:7) | `strategies/price_action_sr.py` |
 | Max hold | 4h | `strategies/price_action_sr.py` |
 | Signal cooldown | 1h | `strategies/price_action_sr.py` |
 | Block after loss | 180 min | `strategies/price_action_sr.py` |
@@ -112,8 +112,8 @@ UNDERLYING=ETH START_DT=2026-03-01 END_DT=2026-06-20 STAGE=discover \
 
 | Asset | SL / R:R | Trades | WR | P&L | PF | MaxDD | MaxCL |
 |---|---|---:|---:|---:|---:|---:|---:|
-| BTCUSD | 0.4% / 1:5 | 125 | 47.2% | +15.63% | 1.80 | 1.98% | 6 |
-| ETHUSD | 0.5% / 1:7 | 84 | 44.0% | +13.19% | 1.80 | 2.46% | 7 |
+| BTCUSD | 0.6% / 1:7 | 124 | 57.3% | +17.28% | 1.79 | 2.52% | 5 |
+| ETHUSD | 0.7% / 1:7 | 83 | 56.6% | +18.10% | 2.01 | 2.33% | 3 |
 
 ### Walk-forward (40% / 60% split)
 

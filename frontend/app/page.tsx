@@ -434,7 +434,7 @@ export default function CryptoHome() {
               </p>
             )}
             <p className="text-[10px] text-gray-600 mt-1">
-              Fund Delta wallet with USDT to convert these into live orders. Same price-action bracket applied: BTC 0.4% SL / 2.0% TP, ETH 0.5% SL / 3.5% TP, breakeven trail at +1R.
+              Fund Delta wallet with USDT to convert these into live orders. Same price-action bracket applied: BTC 0.6% SL / 4.2% TP, ETH 0.7% SL / 4.9% TP, breakeven trail at +1R.
             </p>
           </div>
         )}
@@ -585,7 +585,7 @@ export default function CryptoHome() {
           Signal source: price-action S/R retest on Delta India BTC/ETH perps.
           Enters at 4h S/R edges in the direction of the 24h trend when the wick
           touches the level and a strong reversal candle forms. Risk controls:
-          BTC 0.4% SL / 2.0% TP (1:5), ETH 0.5% SL / 3.5% TP (1:7), breakeven trail at +1R.
+          BTC 0.6% SL / 4.2% TP (1:7), ETH 0.7% SL / 4.9% TP (1:7), breakeven trail at +1R.
         </p>
       </main>
     </div>

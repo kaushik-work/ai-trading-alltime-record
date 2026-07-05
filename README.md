@@ -54,17 +54,17 @@ no NSE strategies.
 1. **Trend filter**: only trade in the direction of the 24h moving average.
 2. **Levels**: enter only near the 4h range high/low; skip mid-range.
 3. **Aggression**: require a strong reversal candle (body ≥ 1.3× average, wick ≤ 45%).
-4. **Risk**: tiny SL, big target (BTC 0.4% / 1:5, ETH 0.5% / 1:7).
+4. **Risk**: wider SL, big target (BTC 0.6% / 1:7, ETH 0.7% / 1:7).
 5. **Trail**: move stop to breakeven after +1R.
 
 | Parameter | Value |
 |---|---|
 | S/R lookback | 4h |
 | Trend lookback | 24h |
-| Stop loss BTC | -0.4% |
-| Stop loss ETH | -0.5% |
-| Target BTC | +2.0% |
-| Target ETH | +3.5% |
+| Stop loss BTC | -0.6% |
+| Stop loss ETH | -0.7% |
+| Target BTC | +4.2% |
+| Target ETH | +4.9% |
 | Leverage | 3× |
 | Capital per cycle | 50% of pool |
 | Max hold | 4h |
@@ -72,8 +72,8 @@ no NSE strategies.
 
 Backtest validation (April–June 2026, ~80 days, $10k per asset,
 `wick_touch` retest + 180-min block-after-loss):
-- BTCUSD SL 0.4% / 1:5: **+15.63%**, PF 1.80, 125 trades, 47.2% WR, MaxDD 1.98%
-- ETHUSD SL 0.5% / 1:7: **+13.19%**, PF 1.80, 84 trades, 44.0% WR, MaxDD 2.46%
+- BTCUSD SL 0.6% / 1:7: **+17.28%**, PF 1.79, 124 trades, 57.3% WR, MaxDD 2.52%
+- ETHUSD SL 0.7% / 1:7: **+18.10%**, PF 2.01, 83 trades, 56.6% WR, MaxDD 2.33%
 
 ## Repo layout
 

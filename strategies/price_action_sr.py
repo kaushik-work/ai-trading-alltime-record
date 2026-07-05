@@ -4,7 +4,7 @@ Core rules:
   - Daily trend filter: only buy dips in uptrend, sell rallies in downtrend.
   - Trade at key S/R levels only (avoid mid-range).
   - Wait for a strong reversal candle with small wick (= buyer/seller aggression).
-  - Tiny SL, big target (default 1:7 R:R).
+  - Wider SL, big target (1:7 R:R) — lets the S/R retest breathe.
   - Trail stop to breakeven after +1R.
 
 The strategy builds its own 1-minute OHLC bars from live mark updates so it
@@ -26,15 +26,11 @@ from strategies.crypto_base import CryptoStrategy, CryptoSignalDecision
 logger = logging.getLogger(__name__)
 
 # Production dials — see delta_exchange/backtest_price_action_sweep.py.
-# 3-month backtest (Apr–Jun 2026) preferred asset-specific SL/R:R:
-#   BTC: SL 0.4% / 1:5   (+11.03%, PF 1.23, MaxDD 8.19%, MaxCL 9)
-#   ETH: SL 0.5% / 1:7   (+10.09%, PF 1.25, MaxDD 5.40%, MaxCL 11)
-# With wick-touch retest (tol=7 bps, body_pos=0.70):
-#   BTC: WR 47.0% (+9.4pp), PF 1.80, P&L +17.09%, MaxDD 2.20%
-#   ETH: WR 43.7% (+5.1pp), PF 1.72, P&L +12.59%, MaxDD 3.06%
-# With block-after-loss (180 min) added:
-#   BTC: WR 47.2%, PF 1.80, P&L +15.63%, MaxDD 1.98%
-#   ETH: WR 44.0%, PF 1.80, P&L +13.19%, MaxDD 2.46%
+# 3-month backtest (Apr–Jun 2026) selected config:
+#   BTC: SL 0.6% / 1:7   (124 trades, WR 57.3%, PF 1.79, +17.28%, MaxDD 2.52%, MaxCL 5)
+#   ETH: SL 0.7% / 1:7   ( 83 trades, WR 56.6%, PF 2.01, +18.10%, MaxDD 2.33%, MaxCL 3)
+# Wider stops vs the earlier 0.4%/0.5% baseline raise win-rate by letting the
+# S/R retest breathe, while the 1:7 target keeps the R:R attractive.
 LOOKBACK_CANDLES = 240            # 4h S/R range
 TREND_CANDLES    = 1440           # 24h trend
 RANGE_PCT_MAX    = 0.015          # max 1.5% range width
@@ -48,8 +44,8 @@ RETEST_MODE      = "wick_touch"   # "zone" | "wick_touch" | "strong_rejection" |
 SL_PCT           = 0.005          # 0.5% base SL
 RR_RATIO         = 7.0            # 1:7 target
 ASSET_DIALS      = {              # per-asset overrides
-    "BTC": {"sl_pct": 0.004, "rr_ratio": 5.0},
-    "ETH": {"sl_pct": 0.005, "rr_ratio": 7.0},
+    "BTC": {"sl_pct": 0.006, "rr_ratio": 7.0},
+    "ETH": {"sl_pct": 0.007, "rr_ratio": 7.0},
 }
 BREAKEVEN_R      = 1.0            # trail SL to entry after +1R
 MAX_HOLD_MINUTES = 240            # 4h max hold

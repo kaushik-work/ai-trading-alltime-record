@@ -5,11 +5,9 @@ Usage:
     .venv/Scripts/python backtest_price_action_sweep.py --btc-subdir 3m_btc --eth-subdir 3m_eth
     .venv/Scripts/python backtest_price_action_sweep.py --retest-mode wick_touch --body-pos 0.70 --wick-touch-tol 0.0007
 
-Selected configs (Apr–Jun 2026):
-    BTCUSD SL 0.40% / 1:5  -> zone: +11.03% PF1.23 MaxDD8.19%
-                              wick_touch (7bps, bp0.70): +17.09% PF1.80 MaxDD2.20%
-    ETHUSD SL 0.50% / 1:7  -> zone: +10.09% PF1.25 MaxDD5.40%
-                              wick_touch (7bps, bp0.70): +12.59% PF1.72 MaxDD3.06%
+Selected configs (Apr–Jun 2026, wick_touch + block-after-loss 180):
+    BTCUSD SL 0.60% / 1:7  -> 124 trades, WR 57.3%, PF 1.79, +17.28%, MaxDD 2.52%
+    ETHUSD SL 0.70% / 1:7  ->  83 trades, WR 56.6%, PF 2.01, +18.10%, MaxDD 2.33%
 """
 from __future__ import annotations
 import sys, os, argparse
@@ -580,7 +578,7 @@ def main():
         block_after_loss_candles=args.block_after_loss_candles,
     )
 
-    selected = [(args.btc_subdir, "BTCUSD", 0.004, 5), (args.eth_subdir, "ETHUSD", 0.005, 7)]
+    selected = [(args.btc_subdir, "BTCUSD", 0.006, 7), (args.eth_subdir, "ETHUSD", 0.007, 7)]
 
     if args.retest_experiment:
         print("=" * 100)

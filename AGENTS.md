@@ -23,7 +23,7 @@ livestream:
 3. Require the candle wick to actually touch or pierce the S/R level
    (`wick_touch` retest), plus a strong reversal body (close in the top/bottom
    30% of the range).
-4. Tiny SL, big target (asset-specific: BTC 0.4% / 1:5, ETH 0.5% / 1:7).
+4. Wider SL, big target (asset-specific: BTC 0.6% / 1:7, ETH 0.7% / 1:7).
 5. Trail stop to breakeven at +1R.
 
 A separate Next.js dashboard visualizes live signals, positions, charts, and a
@@ -31,8 +31,8 @@ manual kill switch. NSE option-chain collectors run only as data harvesters for
 research/backtest data; they do not trade.
 
 Backtest (Apr–Jun 2026, BTC + ETH, 1m data, wick_touch + block-after-loss 180 min):
-- **BTCUSD** SL 0.4% / 1:5: **+15.63%**, PF 1.80, 125 trades, 47.2% WR, MaxDD 1.98%.
-- **ETHUSD** SL 0.5% / 1:7: **+13.19%**, PF 1.80, 84 trades, 44.0% WR, MaxDD 2.46%.
+- **BTCUSD** SL 0.6% / 1:7: **+17.28%**, PF 1.79, 124 trades, 57.3% WR, MaxDD 2.52%.
+- **ETHUSD** SL 0.7% / 1:7: **+18.10%**, PF 2.01, 83 trades, 56.6% WR, MaxDD 2.33%.
 
 ---
 
@@ -245,7 +245,7 @@ Decoded rules from the Hindi livestream:
    rallies in a downtrend.
 2. Trade at the 4-hour S/R range edges only; skip mid-range setups.
 3. Wait for a strong reversal candle (body ≥ 1.3× average, wick ≤ 45%).
-4. Tiny SL (default 0.5%), big target (default 1:7 R:R).
+4. Wider SL (0.6% BTC / 0.7% ETH), big target (1:7 R:R).
 5. Trail stop to breakeven at +1R.
 
 The strategy builds its own 1-minute candles from live perp mark updates. The
@@ -265,8 +265,8 @@ The strategy builds its own 1-minute candles from live perp mark updates. The
 | Body position threshold | 0.70 (close in top/bottom 30%) | `strategies/price_action_sr.py` |
 | Body multiplier | 1.3× | `strategies/price_action_sr.py` |
 | Wick ratio max | 45% | `strategies/price_action_sr.py` |
-| Stop loss | 0.4% BTC / 0.5% ETH | `strategies/price_action_sr.py` |
-| Target | 2.0% BTC / 3.5% ETH | `strategies/price_action_sr.py` |
+| Stop loss | 0.6% BTC / 0.7% ETH | `strategies/price_action_sr.py` |
+| Target | 4.2% BTC / 4.9% ETH | `strategies/price_action_sr.py` |
 | Cooldown | 60 min | `strategies/price_action_sr.py` |
 | Block after loss | 180 min | `strategies/price_action_sr.py` |
 | Optional WR filters | volume, RSI, trend slope, range min, hours, HTF align, engulfing, pin bar | `strategies/price_action_sr.py` |
@@ -297,8 +297,8 @@ Backtest results on Delta 1m data:
 
 | Asset | Config | Trades | WR | P&L | PF | MaxDD | MaxCL |
 |---|---|---:|---:|---:|---:|---:|---:|
-| BTCUSD | SL 0.4% / 1:5 | 125 | 47.2% | +15.63% | 1.80 | 1.98% | 6 |
-| ETHUSD | SL 0.5% / 1:7 | 84 | 44.0% | +13.19% | 1.80 | 2.46% | 7 |
+| BTCUSD | SL 0.6% / 1:7 | 124 | 57.3% | +17.28% | 1.79 | 2.52% | 5 |
+| ETHUSD | SL 0.7% / 1:7 | 83 | 56.6% | +18.10% | 2.01 | 2.33% | 3 |
 
 Walk-forward (40% / 60% split) is healthy with the `wick_touch` retest filter
 plus 180-min block-after-loss: BTC PF 1.88 → 1.63, ETH PF 1.63 → 1.63. Both
