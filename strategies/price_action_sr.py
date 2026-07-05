@@ -338,6 +338,13 @@ class PriceActionSRSignal(CryptoStrategy):
         sl_pct = dials["sl_pct"]
         rr_ratio = dials["rr_ratio"]
 
+        # time-of-day and block-after-loss filters (must be computed BEFORE the
+        # dashboard snapshot below uses them).
+        current_ts = time.time()
+        time_ok = self._time_allowed(current_ts)
+        block_long = self._blocked_by_loss("buy")
+        block_short = self._blocked_by_loss("sell")
+
         # snapshot state for the dashboard even if we don't fire
         self._last_state = {
             "close": float(close),
@@ -358,12 +365,6 @@ class PriceActionSRSignal(CryptoStrategy):
             "sl_pct": float(sl_pct),
             "tp_pct": float(sl_pct * rr_ratio),
         }
-
-        # time-of-day and block-after-loss filters
-        current_ts = time.time()
-        time_ok = self._time_allowed(current_ts)
-        block_long = self._blocked_by_loss("buy")
-        block_short = self._blocked_by_loss("sell")
 
         side = None
         if (allow_long and retest_long_ok and strong_green and not in_cooldown and
