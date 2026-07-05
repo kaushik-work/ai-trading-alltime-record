@@ -72,6 +72,11 @@ _KILLED: bool = False
 _SHADOW_TRADES: list[dict] = []
 _SHADOW_POSITIONS: dict[str, dict] = {}
 _MAX_SHADOW_TRADES = 50
+# Missed signals: signals that crossed the entry gate but did NOT result in a
+# live order (empty wallet, API/order failure, zero sizing, kill switch, etc.).
+# These are NOT tracked for P&L — they are purely for dashboard visibility.
+_MISSED_SIGNALS: list[dict] = []
+_MAX_MISSED_SIGNALS = 50
 
 
 # ── strategies ────────────────────────────────────────────────────────────────
@@ -137,6 +142,30 @@ def _log_signal(decision: CryptoSignalDecision) -> None:
         })
     except Exception as e:
         logger.warning("crypto_signal_log write failed: %s", e)
+
+
+def _record_missed_signal(
+    decision: CryptoSignalDecision | None,
+    reason: str,
+    detail: str = "",
+) -> None:
+    """Log a signal that crossed the gate but could not become a live trade.
+
+    Reasons: kill_switch, wallet_empty, order_failed, zero_contracts.
+    These are surfaced on the dashboard so the user sees every missed entry.
+    """
+    global _MISSED_SIGNALS
+    _MISSED_SIGNALS.append({
+        "id":        f"miss-{datetime.now(timezone.utc).strftime('%H%M%S')}-{len(_MISSED_SIGNALS)}",
+        "ts":        datetime.now(timezone.utc).isoformat(),
+        "strategy":  decision.name if decision else "global",
+        "symbol":    decision.symbol if decision else "",
+        "side":      decision.side if decision else "",
+        "width_pct": decision.pred_pct if decision else 0.0,
+        "reason":    reason,
+        "detail":    detail,
+    })
+    _MISSED_SIGNALS = _MISSED_SIGNALS[-_MAX_MISSED_SIGNALS:]
 
 
 def _write_trade_event(event: dict) -> None:
@@ -357,6 +386,10 @@ def tick_entry_decisions() -> None:
     broker = get_crypto_broker()
     if _check_kill_switch():
         logger.info("15-min entry tick: kill switch active — skipping entries")
+        for name, strat in strategies.items():
+            if name in _OPEN_POSITIONS: continue
+            _record_missed_signal(None, "kill_switch",
+                                  "daily loss kill switch active")
         return
 
     for name, strat in strategies.items():
@@ -374,7 +407,10 @@ def tick_entry_decisions() -> None:
 
         # sizing
         mark = broker.get_perp_mark(decision.symbol)
-        if mark is None or mark <= 0: continue
+        if mark is None or mark <= 0:
+            _record_missed_signal(decision, "no_mark",
+                                  "perp mark unavailable")
+            continue
 
         # Sizing: take CAPITAL_USE_PCT of the live wallet pool (USD-stable +
         # INR-converted) and let Delta handle the on-trade currency conversion.
@@ -390,6 +426,8 @@ def tick_entry_decisions() -> None:
                 logger.warning("%s: wallet %s — recording shadow trade only "
                                "(deposit INR/USDT to enable live orders)",
                                name, shown)
+                _record_missed_signal(decision, "wallet_empty",
+                                      f"wallet balance {shown}")
             else:
                 pct = _capital_pct_for(name)
                 effective_equity = balance * pct
@@ -430,7 +468,10 @@ def tick_entry_decisions() -> None:
         contracts = _contracts_for_notional(decision.symbol, notional, mark)
         if contracts <= 0:
             logger.warning("%s: sizing produced 0 contracts (notional %.0f, mark %s)",
-                            name, notional, mark); continue
+                            name, notional, mark)
+            _record_missed_signal(decision, "zero_contracts",
+                                  f"notional ${notional:.2f}, mark {mark}")
+            continue
 
         order = broker.place_order(
             symbol=decision.symbol, side=decision.side, size=contracts,
@@ -438,7 +479,10 @@ def tick_entry_decisions() -> None:
             leverage=LEVERAGE,
         )
         if not order.get("ok"):
-            logger.error("%s entry failed: %s", name, order); continue
+            logger.error("%s entry failed: %s", name, order)
+            _record_missed_signal(decision, "order_failed",
+                                  str(order.get("error") or order))
+            continue
 
         _OPEN_POSITIONS[name] = {
             "symbol": decision.symbol, "side": decision.side,
@@ -538,6 +582,7 @@ def get_state() -> dict:
         },
         "shadow_trades":   list(_SHADOW_TRADES[-_MAX_SHADOW_TRADES:]),
         "shadow_summary":  _shadow_summary(),
+        "missed_signals":  list(_MISSED_SIGNALS[-_MAX_MISSED_SIGNALS:]),
     }
 
 

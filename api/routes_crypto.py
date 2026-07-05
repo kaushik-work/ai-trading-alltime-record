@@ -85,11 +85,13 @@ def _build_crypto_snapshot() -> dict:
     futures_stats = _futures_stats_for_dashboard()
     shadow_trades: list = []
     shadow_summary: dict = {}
+    missed_signals: list = []
     try:
         from core.execution.crypto_runner import get_state
         rs = get_state()
         shadow_trades = list(rs.get("shadow_trades", []))
         shadow_summary = dict(rs.get("shadow_summary", {}))
+        missed_signals = list(rs.get("missed_signals", []))
     except Exception:
         pass
     try:
@@ -105,6 +107,7 @@ def _build_crypto_snapshot() -> dict:
         "futures_stats": futures_stats,
         "shadow_trades":  shadow_trades,
         "shadow_summary": shadow_summary,
+        "missed_signals": missed_signals,
         "stream":         stream,
     }
 

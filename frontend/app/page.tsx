@@ -92,12 +92,24 @@ type ShadowSummary = {
   avg_loss_pct: number;
 };
 
+type MissedSignal = {
+  id: string;
+  ts: string;
+  strategy: string;
+  symbol: string;
+  side: string;
+  width_pct: number;
+  reason: string;
+  detail: string;
+};
+
 type Snapshot = {
   ts: string;
   perp_marks: Record<string, number>;
   futures_stats?: Record<string, FuturesStat>;
   shadow_trades?: ShadowTrade[];
   shadow_summary?: ShadowSummary;
+  missed_signals?: MissedSignal[];
   signals: SignalRow[];
   portfolio: PortfolioState;
   stream: StreamDiag;
@@ -195,6 +207,8 @@ export default function CryptoHome() {
   const shadowTrades = snap?.shadow_trades ?? [];
   const shadowSummary = snap?.shadow_summary;
   const lastShadow = shadowTrades.length ? shadowTrades[shadowTrades.length - 1] : null;
+  const missedSignals = snap?.missed_signals ?? [];
+  const lastMissed = missedSignals.length ? missedSignals[missedSignals.length - 1] : null;
 
   // Max 4h S/R range width across assets — used for the strip stat
   const maxRangePct = signals.length
@@ -422,6 +436,61 @@ export default function CryptoHome() {
             <p className="text-[10px] text-gray-600 mt-1">
               Fund Delta wallet with USDT to convert these into live orders. Same price-action bracket applied: BTC 0.4% SL / 2.0% TP, ETH 0.5% SL / 3.5% TP, breakeven trail at +1R.
             </p>
+          </div>
+        )}
+
+        {/* Missed-signals panel — signals that crossed the gate but did NOT
+            become live orders (empty wallet, API failure, zero sizing, kill
+            switch, no mark).  Pure visibility; no P&L is tracked here. */}
+        {missedSignals.length > 0 && (
+          <div className="border border-red-700/40 bg-red-950/15 rounded-lg p-4 mb-6">
+            <div className="flex items-baseline justify-between mb-2">
+              <span className="text-red-400 text-sm font-semibold">
+                ⚠️ Missed Signals — entries that did not reach the exchange
+              </span>
+              <span className="text-[10px] text-gray-500">
+                {missedSignals.length} in buffer
+              </span>
+            </div>
+            {lastMissed && (
+              <p className="text-[11px] text-gray-400 font-mono mb-2">
+                latest: {lastMissed.strategy} {lastMissed.symbol} {lastMissed.side.toUpperCase()}
+                {" @ "}{new Date(lastMissed.ts).toLocaleTimeString()}
+                {" · width "}{lastMissed.width_pct >= 0 ? "+" : ""}{lastMissed.width_pct.toFixed(3)}%
+                {" · reason "}<span className="text-red-300">{lastMissed.reason}</span>
+                {lastMissed.detail && ` · ${lastMissed.detail}`}
+              </p>
+            )}
+            <div className="overflow-x-auto -mx-2 sm:mx-0">
+              <table className="w-full text-[10px] sm:text-xs min-w-[480px]">
+                <thead className="text-gray-500 border-b border-[#1e1e30]">
+                  <tr>
+                    <th className="text-left py-1 px-2">Time</th>
+                    <th className="text-left px-2">Strategy</th>
+                    <th className="text-right px-2">Side</th>
+                    <th className="text-right px-2">Width</th>
+                    <th className="text-left px-2">Reason</th>
+                    <th className="text-left px-2">Detail</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {[...missedSignals].reverse().slice(0, 10).map((m) => (
+                    <tr key={m.id} className="border-b border-[#13131f]">
+                      <td className="py-1 px-2 font-mono">{new Date(m.ts).toLocaleTimeString()}</td>
+                      <td className="px-2">{m.strategy}</td>
+                      <td className="text-right px-2">
+                        <span className={m.side === "buy" ? "text-green-400" : m.side === "sell" ? "text-red-400" : "text-gray-400"}>
+                          {m.side.toUpperCase()}
+                        </span>
+                      </td>
+                      <td className="text-right px-2 font-mono">{m.width_pct.toFixed(3)}%</td>
+                      <td className="px-2 text-red-300">{m.reason}</td>
+                      <td className="px-2 text-gray-400 truncate max-w-[200px]">{m.detail}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
 
