@@ -286,13 +286,6 @@ order.
 
 Backtest results on Delta 1m data:
 
-**June 2026 (~19 days, zone retest filter — older snapshot)**
-
-| Asset | Config | Trades | WR | P&L | PF | MaxDD | MaxCL |
-|---|---|---:|---:|---:|---:|---:|---:|
-| BTCUSD | SL 0.5% / 1:7 | 37 | 45.9% | +4.47% | 1.53 | 3.10% | 6 |
-| ETHUSD | SL 0.5% / 1:7 | 25 | 32.0% | +7.21% | 2.35 | 3.17% | 7 |
-
 **April–June 2026 (~80 days, last 3 months)**
 
 | Asset | Config | Trades | WR | P&L | PF | MaxDD | MaxCL |
@@ -301,8 +294,8 @@ Backtest results on Delta 1m data:
 | ETHUSD | SL 0.7% / 1:7 | 83 | 56.6% | +18.10% | 2.01 | 2.33% | 3 |
 
 Walk-forward (40% / 60% split) is healthy with the `wick_touch` retest filter
-plus 180-min block-after-loss: BTC PF 1.88 → 1.63, ETH PF 1.63 → 1.63. Both
-assets remain profitable in both halves and Max consecutive losses stay at 5–7.
+plus 180-min block-after-loss: BTC PF 1.45 → 1.71, ETH PF 2.18 → 1.78. Both
+assets remain profitable in both halves and MaxCL stays at 3–5.
 
 Additional WR-boost filters (RSI, volume, trend slope, range min, time-of-day,
 15m HTF align, engulfing, pin bar) are exposed as dials in the backtest harness.

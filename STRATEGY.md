@@ -119,12 +119,12 @@ UNDERLYING=ETH START_DT=2026-03-01 END_DT=2026-06-20 STAGE=discover \
 
 | Asset | First 40% PF | Last 60% PF |
 |---|---|---|
-| BTCUSD | 1.88 | 1.63 |
-| ETHUSD | 1.63 | 1.63 |
+| BTCUSD | 1.45 | 1.71 |
+| ETHUSD | 2.18 | 1.78 |
 
 Both assets remain profitable in both halves. The `wick_touch` retest filter
-plus 180-min block-after-loss lifts WR to 47.2% / 44.0%, keeps MaxDD under 2.5%,
-and holds Max consecutive losses at 5–7.
+plus 180-min block-after-loss lifts WR to 57.3% / 56.6%, keeps MaxDD under 2.6%,
+and holds Max consecutive losses at 3–5.
 
 Additional WR-boost filters are exposed in `strategies/price_action_sr.py` and
 `delta_exchange/backtest_price_action_sweep.py` for experimentation. Individually
@@ -138,7 +138,7 @@ block-after-loss rule.
 | Risk | Mitigation today | Open gap |
 |---|---|---|
 | Range-bound chop | Trend filter + `wick_touch` retest | No volatility regime filter |
-| Long losing streaks | 1:5–1:7 R:R + stricter retest | 5–7 consecutive losses possible |
+| Long losing streaks | 1:7 R:R + stricter retest | 3–5 consecutive losses possible |
 | Late-period degradation | `wick_touch` retest filter | Need more OOS months |
 | Slippage on market entry | Next-tick execution in backtest | Live fill may differ |
 | Breakeven trail not in live code | Fixed bracket still profitable | Add BE trail to position manager |
