@@ -14,7 +14,7 @@
 | **Edge source** | S/R retest + buyer/seller aggression at 4h levels, filtered by 24h trend |
 | **Universe** | BTCUSD + ETHUSD perpetuals on Delta India |
 | **Decision cadence** | 15-minute entry tick at :00/:15/:30/:45:30 UTC; 2s bar updates |
-| **Leverage** | 40× isolated |
+| **Leverage** | 30× isolated |
 | **Per-cycle deploy** | 50% of live wallet pool, BTC/ETH split 50/50 |
 | **Exits** | Pure SL/TP bracket: BTC −0.6% / +4.2%, ETH −0.7% / +4.9% |
 | **Daily kill switch** | Halt new entries if day P&L < −5% of base equity |
@@ -87,7 +87,7 @@ edge of the range.
 | Signal cooldown | 1h | `strategies/price_action_sr.py` |
 | Block after loss | 180 min | `strategies/price_action_sr.py` |
 | Optional WR filters | volume, RSI, trend slope, range min, hours, HTF align, engulfing, pin bar | `strategies/price_action_sr.py` |
-| Leverage | 40× | `core/risk_management.py` |
+| Leverage | 30× | `core/risk_management.py` |
 | Capital per cycle | 50% of pool | `core/risk_management.py` |
 | Daily kill | −5% of base equity | `core/risk_management.py` |
 | Exit regime | `pure_sltp` | `core/risk_management.py` |
@@ -115,10 +115,10 @@ UNDERLYING=ETH START_DT=2026-03-01 END_DT=2026-06-20 STAGE=discover \
 | BTCUSD | 0.6% / 1:7 | 124 | 57.3% | +17.28% | 1.79 | 2.52% | 5 |
 | ETHUSD | 0.7% / 1:7 | 83 | 56.6% | +18.10% | 2.01 | 2.33% | 3 |
 
-These figures are unlevered. Live leverage is **40× isolated** (effective ~20×
+These figures are unlevered. Live leverage is **30× isolated** (effective ~15×
 pool exposure at 50% per-cycle capital). A liquidation-aware sweep on the same
-1m data shows ~355%/mo BTC and ~382%/mo ETH with zero in-sample liquidations,
-but a ~2.5% adverse wick against an open position wipes the allocated margin.
+1m data shows ~215%/mo BTC and ~238%/mo ETH with zero in-sample liquidations;
+a ~3.3% adverse wick against an open position wipes the allocated margin.
 Run `delta_exchange/backtest_leverage_liquidation.py` to reproduce.
 
 ### Walk-forward (40% / 60% split)

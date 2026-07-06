@@ -75,10 +75,10 @@ Backtest validation (April–June 2026, ~80 days, $10k per asset,
 - BTCUSD SL 0.6% / 1:7: **+17.28%**, PF 1.79, 124 trades, 57.3% WR, MaxDD 2.52%
 - ETHUSD SL 0.7% / 1:7: **+18.10%**, PF 2.01, 83 trades, 56.6% WR, MaxDD 2.33%
 
-Leverage is set to **40×** (effective ~20× pool exposure at 50% capital use) to
-target ~400% monthly returns per the liquidation-aware sweep in
-`delta_exchange/backtest_leverage_liquidation.py`. This assumes zero in-sample
-liquidations but carries real liquidation risk on a ~2.5% adverse wick.
+Leverage is set to **30×** (effective ~15× pool exposure at 50% capital use) as
+a safer-aggressive target (~200%/mo BTC, ~238%/mo ETH) per the liquidation-aware
+sweep in `delta_exchange/backtest_leverage_liquidation.py`. This assumes zero
+in-sample liquidations but carries real liquidation risk on a ~3.3% adverse wick.
 Override with `CRYPTO_LEVERAGE` if you want a safer profile.
 
 ## Repo layout

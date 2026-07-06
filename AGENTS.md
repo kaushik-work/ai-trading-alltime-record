@@ -270,7 +270,7 @@ The strategy builds its own 1-minute candles from live perp mark updates. The
 | Cooldown | 60 min | `strategies/price_action_sr.py` |
 | Block after loss | 180 min | `strategies/price_action_sr.py` |
 | Optional WR filters | volume, RSI, trend slope, range min, hours, HTF align, engulfing, pin bar | `strategies/price_action_sr.py` |
-| Leverage | 40× | `core/risk_management.py` |
+| Leverage | 30× | `core/risk_management.py` |
 | Capital per cycle | 50% of pool | `core/risk_management.py` |
 | Max hold | 4h | `strategies/price_action_sr.py` |
 | Cooldown | 1h between signals | `strategies/price_action_sr.py` |
@@ -315,7 +315,7 @@ A liquidation-aware sweep on Apr–Jun 2026 1m data (`delta_exchange/backtest_le
 | 50× | 25× | ~518% | ~539% | 0 |
 | 100× | 50× | ~576% | ~484% | 1 |
 
-Live default is **40×** to target ~400% monthly. This is aggressive: a ~2.5% adverse wick against the position wipes the allocated margin. The daily −5% kill switch and 50% per-cycle cap are the only live guardrails. Consider 10×–20× if you are not comfortable with single-wick liquidation risk.
+Live default is **30×** as a safer-aggressive compromise (~200%/mo BTC, ~238%/mo ETH in-sample). A ~3.3% adverse wick against the position wipes the allocated margin. The daily −5% kill switch and 50% per-cycle cap are the only live guardrails. Consider 10×–20× if you are not comfortable with single-wick liquidation risk.
 
 ---
 
@@ -354,7 +354,7 @@ into containers.
 | `CRYPTO_EQUITY_USD` | Paper-mode equity floor, default $1,000 |
 | `CRYPTO_CAPITAL_USE_PCT` | Per-cycle capital fraction, default 0.50 |
 | `CRYPTO_BTC_CAPITAL_PCT` / `CRYPTO_ETH_CAPITAL_PCT` | Per-asset split, default 0.50 each |
-| `CRYPTO_LEVERAGE` | Default 40 |
+| `CRYPTO_LEVERAGE` | Default 30 |
 | `CRYPTO_DAILY_LOSS_KILL_PCT` | Default 0.05 |
 | `CRYPTO_MAX_LIVE_CONTRACTS` | Default 50 |
 | `CRYPTO_EXIT_REGIME` | `pure_sltp` (recommended for price-action) or `trail_partial` |
