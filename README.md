@@ -79,7 +79,8 @@ Leverage is set to **30×** (effective ~15× pool exposure at 50% capital use) a
 a safer-aggressive target (~200%/mo BTC, ~238%/mo ETH) per the liquidation-aware
 sweep in `delta_exchange/backtest_leverage_liquidation.py`. This assumes zero
 in-sample liquidations but carries real liquidation risk on a ~3.3% adverse wick.
-Override with `CRYPTO_LEVERAGE` if you want a safer profile.
+Leverage is hardcoded in `core/risk_management.py` (not `.env`) so every change
+is tracked in git.
 
 ## Repo layout
 

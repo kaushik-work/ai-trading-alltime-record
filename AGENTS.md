@@ -354,7 +354,6 @@ into containers.
 | `CRYPTO_EQUITY_USD` | Paper-mode equity floor, default $1,000 |
 | `CRYPTO_CAPITAL_USE_PCT` | Per-cycle capital fraction, default 0.50 |
 | `CRYPTO_BTC_CAPITAL_PCT` / `CRYPTO_ETH_CAPITAL_PCT` | Per-asset split, default 0.50 each |
-| `CRYPTO_LEVERAGE` | Default 30 |
 | `CRYPTO_DAILY_LOSS_KILL_PCT` | Default 0.05 |
 | `CRYPTO_MAX_LIVE_CONTRACTS` | Default 50 |
 | `CRYPTO_EXIT_REGIME` | `pure_sltp` (recommended for price-action) or `trail_partial` |
