@@ -59,11 +59,12 @@ ETH_CAPITAL_PCT: float = _env_float("CRYPTO_ETH_CAPITAL_PCT", 0.50)
 
 
 # ── Risk limits ──────────────────────────────────────────────────────────────
-# Leverage applied per order. v5.5 backtest sweep across June 2026 showed
-# returns are identical at 3× and 10× (the bot's max sizing fits within 3×
-# headroom). 3× gives ~33% liquidation buffer vs 10×'s ~10% buffer — same
-# returns, materially safer in flash-crash scenarios.
-LEVERAGE: int = _env_int("CRYPTO_LEVERAGE", 3)
+# Leverage applied per order. Price-action S/R backtest (Apr-Jun 2026,
+# liquidation-aware on 1m wicks) shows 40× hits the ~400%/mo target with
+# zero liquidations in-sample. Effective exposure = LEVERAGE × CAPITAL_USE_PCT
+# (40 × 0.50 = 20× pool notional). This is aggressive: a ~2.5% adverse wick
+# wipes the allocated margin. Override via CRYPTO_LEVERAGE env for paper tests.
+LEVERAGE: int = _env_int("CRYPTO_LEVERAGE", 40)
 
 # Halt new entries when day P&L drops below this fraction of base equity.
 DAILY_LOSS_KILL_PCT: float = _env_float("CRYPTO_DAILY_LOSS_KILL_PCT", 0.05)

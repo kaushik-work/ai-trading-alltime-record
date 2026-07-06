@@ -65,7 +65,7 @@ no NSE strategies.
 | Stop loss ETH | -0.7% |
 | Target BTC | +4.2% |
 | Target ETH | +4.9% |
-| Leverage | 3× |
+| Leverage | 40× |
 | Capital per cycle | 50% of pool |
 | Max hold | 4h |
 | Daily kill | -5% of base equity |
@@ -74,6 +74,12 @@ Backtest validation (April–June 2026, ~80 days, $10k per asset,
 `wick_touch` retest + 180-min block-after-loss):
 - BTCUSD SL 0.6% / 1:7: **+17.28%**, PF 1.79, 124 trades, 57.3% WR, MaxDD 2.52%
 - ETHUSD SL 0.7% / 1:7: **+18.10%**, PF 2.01, 83 trades, 56.6% WR, MaxDD 2.33%
+
+Leverage is set to **40×** (effective ~20× pool exposure at 50% capital use) to
+target ~400% monthly returns per the liquidation-aware sweep in
+`delta_exchange/backtest_leverage_liquidation.py`. This assumes zero in-sample
+liquidations but carries real liquidation risk on a ~2.5% adverse wick.
+Override with `CRYPTO_LEVERAGE` if you want a safer profile.
 
 ## Repo layout
 

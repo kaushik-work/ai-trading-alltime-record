@@ -270,7 +270,7 @@ The strategy builds its own 1-minute candles from live perp mark updates. The
 | Cooldown | 60 min | `strategies/price_action_sr.py` |
 | Block after loss | 180 min | `strategies/price_action_sr.py` |
 | Optional WR filters | volume, RSI, trend slope, range min, hours, HTF align, engulfing, pin bar | `strategies/price_action_sr.py` |
-| Leverage | 3× | `core/risk_management.py` |
+| Leverage | 40× | `core/risk_management.py` |
 | Capital per cycle | 50% of pool | `core/risk_management.py` |
 | Max hold | 4h | `strategies/price_action_sr.py` |
 | Cooldown | 1h between signals | `strategies/price_action_sr.py` |
@@ -301,6 +301,21 @@ Additional WR-boost filters (RSI, volume, trend slope, range min, time-of-day,
 15m HTF align, engulfing, pin bar) are exposed as dials in the backtest harness.
 Individually they mostly reduce trade count; the safest global improvement is
 `BLOCK_AFTER_LOSS_MINUTES = 180`.
+
+### Leverage and liquidation risk
+
+A liquidation-aware sweep on Apr–Jun 2026 1m data (`delta_exchange/backtest_leverage_liquidation.py`) models margin call if any 1m wick touches the isolated liquidation price during an open trade. At 50% pool per cycle, effective exposure is `LEVERAGE × 0.50`:
+
+| Leverage | Effective exposure | BTC Ret/mo | ETH Ret/mo | In-sample liquidations |
+|---|---:|---:|---:|---:|
+| 10× | 5× | ~41% | ~46% | 0 |
+| 20× | 10× | ~111% | ~124% | 0 |
+| 30× | 15× | ~215% | ~238% | 0 |
+| 40× | 20× | ~355% | ~382% | 0 |
+| 50× | 25× | ~518% | ~539% | 0 |
+| 100× | 50× | ~576% | ~484% | 1 |
+
+Live default is **40×** to target ~400% monthly. This is aggressive: a ~2.5% adverse wick against the position wipes the allocated margin. The daily −5% kill switch and 50% per-cycle cap are the only live guardrails. Consider 10×–20× if you are not comfortable with single-wick liquidation risk.
 
 ---
 
@@ -339,7 +354,7 @@ into containers.
 | `CRYPTO_EQUITY_USD` | Paper-mode equity floor, default $1,000 |
 | `CRYPTO_CAPITAL_USE_PCT` | Per-cycle capital fraction, default 0.50 |
 | `CRYPTO_BTC_CAPITAL_PCT` / `CRYPTO_ETH_CAPITAL_PCT` | Per-asset split, default 0.50 each |
-| `CRYPTO_LEVERAGE` | Default 3 |
+| `CRYPTO_LEVERAGE` | Default 40 |
 | `CRYPTO_DAILY_LOSS_KILL_PCT` | Default 0.05 |
 | `CRYPTO_MAX_LIVE_CONTRACTS` | Default 50 |
 | `CRYPTO_EXIT_REGIME` | `pure_sltp` (recommended for price-action) or `trail_partial` |
