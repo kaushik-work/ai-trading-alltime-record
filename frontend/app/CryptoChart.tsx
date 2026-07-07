@@ -106,7 +106,12 @@ export default function CryptoChart({ livePrices }: Props) {
   // Build/rebuild chart when data arrives
   useEffect(() => {
     if (!data?.candles?.length || !containerRef.current) return;
+
+    let ro: ResizeObserver | null = null;
+    let disposed = false;
+
     import("lightweight-charts").then(({ createChart, LineStyle, CrosshairMode }) => {
+      if (disposed || !containerRef.current) return;
       if (chartRef.current) { chartRef.current.remove(); chartRef.current = null; }
 
       const chart = createChart(containerRef.current!, {
@@ -237,30 +242,45 @@ export default function CryptoChart({ livePrices }: Props) {
       });
 
       chart.timeScale().fitContent();
-      const ro = new ResizeObserver(() => {
-        if (containerRef.current) chart.applyOptions({ width: containerRef.current.clientWidth });
+      ro = new ResizeObserver(() => {
+        if (disposed || !chartRef.current || !containerRef.current) return;
+        try {
+          chartRef.current.applyOptions({ width: containerRef.current.clientWidth });
+        } catch {
+          // chart may have been disposed by a parallel cleanup
+        }
       });
       ro.observe(containerRef.current!);
-      return () => ro.disconnect();
     });
 
     return () => {
-      if (chartRef.current) { chartRef.current.remove(); chartRef.current = null; }
+      disposed = true;
+      if (ro) ro.disconnect();
+      if (chartRef.current) {
+        chartRef.current.remove();
+        chartRef.current = null;
+      }
+      candleSeriesRef.current = null;
+      livePriceLineRef.current = null;
     };
   }, [data, asset]);
 
   // Live price tick — update last candle in place
   useEffect(() => {
     if (!livePrice || !candleSeriesRef.current || !livePriceLineRef.current) return;
-    livePriceLineRef.current.applyOptions({ price: livePrice });
-    if (data?.candles?.length) {
-      const last = data.candles[data.candles.length - 1];
-      const hi = Math.max(last.high, livePrice);
-      const lo = Math.min(last.low,  livePrice);
-      candleSeriesRef.current.update({
-        time: last.time as any,
-        open: last.open, high: hi, low: lo, close: livePrice,
-      });
+    try {
+      livePriceLineRef.current.applyOptions({ price: livePrice });
+      if (data?.candles?.length) {
+        const last = data.candles[data.candles.length - 1];
+        const hi = Math.max(last.high, livePrice);
+        const lo = Math.min(last.low,  livePrice);
+        candleSeriesRef.current.update({
+          time: last.time as any,
+          open: last.open, high: hi, low: lo, close: livePrice,
+        });
+      }
+    } catch {
+      // series/chart was disposed (e.g. during asset/timeframe switch); ignore
     }
   }, [livePrice]);
 

@@ -127,6 +127,21 @@ function signalState(s: SignalRow): { label: string; color: string } {
   return { label: "flat", color: "text-gray-500" };
 }
 
+function isTokenValid(token: string | null): boolean {
+  if (!token) return false;
+  try {
+    const payload = JSON.parse(atob(token.split(".")[1]));
+    return payload.exp * 1000 > Date.now() + 30_000; // 30s buffer
+  } catch {
+    return false;
+  }
+}
+
+function logoutAndLogin(router: ReturnType<typeof useRouter>) {
+  localStorage.removeItem("aq_token");
+  router.replace("/login");
+}
+
 export default function CryptoHome() {
   const router = useRouter();
   const [authed, setAuthed] = useState(false);
@@ -158,8 +173,9 @@ export default function CryptoHome() {
   }
 
   useEffect(() => {
-    if (!localStorage.getItem("aq_token")) {
-      router.replace("/login");
+    const token = localStorage.getItem("aq_token");
+    if (!isTokenValid(token)) {
+      logoutAndLogin(router);
     } else {
       setAuthed(true);
     }
@@ -168,27 +184,46 @@ export default function CryptoHome() {
   // WebSocket subscription — replaces the old 60s polling
   useEffect(() => {
     if (!authed) return;
-    const token = localStorage.getItem("aq_token");
 
     const connect = () => {
+      const token = localStorage.getItem("aq_token");
+      if (!isTokenValid(token)) {
+        logoutAndLogin(router);
+        return;
+      }
       setWsState("connecting");
       const ws = new WebSocket(`${_WS}/ws/crypto?token=${encodeURIComponent(token || "")}`);
       wsRef.current = ws;
       ws.onopen = () => setWsState("open");
       ws.onmessage = (ev) => {
         try { setSnap(JSON.parse(ev.data) as Snapshot); }
-        catch (e) { /* malformed payload */ }
+        catch { /* malformed payload */ }
       };
-      ws.onclose = () => {
+      ws.onclose = (ev) => {
         setWsState("closed");
         wsRef.current = null;
+        // 1008 = policy violation = invalid/expired token (server sends "Invalid or expired token")
+        if (ev.code === 1008) {
+          logoutAndLogin(router);
+          return;
+        }
         // Reconnect after 3s
         reconnectTimer.current = setTimeout(connect, 3000);
       };
       ws.onerror = () => { try { ws.close(); } catch {} };
     };
     connect();
+
+    // Re-check token when laptop wakes up / tab becomes visible again
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && !isTokenValid(localStorage.getItem("aq_token"))) {
+        logoutAndLogin(router);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisible);
+
     return () => {
+      document.removeEventListener("visibilitychange", onVisible);
       if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
       if (wsRef.current) wsRef.current.close();
     };
