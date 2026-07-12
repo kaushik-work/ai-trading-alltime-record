@@ -124,6 +124,8 @@ def prepare(df: pd.DataFrame, use_trend: bool = True,
             range_pct_min: float = 0.0,
             trading_hours: str = "all",
             htf_align: bool = False,
+            htf_1h_slope_min_pct: float = 0.0,
+            vol_filter_max: float = 0.0,
             require_engulfing: bool = False,
             pin_bar_wick_ratio: float = 0.0):
     o = df["open"].values
@@ -166,6 +168,28 @@ def prepare(df: pd.DataFrame, use_trend: bool = True,
         slope[:trend_slope_candles] = 0
         allow_long &= (slope >= trend_slope_min_pct)
         allow_short &= (slope <= -trend_slope_min_pct)
+
+    # 1h EMA20 trend strength filter
+    if htf_1h_slope_min_pct > 0:
+        df_1h = df.resample('1h').agg({'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last'})
+        ema20_1h = df_1h['close'].ewm(span=20, min_periods=10).mean()
+        ema_slope = ema20_1h.diff(20)
+        ema_1m = ema20_1h.reindex(df.index, method='ffill').values
+        slope_1m = ema_slope.reindex(df.index, method='ffill').values
+        threshold = htf_1h_slope_min_pct / 100.0 * ema_1m
+        ema_rising_1h = np.r_[False, ema20_1h.values[1:] > ema20_1h.values[:-1]]
+        ema_falling_1h = np.r_[False, ema20_1h.values[1:] < ema20_1h.values[:-1]]
+        ema_rising_1m = pd.Series(ema_rising_1h, index=df_1h.index).reindex(df.index, method='ffill').values
+        ema_falling_1m = pd.Series(ema_falling_1h, index=df_1h.index).reindex(df.index, method='ffill').values
+        allow_long &= ema_rising_1m & (slope_1m > threshold)
+        allow_short &= ema_falling_1m & (slope_1m < -threshold)
+
+    # 24h realized volatility filter
+    vol_filter_ok = np.ones(len(c), dtype=bool)
+    if vol_filter_max > 0:
+        returns = pd.Series(c).pct_change()
+        vol_24h = returns.rolling(24 * 60, min_periods=24 * 60).std() * np.sqrt(365 * 24 * 60)
+        vol_filter_ok = vol_24h.values <= vol_filter_max
 
     # volume filter
     vol_ok = (avg_volume <= 0) | (v >= min_volume_mult * avg_volume)
@@ -259,9 +283,9 @@ def prepare(df: pd.DataFrame, use_trend: bool = True,
     pattern_ok_short = pattern_short if pattern_required else np.ones(len(c), dtype=bool)
 
     strong_green = (green & (body >= BODY_MULT * avg_body) & (wick_pct <= WICK_RATIO_MAX) &
-                    (close_pos >= body_pos_threshold) & vol_ok & rsi_long_ok & htf_long & pattern_ok_long)
+                    (close_pos >= body_pos_threshold) & vol_ok & vol_filter_ok & rsi_long_ok & htf_long & pattern_ok_long)
     strong_red = (red & (body >= BODY_MULT * avg_body) & (wick_pct <= WICK_RATIO_MAX) &
-                  (close_pos <= (1 - body_pos_threshold)) & vol_ok & rsi_short_ok & htf_short & pattern_ok_short)
+                  (close_pos <= (1 - body_pos_threshold)) & vol_ok & vol_filter_ok & rsi_short_ok & htf_short & pattern_ok_short)
 
     retest_long = in_range & allow_long & near_low & strong_green & time_allowed
     retest_short = in_range & allow_short & near_high & strong_red & time_allowed
@@ -287,6 +311,8 @@ def run_asset(subdir: str, sym: str, sl_pct: float, rr: float,
               range_pct_min: float = 0.0,
               trading_hours: str = "all",
               htf_align: bool = False,
+              htf_1h_slope_min_pct: float = 0.0,
+              vol_filter_max: float = 0.0,
               require_engulfing: bool = False,
               pin_bar_wick_ratio: float = 0.0,
               cooldown_candles: int = 60,
@@ -311,6 +337,8 @@ def run_asset(subdir: str, sym: str, sl_pct: float, rr: float,
                 range_pct_min=range_pct_min,
                 trading_hours=trading_hours,
                 htf_align=htf_align,
+                htf_1h_slope_min_pct=htf_1h_slope_min_pct,
+                vol_filter_max=vol_filter_max,
                 require_engulfing=require_engulfing,
                 pin_bar_wick_ratio=pin_bar_wick_ratio)
     o, h, l, c = s["o"], s["h"], s["l"], s["c"]
@@ -540,6 +568,10 @@ def main():
                         help="UTC hour ranges, e.g. '0-4,13-21' (default all)")
     parser.add_argument("--htf-align", action="store_true",
                         help="Require 15m trend alignment")
+    parser.add_argument("--htf-1h-slope-min-pct", type=float, default=0.0,
+                        help="Min |1h EMA20 slope %%| over 20 candles (0 = disabled)")
+    parser.add_argument("--vol-filter-max", type=float, default=0.0,
+                        help="Max 24h realized vol to trade (0 = disabled)")
     parser.add_argument("--require-engulfing", action="store_true",
                         help="Require engulfing candle pattern")
     parser.add_argument("--pin-bar-wick-ratio", type=float, default=0.0,
@@ -572,6 +604,8 @@ def main():
         range_pct_min=args.range_pct_min,
         trading_hours=args.trading_hours,
         htf_align=args.htf_align,
+        htf_1h_slope_min_pct=args.htf_1h_slope_min_pct,
+        vol_filter_max=args.vol_filter_max,
         require_engulfing=args.require_engulfing,
         pin_bar_wick_ratio=args.pin_bar_wick_ratio,
         cooldown_candles=args.cooldown_candles,

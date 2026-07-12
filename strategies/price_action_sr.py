@@ -61,6 +61,8 @@ TREND_SLOPE_CANDLES = 0           # trend MA slope lookback (0 = disabled)
 TREND_SLOPE_MIN_PCT = 0.0         # min |trend MA slope %| over lookback
 TRADING_HOURS    = "all"          # UTC ranges, e.g. "0-4,13-21"
 HTF_ALIGN        = False          # require 15m trend alignment
+HTF_1H_SLOPE_MIN_PCT = 0.0        # min |1h EMA20 slope %| over 20 candles (0 = disabled)
+VOL_FILTER_MAX   = 0.0            # max 24h realized vol to trade (0 = disabled)
 REQUIRE_ENGULFING = False         # require engulfing candle pattern
 PIN_BAR_WICK_RATIO = 0.0          # min wick/range for pin-bar (0 = disabled)
 
@@ -94,6 +96,8 @@ class PriceActionSRSignal(CryptoStrategy):
         self._last_loss_minute: dict = {"buy": 0, "sell": 0}
         self._htf_candles: deque[Candle] = deque(maxlen=200)
         self._current_htf_bar: Optional[dict] = None
+        self._1h_candles: deque[Candle] = deque(maxlen=60)
+        self._current_1h_bar: Optional[dict] = None
 
     def _parse_trading_hours(self, s: str):
         """Parse '0-4,13-21' into list of (start, end) UTC hour tuples."""
@@ -164,6 +168,50 @@ class PriceActionSRSignal(CryptoStrategy):
         last = closes[-1]
         return last > ma, last < ma
 
+    def _build_1h_bar(self, mark: float) -> None:
+        """Build 1h bars from incoming marks for trend-strength filter."""
+        now = time.time()
+        minute = int(now // 60)
+        h1_minute = (minute // 60) * 60
+        if self._current_1h_bar is None or self._current_1h_bar["minute"] != h1_minute:
+            if self._current_1h_bar is not None:
+                b = self._current_1h_bar
+                self._1h_candles.append(Candle(
+                    ts=b["minute"] * 60, open=b["open"], high=b["high"],
+                    low=b["low"], close=b["close"],
+                ))
+                while len(self._1h_candles) > 60:
+                    self._1h_candles.popleft()
+            self._current_1h_bar = {"minute": h1_minute, "open": mark, "high": mark, "low": mark, "close": mark}
+        else:
+            self._current_1h_bar["high"] = max(self._current_1h_bar["high"], mark)
+            self._current_1h_bar["low"] = min(self._current_1h_bar["low"], mark)
+            self._current_1h_bar["close"] = mark
+
+    def _1h_trend_strength(self) -> tuple[bool, bool]:
+        """Return (strong_bullish, strong_bearish) based on 1h EMA20 slope."""
+        candles = list(self._1h_candles)
+        if len(candles) < 20:
+            return True, True
+        closes = pd.Series([c.close for c in candles])
+        ema20 = closes.ewm(span=20, min_periods=10).mean()
+        slope = ema20.iloc[-1] - ema20.iloc[-20]
+        threshold = HTF_1H_SLOPE_MIN_PCT / 100.0 * ema20.iloc[-1]
+        bullish = ema20.iloc[-1] > ema20.iloc[-2] and slope > threshold
+        bearish = ema20.iloc[-1] < ema20.iloc[-2] and slope < -threshold
+        return bullish, bearish
+
+    def _realized_vol_24h(self) -> float:
+        """Annualized 24h realized volatility from 1m closes."""
+        candles = list(self._candles)
+        if len(candles) < 24 * 60:
+            return 0.0
+        closes = pd.Series([c.close for c in candles[-24 * 60:]])
+        returns = closes.pct_change().dropna()
+        if returns.empty:
+            return 0.0
+        return float(returns.std() * np.sqrt(365 * 24 * 60))
+
     def notify_trade_closed(self, side: str, pnl_pct: float) -> None:
         """Runner calls this when a strategy trade closes. Used for block-after-loss."""
         if pnl_pct <= 0:
@@ -199,6 +247,8 @@ class PriceActionSRSignal(CryptoStrategy):
             self._current_bar["close"] = mark
         if HTF_ALIGN:
             self._build_htf_bar(mark)
+        if HTF_1H_SLOPE_MIN_PCT > 0:
+            self._build_1h_bar(mark)
 
     def _signal(self) -> Optional[CryptoSignalDecision]:
         candles = list(self._candles)
@@ -266,6 +316,17 @@ class PriceActionSRSignal(CryptoStrategy):
         else:
             htf_long = htf_short = True
 
+        # 1h trend strength filter
+        if HTF_1H_SLOPE_MIN_PCT > 0:
+            strong_long, strong_short = self._1h_trend_strength()
+            allow_long = allow_long and strong_long
+            allow_short = allow_short and strong_short
+
+        # 24h volatility filter
+        vol_filter_ok = True
+        if VOL_FILTER_MAX > 0:
+            vol_filter_ok = self._realized_vol_24h() <= VOL_FILTER_MAX
+
         # candlestick patterns
         pattern_long_ok = pattern_short_ok = True
         if REQUIRE_ENGULFING or PIN_BAR_WICK_RATIO > 0:
@@ -289,10 +350,10 @@ class PriceActionSRSignal(CryptoStrategy):
 
         strong_green = (green and body >= BODY_MULT * avg_body and wick_pct <= WICK_RATIO_MAX and
                         close_pos >= BODY_POS_THRESHOLD and vol_ok and rsi_long_ok and
-                        htf_long and pattern_long_ok)
+                        htf_long and vol_filter_ok and pattern_long_ok)
         strong_red = (red and body >= BODY_MULT * avg_body and wick_pct <= WICK_RATIO_MAX and
                       close_pos <= (1 - BODY_POS_THRESHOLD) and vol_ok and rsi_short_ok and
-                      htf_short and pattern_short_ok)
+                      htf_short and vol_filter_ok and pattern_short_ok)
 
         # retest-quality gate
         near_high = (r_high - close) / close <= ZONE_PCT
@@ -352,6 +413,9 @@ class PriceActionSRSignal(CryptoStrategy):
             "time_ok": bool(time_ok),
             "block_long": bool(block_long),
             "block_short": bool(block_short),
+            "htf_1h_slope_ok": bool(allow_long or allow_short) if HTF_1H_SLOPE_MIN_PCT > 0 else True,
+            "vol_24h": float(self._realized_vol_24h()),
+            "vol_filter_ok": bool(vol_filter_ok),
             "sl_pct": float(sl_pct),
             "tp_pct": float(sl_pct * rr_ratio),
         }
