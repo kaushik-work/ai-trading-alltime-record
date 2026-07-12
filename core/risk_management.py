@@ -58,10 +58,9 @@ BTC_CAPITAL_PCT: float = _env_float("CRYPTO_BTC_CAPITAL_PCT", 0.50)
 ETH_CAPITAL_PCT: float = _env_float("CRYPTO_ETH_CAPITAL_PCT", 0.50)
 
 # Fixed-capital mode: ignore the live wallet balance and use a fixed INR
-# budget for every trade.  This matches the fixed-Rs-50k backtest regime.
-# Can be overridden via env for compounding/paper testing.
-FIXED_CAPITAL_MODE: bool = _env_bool("CRYPTO_FIXED_CAPITAL_MODE", True)
-FIXED_CAPITAL_INR: float = _env_float("CRYPTO_FIXED_CAPITAL_INR", 50000.0)
+# budget for every trade.  Hardcoded production dial — not in .env.
+FIXED_CAPITAL_MODE: bool = True
+FIXED_CAPITAL_INR: float = 50000.0
 
 
 # ── Risk limits ──────────────────────────────────────────────────────────────
@@ -78,11 +77,11 @@ DAILY_LOSS_KILL_PCT: float = _env_float("CRYPTO_DAILY_LOSS_KILL_PCT", 0.05)
 # Hard cap on contracts per single order — extra protection against a
 # sizing bug producing a giant order.  Per-asset overrides allow ETH to
 # deploy a fixed Rs 50k notional even at lower per-contract notional.
-MAX_LIVE_CONTRACTS: int = _env_int("CRYPTO_MAX_LIVE_CONTRACTS", 50)
+MAX_LIVE_CONTRACTS: int = 50
 MAX_LIVE_CONTRACTS_BY_ASSET: dict[str, int] = {
-    "BTCUSD": _env_int("CRYPTO_MAX_LIVE_CONTRACTS_BTC", 50),
-    "ETHUSD": _env_int("CRYPTO_MAX_LIVE_CONTRACTS_ETH", 300),
-    "XAUTUSD": _env_int("CRYPTO_MAX_LIVE_CONTRACTS_XAUT", 50),
+    "BTCUSD": 50,
+    "ETHUSD": 300,
+    "XAUTUSD": 50,
 }
 
 
