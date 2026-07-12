@@ -57,24 +57,33 @@ CAPITAL_USE_PCT: float = _env_float("CRYPTO_CAPITAL_USE_PCT", 0.50)
 BTC_CAPITAL_PCT: float = _env_float("CRYPTO_BTC_CAPITAL_PCT", 0.50)
 ETH_CAPITAL_PCT: float = _env_float("CRYPTO_ETH_CAPITAL_PCT", 0.50)
 
+# Fixed-capital mode: ignore the live wallet balance and use a fixed INR
+# budget for every trade.  This matches the fixed-Rs-50k backtest regime.
+# Can be overridden via env for compounding/paper testing.
+FIXED_CAPITAL_MODE: bool = _env_bool("CRYPTO_FIXED_CAPITAL_MODE", True)
+FIXED_CAPITAL_INR: float = _env_float("CRYPTO_FIXED_CAPITAL_INR", 50000.0)
+
 
 # ── Risk limits ──────────────────────────────────────────────────────────────
 # Leverage applied per order. This dial is intentionally hardcoded (not in
 # .env) because we expect to change it often and want every change tracked in
-# git. Price-action S/R backtest (Apr-Jun 2026, liquidation-aware on 1m wicks)
-# shows 30× delivers ~200%/mo with zero in-sample liquidations, while 40× pushes
-# toward ~400%/mo at the cost of a much thinner liquidation buffer. Live default
-# is 30× as a safer-aggressive compromise. Effective exposure = LEVERAGE ×
-# CAPITAL_USE_PCT (30 × 0.50 = 15× pool notional). A ~3.3% adverse wick wipes
-# the allocated margin.
-LEVERAGE: int = 30
+# git. Current live config: ETH-only, fixed Rs 50k notional per trade, 15×
+# leverage (margin = Rs 50k / 15). Note: the fixed-capital backtest used
+# Rs 25k notional per trade; live deploys Rs 50k, so P&L / drawdown scale 2×.
+LEVERAGE: int = 15
 
 # Halt new entries when day P&L drops below this fraction of base equity.
 DAILY_LOSS_KILL_PCT: float = _env_float("CRYPTO_DAILY_LOSS_KILL_PCT", 0.05)
 
 # Hard cap on contracts per single order — extra protection against a
-# sizing bug producing a giant order.
+# sizing bug producing a giant order.  Per-asset overrides allow ETH to
+# deploy a fixed Rs 50k notional even at lower per-contract notional.
 MAX_LIVE_CONTRACTS: int = _env_int("CRYPTO_MAX_LIVE_CONTRACTS", 50)
+MAX_LIVE_CONTRACTS_BY_ASSET: dict[str, int] = {
+    "BTCUSD": _env_int("CRYPTO_MAX_LIVE_CONTRACTS_BTC", 50),
+    "ETHUSD": _env_int("CRYPTO_MAX_LIVE_CONTRACTS_ETH", 300),
+    "XAUTUSD": _env_int("CRYPTO_MAX_LIVE_CONTRACTS_XAUT", 50),
+}
 
 
 # ── Exit regime ──────────────────────────────────────────────────────────────

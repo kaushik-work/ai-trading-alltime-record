@@ -44,11 +44,12 @@ from core.brokers.delta_crypto import get_broker as get_crypto_broker
 from core.risk_management import (
     TICK_INTERVAL_SECONDS, BASE_EQUITY_USD,
     CAPITAL_USE_PCT, BTC_CAPITAL_PCT, ETH_CAPITAL_PCT, capital_pct_for,
-    DAILY_LOSS_KILL_PCT, MAX_LIVE_CONTRACTS, MAX_HOLD_HOURS,
-    LEVERAGE, CONTRACT_SIZE_BY_ASSET,
+    DAILY_LOSS_KILL_PCT, MAX_LIVE_CONTRACTS, MAX_LIVE_CONTRACTS_BY_ASSET,
+    MAX_HOLD_HOURS, LEVERAGE, CONTRACT_SIZE_BY_ASSET,
     ENABLE_CRYPTO_RUNNER, EXIT_REGIME,
+    FIXED_CAPITAL_MODE, FIXED_CAPITAL_INR, USD_INR_RATE,
 )
-from strategies.price_action_sr import BTCPriceActionSRSignal, ETHPriceActionSRSignal
+from strategies.price_action_sr import ETHPriceActionSRSignal
 from strategies.crypto_base import CryptoSignalDecision
 
 logger = logging.getLogger(__name__)
@@ -83,8 +84,10 @@ _MAX_MISSED_SIGNALS = 50
 def _get_strategies():
     if not _STRATEGY_INSTANCES:
         broker = get_crypto_broker()
-        classes = (BTCPriceActionSRSignal, ETHPriceActionSRSignal)
-        logger.info("using price-action S/R strategy")
+        # Running ETH-only: vol filter is ETH-specific and BTC filter degraded
+        # backtest performance.  Add BTCPriceActionSRSignal back to re-enable BTC.
+        classes = (ETHPriceActionSRSignal,)
+        logger.info("using ETH-only price-action S/R strategy")
         for cls in classes:
             inst = cls(broker=broker)
             _STRATEGY_INSTANCES[inst.name] = inst
@@ -97,7 +100,8 @@ def _contracts_for_notional(symbol: str, notional_usd: float, mark: float) -> in
     cs = CONTRACT_SIZE_BY_ASSET.get(symbol, 0.001)
     if mark <= 0: return 0
     n = int(notional_usd / (cs * mark))
-    return max(0, min(MAX_LIVE_CONTRACTS, n))
+    cap = MAX_LIVE_CONTRACTS_BY_ASSET.get(symbol, MAX_LIVE_CONTRACTS)
+    return max(0, min(cap, n))
 
 
 # ── daily P&L tracking + kill switch ──────────────────────────────────────────
@@ -412,10 +416,9 @@ def tick_entry_decisions() -> None:
                                   "perp mark unavailable")
             continue
 
-        # Sizing: take CAPITAL_USE_PCT of the live wallet pool (USD-stable +
-        # INR-converted) and let Delta handle the on-trade currency conversion.
-        # The user only needs to decide what fraction of capital to deploy via
-        # CRYPTO_CAPITAL_USE_PCT (default 50%). Paper mode keeps BASE_EQUITY.
+        # Sizing: fixed-capital mode uses a constant INR budget per trade;
+        # otherwise we compound from the live wallet pool.  Delta handles the
+        # INR→USD conversion at trade time.
         effective_equity = BASE_EQUITY_USD
         wallet_blocked = False
         if broker.mode == "live":
@@ -428,6 +431,10 @@ def tick_entry_decisions() -> None:
                                name, shown)
                 _record_missed_signal(decision, "wallet_empty",
                                       f"wallet balance {shown}")
+            elif FIXED_CAPITAL_MODE:
+                effective_equity = FIXED_CAPITAL_INR / USD_INR_RATE
+                logger.info("%s: fixed-capital sizing Rs %.0f / %.2f = $%.2f",
+                            name, FIXED_CAPITAL_INR, USD_INR_RATE, effective_equity)
             else:
                 pct = _capital_pct_for(name)
                 effective_equity = balance * pct
@@ -628,13 +635,20 @@ def _wallet_heartbeat() -> None:
     inr = float(breakdown.get("inr_balance", 0))
     rate = float(os.environ.get("USD_INR_RATE", "86"))
     total_usd = usd + (inr / rate if rate > 0 else 0)
-    deploy = total_usd * CAPITAL_USE_PCT
-    by_asset = breakdown.get("by_asset", {})
-    logger.info(
-        "wallet heartbeat: pool=$%.2f (USD=$%.2f + ₹%.0f @ %s) "
-        "→ deploy %.0f%% = $%.2f per cycle  by_asset=%s",
-        total_usd, usd, inr, rate, CAPITAL_USE_PCT * 100, deploy, by_asset,
-    )
+    if FIXED_CAPITAL_MODE:
+        deploy = FIXED_CAPITAL_INR / USD_INR_RATE
+        logger.info(
+            "wallet heartbeat: pool=$%.2f (USD=$%.2f + ₹%.0f @ %s) "
+            "→ FIXED-CAPITAL deploy Rs %.0f = $%.2f per cycle  by_asset=%s",
+            total_usd, usd, inr, rate, FIXED_CAPITAL_INR, deploy, by_asset,
+        )
+    else:
+        deploy = total_usd * CAPITAL_USE_PCT
+        logger.info(
+            "wallet heartbeat: pool=$%.2f (USD=$%.2f + ₹%.0f @ %s) "
+            "→ deploy %.0f%% = $%.2f per cycle  by_asset=%s",
+            total_usd, usd, inr, rate, CAPITAL_USE_PCT * 100, deploy, by_asset,
+        )
 
 
 def manual_kill():

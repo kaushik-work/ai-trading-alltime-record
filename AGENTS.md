@@ -12,8 +12,9 @@ first — together they form the project contract.
 
 ## 1. Project overview
 
-This is a production crypto-futures trading bot that trades **BTCUSD** and
-**ETHUSD** perpetual contracts on **Delta Exchange India**. It uses a pure
+This is a production crypto-futures trading bot that trades **ETHUSD**
+perpetual contracts on **Delta Exchange India** (BTCUSD is disabled in the
+current config because the vol filter degraded BTC backtest performance). It uses a pure
 price-action strategy called **Price-action S/R retest**, decoded from a Hindi
 livestream:
 
@@ -223,8 +224,8 @@ team agrees on a testing framework.
 
 ### WebSocket data flow
 
-- `DeltaStream` subscribes to `MARKET:<symbol>` for BTC/ETH perps + ~15
-  near-money option strikes per expiry.
+- `DeltaStream` subscribes to `MARKET:ETHUSD` for the ETH perp + ~15
+  near-money ETH option strikes per expiry. BTC is not subscribed.
 - Broker read methods prefer stream marks, falling back to REST caches.
 - `/ws/crypto` pushes `_build_crypto_snapshot()` every second to authenticated
   dashboard clients.
@@ -269,13 +270,14 @@ The strategy builds its own 1-minute candles from live perp mark updates. The
 | Target | 4.2% BTC / 4.9% ETH | `strategies/price_action_sr.py` |
 | Cooldown | 60 min | `strategies/price_action_sr.py` |
 | Block after loss | 180 min | `strategies/price_action_sr.py` |
+| 24h realized vol filter | ≤ 34% ETH / off BTC | `strategies/price_action_sr.py` |
 | Optional WR filters | volume, RSI, trend slope, range min, hours, HTF align, engulfing, pin bar | `strategies/price_action_sr.py` |
 | Leverage | 30× | `core/risk_management.py` |
-| Capital per cycle | 50% of pool | `core/risk_management.py` |
+| Capital mode | Fixed ₹50k INR per trade, compounding disabled | `core/risk_management.py` |
 | Max hold | 4h | `strategies/price_action_sr.py` |
 | Cooldown | 1h between signals | `strategies/price_action_sr.py` |
 | Daily kill | -5% of base equity | `core/risk_management.py` |
-| Max live contracts | 50 | `core/risk_management.py` |
+| Max live contracts | 50 BTC / 300 ETH | `core/risk_management.py` |
 
 ### Exit regime
 

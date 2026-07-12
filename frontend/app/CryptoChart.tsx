@@ -32,7 +32,7 @@ type Props = {
   // Asset → live mark mapping. The chart picks the correct one based on
   // its internal asset toggle, so the LIVE line and candle extension never
   // get the WRONG asset's price.
-  livePrices?: { BTC?: number | null; ETH?: number | null };
+  livePrices?: { ETH?: number | null };
 };
 
 // Timeframe → (resolution sent to Delta, lookback hours). Tuned to keep
@@ -62,7 +62,7 @@ const POSITION_LABELS: Record<string, { label: string; color: string }> = {
 };
 
 export default function CryptoChart({ livePrices }: Props) {
-  const [asset, setAsset] = useState<"BTC" | "ETH">("BTC");
+  const [asset] = useState<"ETH">("ETH");
   const [timeframe, setTimeframe] = useState<Timeframe>(DEFAULT_TF);
   const containerRef   = useRef<HTMLDivElement>(null);
   const chartRef       = useRef<any>(null);
@@ -75,7 +75,7 @@ export default function CryptoChart({ livePrices }: Props) {
   // Pick the live price for the asset currently shown — this is the bug that
   // caused the ETH chart to render with BTC's $63k LIVE line crushing the
   // ETH candles to invisibility.
-  const livePrice = livePrices?.[asset] ?? undefined;
+  const livePrice = livePrices?.ETH ?? undefined;
 
   // Fetch on asset / timeframe change + every 30s
   useEffect(() => {
@@ -234,7 +234,7 @@ export default function CryptoChart({ livePrices }: Props) {
       // ── Live price line ───────────────────────────────────────────────────
       livePriceLineRef.current = candleSeries.createPriceLine({
         price: livePrice ?? candles[candles.length - 1].close,
-        color: asset === "BTC" ? "#f7931a" : "#627eea",
+        color: "#627eea",
         lineWidth: 2 as 1 | 2 | 3 | 4,
         lineStyle: LineStyle.Solid,
         axisLabelVisible: true,
@@ -294,8 +294,8 @@ export default function CryptoChart({ livePrices }: Props) {
       <div className="flex items-center justify-between px-4 py-3 border-b border-[#1e1e30]">
         <div className="flex items-center gap-3 flex-wrap">
           <h3 className="text-sm font-semibold">
-            <span className={asset === "BTC" ? "text-[#f7931a]" : "text-[#627eea]"}>
-              {asset}USD
+            <span className="text-[#627eea]">
+              ETHUSD
             </span>
             <span className="text-gray-500 font-normal ml-2 text-xs">
               {timeframe} · {TIMEFRAMES[timeframe].label}
@@ -337,19 +337,9 @@ export default function CryptoChart({ livePrices }: Props) {
           </div>
           {/* Asset toggle */}
           <div className="flex gap-1">
-            {(["BTC", "ETH"] as const).map(a => (
-              <button
-                key={a}
-                onClick={() => setAsset(a)}
-                className={`px-3 py-1 text-xs rounded ${
-                  asset === a
-                    ? a === "BTC" ? "bg-[#f7931a]/20 text-[#f7931a]" : "bg-[#627eea]/20 text-[#627eea]"
-                    : "text-gray-500 hover:text-white"
-                }`}
-              >
-                {a}
-              </button>
-            ))}
+            <span className="px-3 py-1 text-xs rounded bg-[#627eea]/20 text-[#627eea]">
+              ETH
+            </span>
           </div>
         </div>
       </div>

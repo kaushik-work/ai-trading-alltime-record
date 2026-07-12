@@ -32,6 +32,8 @@ type SignalRow = {
   in_cooldown: boolean;
   sl_pct: number;
   tp_pct: number;
+  vol_24h?: number;
+  vol_filter_ok?: boolean;
   side: "buy" | "sell" | null;
   ready: boolean;
 };
@@ -41,6 +43,8 @@ type PortfolioState = {
   wallet_inr?: number | null;
   wallet_pool_usd?: number | null;   // total tradeable pool (USD + INR-converted)
   capital_use_pct?: number;           // fraction of pool deployed per cycle
+  fixed_capital_mode?: boolean;
+  fixed_capital_inr?: number | null;
   day_pnl: number;
   open_positions: number;
   killed?: boolean;
@@ -235,9 +239,7 @@ export default function CryptoHome() {
   const portfolio = snap?.portfolio;
   const stream = snap?.stream;
   const firing = signals.filter(s => s.side != null);
-  const liveBtc = snap?.perp_marks?.["BTCUSD"];
   const liveEth = snap?.perp_marks?.["ETHUSD"];
-  const btcFutures = snap?.futures_stats?.["BTCUSD"];
   const ethFutures = snap?.futures_stats?.["ETHUSD"];
   const shadowTrades = snap?.shadow_trades ?? [];
   const shadowSummary = snap?.shadow_summary;
@@ -285,11 +287,11 @@ export default function CryptoHome() {
         {/* Header bar — stacks on mobile, side-by-side on tablet+ */}
         <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between gap-3 mb-6">
           <div className="min-w-0">
-            <h1 className="text-2xl sm:text-3xl font-bold bg-gradient-to-r from-[#f7931a] to-[#627eea] bg-clip-text text-transparent">
+            <h1 className="text-2xl sm:text-3xl font-bold text-[#627eea]">
               Crypto · Delta India
             </h1>
             <p className="text-xs text-gray-500 mt-1">
-              price-action S/R retest · BTC/ETH · {snap?.ts && `last tick ${new Date(snap.ts).toLocaleTimeString()}`}
+              price-action S/R retest · ETH-only · {snap?.ts && `last tick ${new Date(snap.ts).toLocaleTimeString()}`}
               <span className="ml-3">
                 ws: <span className={
                   wsState === "open"       ? "text-green-400"
@@ -393,11 +395,13 @@ export default function CryptoHome() {
               : portfolio?.mode === "paper" ? "paper" : "—"}
             accent={portfolio?.wallet_pool_usd != null && portfolio.wallet_pool_usd <= 0 ? "red" : undefined}
             footnote={
-              portfolio?.wallet_inr && portfolio.wallet_inr > 0
-                ? `incl. ₹${portfolio.wallet_inr.toLocaleString("en-IN", { maximumFractionDigits: 0 })} INR (auto-converted)`
-                : portfolio?.wallet_usd != null && portfolio.wallet_usd > 0
-                  ? `${(portfolio.capital_use_pct ?? 0.5) * 100}% deployed per cycle`
-                  : undefined
+              portfolio?.fixed_capital_mode
+                ? `fixed ₹${portfolio.fixed_capital_inr?.toLocaleString("en-IN")} budget per trade`
+                : portfolio?.wallet_inr && portfolio.wallet_inr > 0
+                  ? `incl. ₹${portfolio.wallet_inr.toLocaleString("en-IN", { maximumFractionDigits: 0 })} INR (auto-converted)`
+                  : portfolio?.wallet_usd != null && portfolio.wallet_usd > 0
+                    ? `${(portfolio.capital_use_pct ?? 0.5) * 100}% deployed per cycle`
+                    : undefined
             }
           />
           <StatCard label="Today P&L" value={portfolio ? `${portfolio.day_pnl >= 0 ? "+" : ""}$${portfolio.day_pnl.toFixed(0)}` : "—"}
@@ -469,7 +473,7 @@ export default function CryptoHome() {
               </p>
             )}
             <p className="text-[10px] text-gray-600 mt-1">
-              Fund Delta wallet with USDT to convert these into live orders. Same price-action bracket applied: BTC 0.6% SL / 4.2% TP, ETH 0.7% SL / 4.9% TP, breakeven trail at +1R.
+              Fund Delta wallet with INR/USDT to convert these into live orders. Price-action bracket: ETH 0.7% SL / 4.9% TP (1:7), breakeven trail at +1R.
             </p>
           </div>
         )}
@@ -537,17 +541,15 @@ export default function CryptoHome() {
               funding: + longs paying · − shorts paying
             </span>
           </div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 md:gap-4">
-            <FuturesCard label="BTCUSD" futures={btcFutures} color="#f7931a"
-                         fmtUsd={fmtUsd} fmtFunding={fmtFunding} />
+          <div className="grid grid-cols-1 md:grid-cols-1 gap-3 md:gap-4">
             <FuturesCard label="ETHUSD" futures={ethFutures} color="#627eea"
                          fmtUsd={fmtUsd} fmtFunding={fmtFunding} />
           </div>
         </div>
 
-        {/* Live BTC/ETH chart — Signal Radar below covers 4h S/R width + retest state */}
+        {/* Live ETH chart — Signal Radar below covers 4h S/R width + retest state */}
         <div className="mb-6">
-          <CryptoChart livePrices={{ BTC: liveBtc, ETH: liveEth }} />
+          <CryptoChart livePrices={{ ETH: liveEth }} />
         </div>
 
         {/* Signal Radar */}
@@ -575,6 +577,7 @@ export default function CryptoHome() {
                   <th className="text-right px-2">State</th>
                   <th className="text-right px-2 hidden sm:table-cell">SL</th>
                   <th className="text-right px-2 hidden sm:table-cell">TP</th>
+                  <th className="text-right px-2 hidden sm:table-cell" title="24h realized volatility">24h Vol</th>
                 </tr>
               </thead>
               <tbody>
@@ -607,6 +610,12 @@ export default function CryptoHome() {
                       <td className="text-right px-2 hidden sm:table-cell text-green-400">
                         {(s.tp_pct * 100).toFixed(2)}%
                       </td>
+                      <td className={`text-right px-2 hidden sm:table-cell font-mono ${
+                        (s.vol_24h ?? 0) > 0.34 ? "text-red-400" : "text-gray-300"
+                      }`}>
+                        {((s.vol_24h ?? 0) * 100).toFixed(1)}%
+                        {(s.vol_filter_ok === false) && <span className="ml-1 text-[10px] text-red-500">(filtered)</span>}
+                      </td>
                     </tr>
                   );
                 })}
@@ -617,10 +626,10 @@ export default function CryptoHome() {
         </div>
 
         <p className="text-xs text-gray-500">
-          Signal source: price-action S/R retest on Delta India BTC/ETH perps.
+          Signal source: price-action S/R retest on Delta India ETHUSD perp.
           Enters at 4h S/R edges in the direction of the 24h trend when the wick
           touches the level and a strong reversal candle forms. Risk controls:
-          BTC 0.6% SL / 4.2% TP (1:7), ETH 0.7% SL / 4.9% TP (1:7), breakeven trail at +1R.
+          ETH 0.7% SL / 4.9% TP (1:7), 24h vol filter ≤ 34%, breakeven trail at +1R.
         </p>
       </main>
     </div>

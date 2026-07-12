@@ -66,6 +66,8 @@ def _signals_from_broker() -> tuple[list, dict]:
             "in_cooldown": bool(state.get("in_cooldown", False)),
             "sl_pct": float(state.get("sl_pct", 0) or 0),
             "tp_pct": float(state.get("tp_pct", 0) or 0),
+            "vol_24h": float(state.get("vol_24h", 0) or 0),
+            "vol_filter_ok": bool(state.get("vol_filter_ok", True)),
             "side": decision.get("side") if decision else None,
             "ready": bool(state.get("ready", False)),
         })
@@ -131,6 +133,7 @@ def _portfolio_snapshot() -> dict:
     try:
         import os as _os
         from core.execution.crypto_runner import get_state, CAPITAL_USE_PCT
+        from core.risk_management import FIXED_CAPITAL_MODE, FIXED_CAPITAL_INR
         from core.brokers.delta_crypto import get_broker
         state = get_state()
         broker = get_broker()
@@ -151,6 +154,8 @@ def _portfolio_snapshot() -> dict:
             "wallet_inr":       wallet_inr,
             "wallet_pool_usd":  wallet_pool,         # USD + INR-converted
             "capital_use_pct":  float(CAPITAL_USE_PCT),
+            "fixed_capital_mode": bool(FIXED_CAPITAL_MODE),
+            "fixed_capital_inr": float(FIXED_CAPITAL_INR) if FIXED_CAPITAL_MODE else None,
             "day_pnl":          float(state.get("day_pnl_usd", 0) or 0),
             "open_positions":   len(state.get("open_positions", {})),
             "killed":           bool(state.get("killed", False)),
@@ -158,13 +163,14 @@ def _portfolio_snapshot() -> dict:
         }
     except Exception:
         return {"wallet_usd": None, "wallet_inr": None, "wallet_pool_usd": None,
-                "capital_use_pct": 0.5, "day_pnl": 0.0,
+                "capital_use_pct": 0.5, "fixed_capital_mode": False,
+                "fixed_capital_inr": None, "day_pnl": 0.0,
                 "open_positions": 0, "killed": False, "mode": "unknown"}
 
 
 @router.get("/signals")
 def crypto_signals():
-    """Current price-action S/R state across BTC, ETH."""
+    """Current price-action S/R state — ETH-only in this config."""
     signals, _ = _signals_from_broker()
     return signals
 
@@ -377,9 +383,10 @@ def crypto_signal_history(
     # the most recent value in that window.
     try:
         from core.execution.crypto_runner import _get_strategies
-        strat_name = "btc_price_action_sr" if asset == "BTC" else "eth_price_action_sr"
+        # ETH-only: only eth_price_action_sr is instantiated.
+        strat_name = "eth_price_action_sr" if asset == "ETH" else None
         strats = _get_strategies()
-        strat = strats.get(strat_name)
+        strat = strats.get(strat_name) if strat_name else None
         if strat and getattr(strat, "_pred_trace", None):
             cutoff_ts = datetime.now(timezone.utc).timestamp() - hours * 3600
             # Snapshot the list to avoid race with runner thread mutating it

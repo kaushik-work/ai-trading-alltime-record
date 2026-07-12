@@ -81,6 +81,8 @@ class PriceActionSRSignal(CryptoStrategy):
 
     name: str = "price_action_sr"
     underlying: str = ""
+    # Per-asset overrides for the 24h realized-vol filter.  0.0 = disabled.
+    vol_filter_max: float = VOL_FILTER_MAX
 
     @property
     def symbol(self) -> str:
@@ -324,8 +326,8 @@ class PriceActionSRSignal(CryptoStrategy):
 
         # 24h volatility filter
         vol_filter_ok = True
-        if VOL_FILTER_MAX > 0:
-            vol_filter_ok = self._realized_vol_24h() <= VOL_FILTER_MAX
+        if self.vol_filter_max > 0:
+            vol_filter_ok = self._realized_vol_24h() <= self.vol_filter_max
 
         # candlestick patterns
         pattern_long_ok = pattern_short_ok = True
@@ -501,8 +503,12 @@ class PriceActionSRSignal(CryptoStrategy):
 class BTCPriceActionSRSignal(PriceActionSRSignal):
     name = "btc_price_action_sr"
     underlying = "BTC"
+    # Vol filter degraded BTC performance in Apr–Jul 2026 backtests; keep disabled.
+    vol_filter_max = 0.0
 
 
 class ETHPriceActionSRSignal(PriceActionSRSignal):
     name = "eth_price_action_sr"
     underlying = "ETH"
+    # 34% was the sweet spot in fixed-capital backtests (80%+ WR, ~5% MaxDD).
+    vol_filter_max = 0.34

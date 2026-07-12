@@ -38,8 +38,10 @@ logger = logging.getLogger(__name__)
 DELTA_WS_URL = os.environ.get("DELTA_WS_URL", "wss://socket.india.delta.exchange")
 DELTA_REST   = os.environ.get("DELTA_BASE_URL", "https://api.india.delta.exchange")
 
-UNDERLYINGS  = ("BTC", "ETH")
-PERP_SYMBOLS = ("BTCUSD", "ETHUSD")
+# ETH-only config: only subscribe to ETH perp + near-money ETH options.
+# Re-add "BTC" here and in PERP_SYMBOLS if BTC trading is re-enabled.
+UNDERLYINGS  = ("ETH",)
+PERP_SYMBOLS = ("ETHUSD",)
 
 REDISCOVER_SECONDS    = 3600       # refresh option symbol list every 1h (was 4h)
 STALE_SECONDS         = 60         # mark considered stale after 60s no update

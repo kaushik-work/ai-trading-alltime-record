@@ -10,7 +10,7 @@ export const metadata: Metadata = {
     default:  "The Gaint Company — Trading Bot",
     template: "%s · The Gaint Company",
   },
-  description: "Crypto price-action S/R retest — BTC/ETH perp dashboard",
+  description: "Crypto price-action S/R retest — ETH-only perp dashboard",
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
