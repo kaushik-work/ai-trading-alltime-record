@@ -525,6 +525,18 @@ def init_crypto_runner(scheduler) -> None:
                 "max_contracts=%d",
                 mode, EXIT_REGIME, TICK_INTERVAL_SECONDS, BASE_EQUITY_USD,
                 DAILY_LOSS_KILL_PCT * 100, MAX_LIVE_CONTRACTS)
+
+    # Seed strategy candle buffers from Delta history so the bot is ready
+    # immediately after deploy instead of waiting 24h for warmup.
+    try:
+        strategies = _get_strategies()
+        for name, strat in strategies.items():
+            if hasattr(strat, "backfill_history"):
+                n = strat.backfill_history(lookback_hours=24)
+                logger.info("%s: seeded %d historical candles", name, n)
+    except Exception as e:
+        logger.warning("crypto runner history backfill failed: %s", e)
+
     try:
         # 1) Position-management tick — every 2s. Cheap mark reads + stop/trail.
         scheduler.add_job(

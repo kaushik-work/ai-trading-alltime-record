@@ -101,6 +101,55 @@ class PriceActionSRSignal(CryptoStrategy):
         self._1h_candles: deque[Candle] = deque(maxlen=60)
         self._current_1h_bar: Optional[dict] = None
 
+    def backfill_history(self, lookback_hours: int = 24) -> int:
+        """Fetch historical 1m candles from Delta and seed the buffer so the
+        strategy is ready immediately after deploy instead of waiting 24h.
+        We fetch one extra hour so we can drop the most recent candle (which
+        may still be the in-progress minute) and still have a full 24h buffer.
+        Returns number of candles seeded.
+        """
+        if self.broker is None:
+            return 0
+        try:
+            rows = self.broker.get_candles(self.symbol, resolution="1m",
+                                           lookback_hours=lookback_hours + 1)
+        except Exception as e:
+            logger.warning("%s backfill_history failed: %s", self.name, e)
+            return 0
+        if not rows:
+            return 0
+        self._candles.clear()
+        for r in rows:
+            ts = r.get("time")
+            if ts is None: continue
+            self._candles.append(Candle(
+                ts=float(ts),
+                open=float(r["open"]),
+                high=float(r["high"]),
+                low=float(r["low"]),
+                close=float(r["close"]),
+            ))
+        # Drop the most recent candle — it may be the in-progress minute.
+        # Seed _current_bar from it so live marks update the same minute
+        # without creating a duplicate when the next minute starts.
+        if self._candles:
+            last = self._candles.pop()
+            self._current_bar = {
+                "minute": int(last.ts // 60),
+                "open": last.close,
+                "high": last.close,
+                "low": last.close,
+                "close": last.close,
+            }
+        # Keep only the most recent lookback_hours worth of candles so the
+        # buffer matches the strategy's intended 24h lookback.
+        target = lookback_hours * 60
+        while len(self._candles) > target:
+            self._candles.popleft()
+        logger.info("%s: backfilled %d 1m candles from history",
+                    self.name, len(self._candles))
+        return len(self._candles)
+
     def _parse_trading_hours(self, s: str):
         """Parse '0-4,13-21' into list of (start, end) UTC hour tuples."""
         if not s or s.lower() == "all":

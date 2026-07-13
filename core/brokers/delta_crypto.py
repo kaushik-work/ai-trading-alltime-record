@@ -249,6 +249,27 @@ class DeltaCryptoBroker:
             logger.error("get_futures_stats: %s", e)
         return out
 
+    def get_candles(self, symbol: str, resolution: str = "1m",
+                    lookback_hours: int = 24) -> list[dict]:
+        """Fetch historical candles from Delta public history endpoint.
+        Returns list of {open, high, low, close, volume, time} dicts.
+        """
+        try:
+            end = int(time.time())
+            start = end - int(lookback_hours * 3600)
+            data = self._request(
+                "GET", "/v2/history/candles",
+                params={"symbol": symbol, "resolution": resolution,
+                        "start": start, "end": end},
+            )
+            if data.get("success"):
+                rows = data.get("result", [])
+                rows.sort(key=lambda x: x.get("time", 0))
+                return rows
+        except Exception as e:
+            logger.error("get_candles %s: %s", symbol, e)
+        return []
+
     # ── Authenticated / live trading ────────────────────────────────────────
     def get_positions(self) -> list[dict]:
         """Current open positions (account-wide). Empty list in paper mode."""
