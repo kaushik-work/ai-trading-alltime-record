@@ -40,6 +40,30 @@ class CryptoSignalDecision:
     metadata: dict = field(default_factory=dict)
 
 
+@dataclass
+class OptionsSignalDecision:
+    """Two-leg short-option decision emitted by an options strategy."""
+    name: str                       # strategy id
+    underlying: str                 # e.g. "ETH"
+    expiry: str                     # expiry ISO datetime (UTC)
+    call_symbol: str
+    put_symbol: str
+    call_strike: float
+    put_strike: float
+    call_mark: float                # entry mark of call leg
+    put_mark: float                 # entry mark of put leg
+    spot_mark: float                # underlying perp mark at entry time
+    contract_size: float            # underlying per contract
+    qty: int                        # number of straddles (1 call + 1 put each)
+    margin_per_straddle: float      # USD estimated margin for one straddle
+    total_margin: float             # USD estimated margin for full qty
+    profit_pct: float               # close at this fraction of entry credit
+    stop_mult: float                # stop when combined mark >= credit * stop_mult
+    fee_bps: float
+    slippage_bps: float
+    metadata: dict = field(default_factory=dict)
+
+
 class CryptoStrategy:
     """Abstract base. Subclasses must define `name`, `symbol`, `_compute_signal`."""
 

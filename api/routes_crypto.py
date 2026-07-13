@@ -101,6 +101,12 @@ def _build_crypto_snapshot() -> dict:
         stream = get_stream().diagnostics()
     except Exception:
         stream = {"connected": False}
+    options_state: dict = {}
+    try:
+        from core.execution.options_runner import get_options_state
+        options_state = get_options_state()
+    except Exception:
+        pass
     return {
         "ts":            datetime.now(timezone.utc).isoformat(),
         "perp_marks":    perp_marks,
@@ -110,6 +116,7 @@ def _build_crypto_snapshot() -> dict:
         "shadow_trades":  shadow_trades,
         "shadow_summary": shadow_summary,
         "missed_signals": missed_signals,
+        "options":        options_state,
         "stream":         stream,
     }
 
@@ -436,17 +443,20 @@ def crypto_kill():
     """
     try:
         from core.execution.crypto_runner import manual_kill, get_state
+        from core.execution.options_runner import kill_options_runner
         before = get_state()
         positions_before = list(before.get("open_positions", {}).keys())
         manual_kill()
+        kill_options_runner()
         after = get_state()
         return {
             "ok": True,
             "killed_strategies": positions_before,
             "open_after": list(after.get("open_positions", {}).keys()),
             "kill_switch_armed": after.get("killed", True),
-            "message": f"Killed {len(positions_before)} position(s). "
-                       f"Bot will not enter new positions until restart.",
+            "message": f"Killed {len(positions_before)} perp position(s) and "
+                       f"halted new options entries. Bot will not enter new "
+                       f"positions until restart.",
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}

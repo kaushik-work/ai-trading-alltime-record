@@ -116,3 +116,42 @@ def capital_pct_for(strategy_name: str) -> float:
     if "btc" in n: return BTC_CAPITAL_PCT
     if "eth" in n: return ETH_CAPITAL_PCT
     return CAPITAL_USE_PCT
+
+
+# ── Options (ETH short straddle) ─────────────────────────────────────────────
+# Defaults keep the options runner DISABLED. It must be explicitly enabled after
+# the operator validates margin rules and liquidity on Delta India. Even when
+# enabled, the default mode is "paper" so live orders cannot fire by accident.
+ENABLE_OPTIONS_RUNNER: bool = _env_bool("ENABLE_OPTIONS_RUNNER", False)
+OPTIONS_TRADING_MODE: str = os.environ.get("OPTIONS_TRADING_MODE", "paper")
+
+# Fixed INR budget for the short-straddle book. This is NOT compounded; every
+# new cycle starts from this budget ceiling.
+OPTIONS_FIXED_CAPITAL_INR: float = _env_float("OPTIONS_FIXED_CAPITAL_INR", 50000.0)
+
+# Strategy dials — selected live config from backtests (5 DTE, 50% profit,
+# 200% stop). See docs/ALTERNATIVE_STRATEGIES.md for the research trail.
+OPTIONS_TARGET_DTE: int = _env_int("OPTIONS_TARGET_DTE", 5)
+OPTIONS_PROFIT_PCT: float = _env_float("OPTIONS_PROFIT_PCT", 0.50)
+OPTIONS_STOP_MULT: float = _env_float("OPTIONS_STOP_MULT", 2.00)
+
+# Margin estimate per short-option leg, expressed as a fraction of the leg's
+# notional. The live runner uses this to size positions until Delta's real
+# margin endpoint is wired in. Portfolio sim used 15% per leg.
+OPTIONS_MARGIN_PCT_PER_LEG: float = _env_float("OPTIONS_MARGIN_PCT_PER_LEG", 0.15)
+
+# Entry timing: open a new straddle once per day at this UTC hour if there is
+# an expiry within target DTE and free margin. 04:00 UTC ≈ 09:30 AM IST.
+OPTIONS_ENTRY_HOUR_UTC: int = _env_int("OPTIONS_ENTRY_HOUR_UTC", 4)
+
+# Execution / cost assumptions.
+OPTIONS_FEE_BPS: float = _env_float("OPTIONS_FEE_BPS", 25.0)
+OPTIONS_SLIPPAGE_BPS: float = _env_float("OPTIONS_SLIPPAGE_BPS", 50.0)
+OPTIONS_MAX_POSITIONS: int = _env_int("OPTIONS_MAX_POSITIONS", 5)
+
+# Sanity guard: abort if the computed margin per straddle would consume more
+# than this fraction of the fixed capital pool. Prevents a single oversized
+# position when spot moves sharply.
+OPTIONS_MAX_MARGIN_PCT_PER_POSITION: float = _env_float(
+    "OPTIONS_MAX_MARGIN_PCT_PER_POSITION", 0.60
+)

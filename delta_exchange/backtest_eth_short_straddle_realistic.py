@@ -22,7 +22,8 @@ ENTRY_DTE = 5
 PROFIT_PCT = 0.50
 STOP_PCT = 2.00
 CONTRACTS = 1
-MARGIN_PCT = 0.15   # approx margin per short option leg
+CONTRACT_SIZE = 0.01   # ETH per option contract on Delta India
+MARGIN_PCT = 0.15      # approx margin per short option leg
 
 
 def parse_symbol(sym: str):
@@ -77,13 +78,13 @@ def main():
         entry_t = entry_candidates[0]
         entry_call = call.loc[entry_t] * (1 - SLIP_BPS / 1e4)
         entry_put = put.loc[entry_t] * (1 - SLIP_BPS / 1e4)
-        credit = entry_call + entry_put
+        credit = (entry_call + entry_put) * CONTRACT_SIZE
         if credit <= 0:
             continue
 
         spot_entry = perp.reindex([entry_t], method="nearest").iloc[0]
         spot_exp = perp.reindex([exp], method="nearest").iloc[0]
-        margin = 2 * spot_entry * MARGIN_PCT * CONTRACTS
+        margin = 2 * spot_entry * CONTRACT_SIZE * MARGIN_PCT * CONTRACTS
         total_margin_used = max(total_margin_used, margin)
 
         fee_cost = credit * CONTRACTS * 4 * OPT_FEE_BPS / 1e4
@@ -92,7 +93,7 @@ def main():
         exit_reason = "expiry"
         exit_t = exp
         for t in ts[ts > entry_t]:
-            cv = (call.loc[t] + put.loc[t]) * CONTRACTS
+            cv = (call.loc[t] + put.loc[t]) * CONTRACT_SIZE * CONTRACTS
             if cv <= credit * CONTRACTS * (1 - PROFIT_PCT):
                 current_value = cv
                 exit_t = t
@@ -108,7 +109,7 @@ def main():
         if exit_reason == "expiry":
             call_iv = max(0, spot_exp - spot_entry)
             put_iv = max(0, spot_entry - spot_exp)
-            current_value = (call_iv + put_iv) * CONTRACTS
+            current_value = (call_iv + put_iv) * CONTRACT_SIZE * CONTRACTS
 
         gross = credit * CONTRACTS - current_value
         net = gross - fee_cost

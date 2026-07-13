@@ -20,6 +20,7 @@ DATA = Path(__file__).parent / "data" / "eth" / "options"
 PERP_FILE = Path(__file__).parent / "data" / "eth" / "perp" / "ETHUSD_mark_1m.csv"
 
 BUDGET_USD = 1_000.0
+CONTRACT_SIZE = 0.01   # ETH per option contract on Delta India
 OPT_FEE_BPS = 25.0
 SLIP_BPS = 5.0
 
@@ -72,7 +73,7 @@ def run_config(pairs, perp, entry_dte, profit_pct, stop_pct):
         entry_t = entry_candidates[0]
         entry_call = call.loc[entry_t] * (1 - SLIP_BPS / 1e4)
         entry_put = put.loc[entry_t] * (1 - SLIP_BPS / 1e4)
-        credit = entry_call + entry_put
+        credit = (entry_call + entry_put) * CONTRACT_SIZE
         if credit <= 0:
             continue
 
@@ -87,7 +88,7 @@ def run_config(pairs, perp, entry_dte, profit_pct, stop_pct):
         exit_t = exp
 
         for t in ts[ts > entry_t]:
-            cv = (call.loc[t] + put.loc[t]) * n_contracts
+            cv = (call.loc[t] + put.loc[t]) * CONTRACT_SIZE * n_contracts
             if cv <= credit * n_contracts * (1 - profit_pct):
                 current_value = cv
                 exit_t = t
@@ -103,7 +104,7 @@ def run_config(pairs, perp, entry_dte, profit_pct, stop_pct):
         if exit_reason == "expiry":
             call_iv = max(0, spot_exp - spot_entry)
             put_iv = max(0, spot_entry - spot_exp)
-            current_value = (call_iv + put_iv) * n_contracts
+            current_value = (call_iv + put_iv) * CONTRACT_SIZE * n_contracts
 
         gross = credit * n_contracts - current_value
         net = gross - fee_cost

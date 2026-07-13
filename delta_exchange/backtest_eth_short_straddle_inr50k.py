@@ -1,10 +1,16 @@
 """
-ETH short straddle — portfolio-level simulation with overlapping positions.
+ETH short straddle — ₹50,000 INR fixed-capital backtest.
 
-Tracks a fixed capital pool and only enters a new straddle if enough free margin
-is available. Each straddle ties up margin for its life (until profit target,
-stop, or expiry). This models the realistic constraint that daily expiries
-overlap.
+Mimics the live options runner:
+  • One entry per day at the first hour the target-DTE expiry becomes available.
+  • Fixed capital pool (₹50k → USD at 86).
+  • Each straddle requires 15% margin per leg (30% of 1 ETH notional).
+  • Skip entry if free capital < margin required.
+  • Evaluate profit target (50%), stop (200%), and expiry at every 1h mark.
+  • Costs: 25 bps/leg fee, 1% option slippage (entry + exit).
+
+This backtest runs on the cached 1h option mark histories produced by
+fetch_eth_options_for_parity.py.
 """
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -16,14 +22,17 @@ import pandas as pd
 DATA = Path(__file__).parent / "data" / "eth" / "options"
 PERP_FILE = Path(__file__).parent / "data" / "eth" / "perp" / "ETHUSD_mark_1m.csv"
 
-START_CAPITAL = float(os.environ.get("START_CAPITAL", "5000.0"))
-CONTRACT_SIZE = 0.01   # ETH per option contract on Delta India
-MARGIN_PCT = 0.15
+FIXED_CAPITAL_INR = float(os.environ.get("FIXED_CAPITAL_INR", "50000.0"))
+USD_INR_RATE = float(os.environ.get("USD_INR_RATE", "86.0"))
+CONTRACT_SIZE = 0.01       # ETH per option contract on Delta India
+MARGIN_PCT = 0.15          # per short-option leg
+OPTIONS_MAX_MARGIN_PCT_PER_POSITION = 0.60
+MAX_QTY_PER_ENTRY = 100    # sanity cap to avoid extreme sizing / slippage
 OPT_FEE_BPS = 25.0
-SLIP_BPS = 100.0    # 1% option slippage (conservative)
+SLIP_BPS = 100.0           # 1% option slippage
 ENTRY_DTE = 5
 PROFIT_PCT = 0.50
-STOP_PCT = 2.00
+STOP_MULT = 2.00
 
 
 def parse_symbol(sym: str):
@@ -56,13 +65,16 @@ def load_data():
 
 def main():
     pairs, perp = load_data()
+    start_capital_usd = FIXED_CAPITAL_INR / USD_INR_RATE
+
     print("=" * 80)
-    print("ETH short straddle — portfolio simulation")
-    print(f"Start capital ${START_CAPITAL:,.0f} | margin {MARGIN_PCT*100:.0f}% per leg")
-    print(f"Entry {ENTRY_DTE} DTE | close {PROFIT_PCT*100:.0f}% | stop {STOP_PCT*100:.0f}% | slip {SLIP_BPS}bps")
+    print("ETH short straddle — ₹50k INR fixed-capital backtest")
+    print(f"Capital ₹{FIXED_CAPITAL_INR:,.0f} = ${start_capital_usd:,.2f} @ ₹{USD_INR_RATE:.2f}/USD")
+    print(f"Margin {MARGIN_PCT*100:.0f}% per leg | Entry {ENTRY_DTE} DTE | "
+          f"close {PROFIT_PCT*100:.0f}% | stop {STOP_MULT*100:.0f}% | slip {SLIP_BPS}bps")
     print("=" * 80)
 
-    # Build chronological list of potential entries
+    # Build potential entry events
     events = []
     for pair in pairs:
         exp = pair["expiry"]
@@ -81,46 +93,52 @@ def main():
         credit = (entry_call + entry_put) * CONTRACT_SIZE
         if credit <= 0:
             continue
-        spot_entry = perp.reindex([entry_t], method="nearest").iloc[0]
+        spot_entry = float(perp.reindex([entry_t], method="nearest").iloc[0])
         margin = 2 * spot_entry * CONTRACT_SIZE * MARGIN_PCT
         events.append({
-            "entry_t": entry_t, "expiry": exp, "call": call, "put": put,
-            "credit": credit, "margin": margin, "spot_entry": spot_entry,
+            "entry_t": entry_t, "expiry": exp,
+            "call": call, "put": put,
+            "credit": credit, "margin": margin,
+            "spot_entry": spot_entry,
         })
-
     events = sorted(events, key=lambda x: x["entry_t"])
     print(f"Potential entries: {len(events)}")
 
-    capital = START_CAPITAL
+    # Build hourly timeline for exit checks
+    all_times = sorted(set().union(*[
+        set(ev["call"].index).union(set(ev["put"].index)) for ev in events
+    ]))
+
+    capital = start_capital_usd
     peak = capital
     open_positions = []
     trades = []
+    entered_dates = set()
 
-    for ev in events:
-        t = ev["entry_t"]
-        # Mark existing positions to market and check exits
+    for t in all_times:
+        # Manage existing positions
         still_open = []
         for pos in open_positions:
             if t in pos["call"].index and t in pos["put"].index:
                 cv = (pos["call"].loc[t] + pos["put"].loc[t]) * CONTRACT_SIZE
+                pos["last_value"] = cv
             else:
                 cv = pos["last_value"]
-            pos["last_value"] = cv
+
             credit = pos["credit"]
             reason = None
-            if cv <= credit * (1 - PROFIT_PCT):
-                reason = "profit_target"
-            elif cv >= credit * (1 + STOP_PCT):
-                reason = "stop_loss"
-            elif t >= pos["expiry"]:
+            if t >= pos["expiry"]:
                 reason = "expiry"
+            elif cv <= credit * (1 - PROFIT_PCT):
+                reason = "profit_target"
+            elif cv >= credit * STOP_MULT:
+                reason = "stop_loss"
 
             if reason is not None:
-                exit_value = cv
-                # apply exit slippage
-                exit_value *= (1 + SLIP_BPS / 1e4)
-                gross = credit - exit_value
-                fee = credit * 4 * OPT_FEE_BPS / 1e4
+                qty = pos.get("qty", 1)
+                exit_value = cv * (1 + SLIP_BPS / 1e4)
+                gross = qty * (credit - exit_value)
+                fee = qty * (credit + exit_value) * 2 * OPT_FEE_BPS / 1e4
                 net = gross - fee
                 capital += net
                 peak = max(peak, capital)
@@ -130,28 +148,46 @@ def main():
                 still_open.append(pos)
         open_positions = still_open
 
-        # Enter new position if margin allows
-        free_capital = capital - sum(p["margin"] for p in open_positions)
-        if free_capital >= ev["margin"]:
+        # Try one new entry per calendar day, sized like the live runner
+        if t.date().isoformat() in entered_dates:
+            continue
+        for ev in events:
+            if ev["entry_t"] != t:
+                continue
+            used_margin = sum(p.get("total_margin", p["margin"]) for p in open_positions)
+            free = capital - used_margin
+            max_by_capital = int(free / ev["margin"])
+            max_by_concentration = int(
+                (capital * OPTIONS_MAX_MARGIN_PCT_PER_POSITION) / ev["margin"]
+            )
+            qty = max(1, min(max_by_capital, max_by_concentration, MAX_QTY_PER_ENTRY))
+            if max_by_capital < 1:
+                continue
+            total_margin = qty * ev["margin"]
             open_positions.append({
                 "entry_t": ev["entry_t"], "expiry": ev["expiry"],
                 "call": ev["call"], "put": ev["put"],
                 "credit": ev["credit"], "margin": ev["margin"],
+                "qty": qty, "total_margin": total_margin,
                 "spot_entry": ev["spot_entry"], "last_value": ev["credit"],
             })
+            entered_dates.add(t.date().isoformat())
+            break
 
     # Close remaining at expiry using perp spot
     for pos in open_positions:
-        spot_exp = perp.reindex([pos["expiry"]], method="nearest").iloc[0]
+        spot_exp = float(perp.reindex([pos["expiry"]], method="nearest").iloc[0])
         call_iv = max(0, spot_exp - pos["spot_entry"])
         put_iv = max(0, pos["spot_entry"] - spot_exp)
+        qty = pos.get("qty", 1)
         cv = (call_iv + put_iv) * CONTRACT_SIZE
-        gross = pos["credit"] - cv
-        fee = pos["credit"] * 4 * OPT_FEE_BPS / 1e4
+        exit_value = cv * (1 + SLIP_BPS / 1e4)
+        gross = qty * (pos["credit"] - exit_value)
+        fee = qty * (pos["credit"] + exit_value) * 2 * OPT_FEE_BPS / 1e4
         net = gross - fee
         capital += net
         peak = max(peak, capital)
-        trades.append({**pos, "exit_t": pos["expiry"], "exit_value": cv,
+        trades.append({**pos, "exit_t": pos["expiry"], "exit_value": exit_value,
                        "net": net, "reason": "expiry"})
 
     max_dd = peak - capital
@@ -159,25 +195,24 @@ def main():
 
     print(f"\n  Trades taken: {len(trades)}")
     print(f"  Wins: {wins} ({100*wins/len(trades):.1f}%)")
-    print(f"  Final capital: ${capital:,.2f}")
-    print(f"  Return: {100*(capital-START_CAPITAL)/START_CAPITAL:.1f}%")
-    print(f"  MaxDD: ${max_dd:,.2f} ({100*max_dd/START_CAPITAL:.1f}%)")
+    print(f"  Final capital: ${capital:,.2f} (₹{capital*USD_INR_RATE:,.0f})")
+    print(f"  Return: {100*(capital-start_capital_usd)/start_capital_usd:.1f}%")
+    print(f"  MaxDD: ${max_dd:,.2f} ({100*max_dd/start_capital_usd:.1f}%)")
 
     reasons = {}
     for t in trades:
         reasons[t["reason"]] = reasons.get(t["reason"], 0) + 1
     print(f"  Exit reasons: {reasons}")
 
-    # Monthly P&L by exit date
     if trades:
         monthly = {}
         for t in trades:
             m = t["exit_t"].strftime("%Y-%m")
             monthly.setdefault(m, 0.0)
             monthly[m] += t["net"]
-        print("\n  Monthly P&L:")
+        print("\n  Monthly P&L (USD):")
         for m in sorted(monthly):
-            print(f"    {m}: ${monthly[m]:>+10,.2f}")
+            print(f"    {m}: ${monthly[m]:>+10,.2f}  (₹{monthly[m]*USD_INR_RATE:>+10,.0f})")
 
 
 if __name__ == "__main__":

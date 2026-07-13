@@ -49,16 +49,18 @@ async def lifespan(app: FastAPI):
     # have been gutted; BotRunner just provides the scheduler now.
     from core.bot_runner import get_runner
     from core.execution.crypto_runner import init_crypto_runner
+    from core.execution.options_runner import init_options_runner
     from core.ws.delta_stream import start_stream, stop_stream
-    from core.risk_management import ENABLE_CRYPTO_RUNNER
+    from core.risk_management import ENABLE_CRYPTO_RUNNER, ENABLE_OPTIONS_RUNNER
 
     runner = get_runner()
     runner.start()
     # Delta WS stream feeds the crypto runner with real-time perp + option
     # marks. Must start BEFORE the runner so the first tick has fresh data.
-    if ENABLE_CRYPTO_RUNNER:
+    if ENABLE_CRYPTO_RUNNER or ENABLE_OPTIONS_RUNNER:
         start_stream()
     init_crypto_runner(runner.scheduler)
+    init_options_runner(runner.scheduler)
     yield
     # ── shutdown ─────────────────────────────────────────────────────────────
     runner.stop()
