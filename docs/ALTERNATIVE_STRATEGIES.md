@@ -15,7 +15,7 @@ costs.
 | # | Theme | Script | Status | Result (ETH, Apr–Jul 2026, realistic costs) |
 |---|-------|--------|--------|---------------------------------------------|
 | 1 | Higher-frequency microstructure | `backtest_hf_microstructure.py` | Failed | 2,631 trades, 24.1% WR, −₹2.46M, MaxDD 4,927% |
-| 2 | Options / synthetic parity | `backtest_options_parity.py` | Blocked | No local ETH options data |
+| 2 | Options / synthetic parity | `backtest_options_parity.py` | Tested | 33 trades, 24.2% WR, −₹75k, MaxDD 208% |
 | 3 | Cross-exchange spread | `backtest_cross_exchange.py` | Blocked | No second-venue 1m data |
 | 4 | Multi-asset / inter-market | `backtest_multi_asset_momentum.py` | Marginal | 68 trades, 41.2% WR, +₹15,322, MaxDD ₹27,903 (55.8%) |
 | 5 | Market-making grid | `backtest_market_making_grid.py` | Failed | 3,148 trades, 14.7% WR, −₹20.2M, MaxDD 40,445% |
@@ -146,7 +146,7 @@ standard cost model (5 bps fee, 2 bps slippage, ₹50k fixed, 15× leverage).
 | # | Strategy | Trades | Win % | Gross P&L | MaxDD | Verdict |
 |---|----------|--------|-------|-----------|-------|---------|
 | 1 | HF VWAP mean reversion | 2,631 | 24.1% | −₹2,463,490 | 4,927% | Catastrophic — no mean-reversion edge at 1m |
-| 2 | Options / synthetic parity | — | — | — | — | Blocked: no option-chain CSVs |
+| 2 | Options / synthetic parity | 33 | 24.2% | −₹75,168 | 208.4% | Fails — deviations do not mean-revert quickly enough |
 | 3 | Cross-exchange spread | — | — | — | — | Blocked: no second-venue CSVs |
 | 4 | BTC-leads-ETH momentum | 68 | 41.2% | +₹15,322 | 55.8% | Positive but drawdown too high |
 | 5 | Market-making grid | 3,148 | 14.7% | −₹20,208,471 | 40,445% | Catastrophic — inventory stops dominate |
@@ -162,6 +162,8 @@ by missing data; the three that ran all have fatal flaws under 15× leverage.
 | 2026-07-13 | Created pipeline file | Live ETH S/R edge is too thin for 300–400% target; need parallel research track. |
 | 2026-07-13 | Committed alternative backtest scripts | Keep experiments reproducible and separate from live code. |
 | 2026-07-13 | Initial prototypes all rejected or blocked | 1m perp-only data is insufficient for the target return/risk ratio at 15× leverage. |
+| 2026-07-13 | Fetched ETH option ATM 1h marks | `fetch_eth_options_for_parity.py` downloaded 83 ATM expiry pairs from Delta. |
+| 2026-07-13 | Options parity backtest completed | Fades synthetic-forward deviation with perp-only trades; losses dominated by persistent bias + SL hits. |
 
 ---
 
