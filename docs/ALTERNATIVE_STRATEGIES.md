@@ -15,7 +15,9 @@ costs.
 | # | Theme | Script | Status | Result (ETH, Apr–Jul 2026, realistic costs) |
 |---|-------|--------|--------|---------------------------------------------|
 | 1 | Higher-frequency microstructure | `backtest_hf_microstructure.py` | Failed | 2,631 trades, 24.1% WR, −₹2.46M, MaxDD 4,927% |
-| 2 | Options / synthetic parity | `backtest_options_parity.py` | Tested | 33 trades, 24.2% WR, −₹75k, MaxDD 208% |
+| 2a | Options / synthetic parity | `backtest_options_parity.py` | Rejected | 33 trades, 24.2% WR, −₹75k, MaxDD 208% |
+| 2b | Options / short straddle (ATM) | `backtest_eth_short_straddle.py` | Promising | 83 trades, 98.8% WR, +$21,724, MaxDD ~$1k per $1k risk |
+| 2c | Options / short strangle / iron condor | TBD | Research | Need OTM strikes and Greeks |
 | 3 | Cross-exchange spread | `backtest_cross_exchange.py` | Blocked | No second-venue 1m data |
 | 4 | Multi-asset / inter-market | `backtest_multi_asset_momentum.py` | Marginal | 68 trades, 41.2% WR, +₹15,322, MaxDD ₹27,903 (55.8%) |
 | 5 | Market-making grid | `backtest_market_making_grid.py` | Failed | 3,148 trades, 14.7% WR, −₹20.2M, MaxDD 40,445% |
@@ -57,24 +59,76 @@ potentially smoother equity curve. Costs dominate, so edge must be clean.
 
 ---
 
-## 2. Options / synthetic parity
+## 2. Options high-probability strategies
 
-**Concept:** Reconstruct synthetic forward from call − put + strike and trade
-perp against mispriced options, or buy long straddles when parity deviations are
-large.
+### 2a. Synthetic parity — **rejected**
 
 **Script:** `delta_exchange/backtest_options_parity.py`
 
-**Signal:**
-- For each expiry/strike: `synthetic_F = C − P + K`.
-- Median deviation across near-money strikes.
-- If |deviation| > threshold, trade perp in the direction that profits when the
-deviation compresses, or buy ATM straddle for volatility expansion.
+Result: 33 trades, 24.2% WR, **−$75k**, MaxDD 208%. Deviations are persistent
+and do not mean-revert quickly enough for perp-only fading.
 
-**Blocker:** No local ETH option-chain CSVs. BTC option files referenced in older
-scripts are also missing. Need to either:
-- Download Delta option marks, or
-- Request/restore the `data/options/` directory.
+### 2b. Short ATM straddle — **very promising, needs deeper work**
+
+**Scripts:**
+- `delta_exchange/backtest_eth_short_straddle.py` (fixed-risk sizing)
+- `delta_exchange/backtest_eth_short_straddle_sweep.py` (parameter sweep)
+- `delta_exchange/backtest_eth_short_straddle_realistic.py` (1-contract sizing)
+
+Result (5 DTE, 50% profit target, 200% stop, 1 contract per expiry):
+**83 trades, 98.8% WR, +$4,009 per contract, ~$607 avg margin/trade,
+660% return on margin, MaxDD $103.**
+
+Robustness to option bid-ask slippage (entry/exit):
+
+| Slippage | Win % | Total P&L / contract | MaxDD |
+|----------|------:|---------------------:|------:|
+| 5 bps    | 98.8% | +$4,009              | $103  |
+| 50 bps   | 98.8% | +$3,984              | $104  |
+| 100 bps  | 98.8% | +$3,969              | $104  |
+| 200 bps  | 98.8% | +$3,952              | $104  |
+| 500 bps  | 97.6% | +$3,623              | $238  |
+| 1000 bps | 97.6% | +$3,421              | $230  |
+
+Even with **10% (!) slippage** on option entry/exit, the strategy remains
+profitable because premium capture dominates.
+
+Caveats:
+- Uses 1h option *mark* prices; real bid-ask may differ, but 500–1000 bps test is
+a reasonable stress.
+- Does not yet model overlapping daily positions, portfolio margin, or
+assignment/settlement.
+- 5 DTE is very short; gamma risk is high.
+- April–Jul 2026 may be a favourable regime for short gamma.
+
+Next steps:
+1. Portfolio-level capital tracker (overlapping straddles, fixed capital pool).
+2. OTM strikes for strangles and iron condors.
+3. IV rank / realised-vol filter before entry.
+4. Walk-forward / out-of-sample test (July data already partially held out).
+
+### 2c. Strangle / iron condor / credit spreads — **research phase**
+
+These are the classic HPS (high-probability short option) structures. Need:
+- OTM call and put marks for each expiry.
+- IV rank / percentile filter.
+- Greeks-aware strike selection (target deltas).
+
+**Reference literature:**
+1. *Options as a Strategic Investment* — Lawrence McMillan (comprehensive strategy bible)
+2. *Option Volatility and Pricing* — Sheldon Natenberg (volatility, Greeks, skew)
+3. *The Option Trader’s Hedge Fund* — Dennis Chen & Mark Sebastian (short-option business model)
+4. *The High Probability Options Trader* — Marcel Link
+
+**Empirical rules from equity/index literature (to test on ETH):**
+- Sell 16-delta OTM puts/calls, 30–45 DTE.
+- Close at 50% of max profit.
+- Stop at 200% of credit received.
+- IV rank > 30–50 before entry.
+- Expected: 65–75% win rate, ~15–25% annualised, 15–25% MaxDD.
+
+Note: equity-index results cannot be blindly ported to crypto. Crypto has fatter
+tails, wider bid-ask, and different margin rules.
 
 ---
 
@@ -146,7 +200,8 @@ standard cost model (5 bps fee, 2 bps slippage, ₹50k fixed, 15× leverage).
 | # | Strategy | Trades | Win % | Gross P&L | MaxDD | Verdict |
 |---|----------|--------|-------|-----------|-------|---------|
 | 1 | HF VWAP mean reversion | 2,631 | 24.1% | −₹2,463,490 | 4,927% | Catastrophic — no mean-reversion edge at 1m |
-| 2 | Options / synthetic parity | 33 | 24.2% | −₹75,168 | 208.4% | Fails — deviations do not mean-revert quickly enough |
+| 2a | Options / synthetic parity | 33 | 24.2% | −₹75,168 | 208.4% | Fails — deviations do not mean-revert quickly enough |
+| 2b | Options / short ATM straddle | 83 | 98.8% | +$21,724 | ~$1k | Promising but needs realism checks |
 | 3 | Cross-exchange spread | — | — | — | — | Blocked: no second-venue CSVs |
 | 4 | BTC-leads-ETH momentum | 68 | 41.2% | +₹15,322 | 55.8% | Positive but drawdown too high |
 | 5 | Market-making grid | 3,148 | 14.7% | −₹20,208,471 | 40,445% | Catastrophic — inventory stops dominate |
