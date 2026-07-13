@@ -41,6 +41,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from core.brokers.delta_crypto import get_broker as get_crypto_broker
+from core.strategy_toggles import is_strategy_enabled, is_instrument_enabled
 from core.risk_management import (
     TICK_INTERVAL_SECONDS, BASE_EQUITY_USD,
     CAPITAL_USE_PCT, BTC_CAPITAL_PCT, ETH_CAPITAL_PCT, capital_pct_for,
@@ -401,11 +402,16 @@ def tick_entry_decisions() -> None:
 
     for name, strat in strategies.items():
         if name in _OPEN_POSITIONS: continue
+        if not is_strategy_enabled(name):
+            continue
         try:
             decision = strat.on_tick()
         except Exception as e:
             logger.error("%s tick error: %s", name, e, exc_info=True); continue
         if decision is None: continue
+        if not is_instrument_enabled(name, decision.symbol):
+            logger.debug("%s: instrument %s disabled; skipping entry", name, decision.symbol)
+            continue
 
         logger.info("%s SIGNAL: %s %s pred=%+0.3f%% strikes=%d size=%.1fx",
                      name, decision.side, decision.symbol,

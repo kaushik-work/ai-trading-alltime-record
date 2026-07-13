@@ -20,6 +20,7 @@ from datetime import datetime, timezone
 from typing import Optional
 
 from core.brokers.delta_crypto import DeltaCryptoBroker
+from core.strategy_toggles import is_strategy_enabled, is_instrument_enabled
 from core.risk_management import (
     USD_INR_RATE,
     ENABLE_OPTIONS_RUNNER,
@@ -31,7 +32,7 @@ from core.risk_management import (
     OPTIONS_PROFIT_PCT,
     OPTIONS_STOP_MULT,
 )
-from strategies.eth_short_straddle import ETHShortStraddleSignal
+from strategies.eth_short_straddle import ETHShortStraddleSignal, BTCShortStraddleSignal
 from strategies.crypto_base import OptionsSignalDecision
 
 logger = logging.getLogger(__name__)
@@ -58,11 +59,27 @@ def _get_broker() -> DeltaCryptoBroker:
 
 
 def _get_strategies():
-    if not _STRATEGY_INSTANCES:
-        broker = _get_broker()
-        inst = ETHShortStraddleSignal(broker=broker)
-        _STRATEGY_INSTANCES[inst.name] = inst
-        logger.info("options runner initialized with %s", inst.name)
+    broker = _get_broker()
+    from core.strategy_toggles import get_toggles
+    toggles = get_toggles().get("strategies", {})
+
+    # ETH short straddle is the default/live strategy.
+    if "eth_short_straddle" not in _STRATEGY_INSTANCES:
+        eth = ETHShortStraddleSignal(broker=broker)
+        _STRATEGY_INSTANCES[eth.name] = eth
+        logger.info("options runner loaded %s", eth.name)
+
+    # BTC short straddle is loaded only when enabled via the dashboard toggle.
+    if toggles.get("btc_short_straddle", {}).get("enabled", False):
+        if "btc_short_straddle" not in _STRATEGY_INSTANCES:
+            btc = BTCShortStraddleSignal(broker=broker)
+            _STRATEGY_INSTANCES[btc.name] = btc
+            logger.info("options runner loaded %s", btc.name)
+    else:
+        if "btc_short_straddle" in _STRATEGY_INSTANCES:
+            del _STRATEGY_INSTANCES["btc_short_straddle"]
+            logger.info("options runner unloaded btc_short_straddle")
+
     return _STRATEGY_INSTANCES
 
 
@@ -76,14 +93,14 @@ def _is_entry_time() -> bool:
     return now.hour == OPTIONS_ENTRY_HOUR_UTC and now.minute < 5
 
 
-def _entry_already_today() -> bool:
-    """True if an entry was already attempted in the current UTC hour today."""
+def _entry_already_today(strategy_name: str) -> bool:
+    """True if this strategy already entered a position today."""
     today = _now().date().isoformat()
     for pos in _OPEN_POSITIONS:
-        if pos.get("entry_date") == today:
+        if pos.get("strategy") == strategy_name and pos.get("entry_date") == today:
             return True
     for t in _CLOSED_TRADES:
-        if t.get("entry_date") == today:
+        if t.get("strategy") == strategy_name and t.get("entry_date") == today:
             return True
     return False
 
@@ -290,32 +307,35 @@ def _manage_positions() -> None:
 
 
 def _try_entry() -> None:
-    """Run the strategy and open a position if it emits a decision."""
+    """Run enabled strategies and open positions if they emit decisions."""
     if _KILLED:
-        return
-    if len(_OPEN_POSITIONS) >= OPTIONS_MAX_POSITIONS:
-        logger.debug("max open option positions reached (%d)", OPTIONS_MAX_POSITIONS)
         return
     if not _is_entry_time():
         return
-    if _entry_already_today():
-        return
 
     strategies = _get_strategies()
-    strat = strategies.get("eth_short_straddle")
-    if strat is None:
-        return
+    for name, strat in strategies.items():
+        if not is_strategy_enabled(name):
+            continue
+        if len(_OPEN_POSITIONS) >= OPTIONS_MAX_POSITIONS:
+            logger.debug("max open option positions reached (%d)", OPTIONS_MAX_POSITIONS)
+            return
+        if _entry_already_today(name):
+            continue
 
-    dec = strat.on_tick()
-    if dec is None:
-        return
-    if not isinstance(dec, OptionsSignalDecision):
-        logger.warning("options runner received non-options decision: %s", dec)
-        return
+        dec = strat.on_tick()
+        if dec is None:
+            continue
+        if not isinstance(dec, OptionsSignalDecision):
+            logger.warning("options runner received non-options decision: %s", dec)
+            continue
+        if not is_instrument_enabled(name, dec.underlying):
+            logger.debug("%s: instrument %s disabled; skipping entry", name, dec.underlying)
+            continue
 
-    pos = _open_position(dec)
-    if pos is not None:
-        _OPEN_POSITIONS.append(pos)
+        pos = _open_position(dec)
+        if pos is not None:
+            _OPEN_POSITIONS.append(pos)
 
 
 def tick_position_management() -> None:

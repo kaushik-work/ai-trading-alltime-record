@@ -17,8 +17,9 @@ import os
 import time
 from datetime import datetime, timezone
 import requests
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.security import HTTPBearer
+from api.auth import get_current_user
 
 router = APIRouter(prefix="/api/crypto", tags=["crypto"])
 _auth = HTTPBearer(auto_error=False)
@@ -460,3 +461,59 @@ def crypto_kill():
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+# ── strategy / instrument toggles ────────────────────────────────────────────
+
+@router.get("/strategies")
+def crypto_strategies(user: str = Depends(get_current_user)):
+    """List all strategies and their instruments with enable/disable state."""
+    try:
+        from core.strategy_toggles import list_strategies
+        return {"strategies": list_strategies()}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/strategies/{name}/enable")
+def enable_strategy(name: str, user: str = Depends(get_current_user)):
+    """Enable a strategy (allows new entries for its instruments)."""
+    try:
+        from core.strategy_toggles import set_strategy_enabled
+        cfg = set_strategy_enabled(name, True)
+        return {"ok": True, "strategy": name, "enabled": True, "config": cfg}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/strategies/{name}/disable")
+def disable_strategy(name: str, user: str = Depends(get_current_user)):
+    """Disable a strategy (no new entries; existing positions still managed)."""
+    try:
+        from core.strategy_toggles import set_strategy_enabled
+        cfg = set_strategy_enabled(name, False)
+        return {"ok": True, "strategy": name, "enabled": False, "config": cfg}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/strategies/{name}/instruments/{instrument}/enable")
+def enable_instrument(name: str, instrument: str, user: str = Depends(get_current_user)):
+    """Enable a specific instrument within a strategy."""
+    try:
+        from core.strategy_toggles import set_instrument_enabled
+        cfg = set_instrument_enabled(name, instrument, True)
+        return {"ok": True, "strategy": name, "instrument": instrument, "enabled": True, "config": cfg}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/strategies/{name}/instruments/{instrument}/disable")
+def disable_instrument(name: str, instrument: str, user: str = Depends(get_current_user)):
+    """Disable a specific instrument within a strategy."""
+    try:
+        from core.strategy_toggles import set_instrument_enabled
+        cfg = set_instrument_enabled(name, instrument, False)
+        return {"ok": True, "strategy": name, "instrument": instrument, "enabled": False, "config": cfg}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

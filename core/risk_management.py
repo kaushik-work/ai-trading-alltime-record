@@ -118,17 +118,23 @@ def capital_pct_for(strategy_name: str) -> float:
     return CAPITAL_USE_PCT
 
 
-# ── Options (ETH short straddle) ─────────────────────────────────────────────
-# Hardcoded production dials — no env toggles. The strategy is ENABLED and runs
-# in LIVE mode. The operator is responsible for validating Delta margin rules
-# before deployment; these values are tracked in git as part of the strategy
-# contract.
+# ── Options (ETH/BTC short straddle) ─────────────────────────────────────────
+# Hardcoded production dials — no env toggles. ETH is ENABLED and runs in LIVE
+# mode. BTC is disabled by default; flip ENABLE_BTC_SHORT_STRADDLE to True after
+# validating BTC-specific margin/liquidity. These values are tracked in git as
+# part of the strategy contract.
 ENABLE_OPTIONS_RUNNER: bool = True
 OPTIONS_TRADING_MODE: str = "live"
+ENABLE_BTC_SHORT_STRADDLE: bool = False
 
 # Fixed INR budget for the short-straddle book. This is NOT compounded; every
-# new cycle starts from this budget ceiling.
+# new cycle starts from this budget ceiling. Per-asset overrides let BTC and ETH
+# run with independent pools so enabling BTC does not double-spend the ETH pool.
 OPTIONS_FIXED_CAPITAL_INR: float = 50000.0
+OPTIONS_FIXED_CAPITAL_INR_BY_ASSET: dict[str, float] = {
+    "ETH": 50000.0,
+    "BTC": 0.0,  # disabled by default; set > 0 only after live validation
+}
 
 # Strategy dials — selected live config from backtests (5 DTE, 50% profit,
 # 200% stop). See docs/ALTERNATIVE_STRATEGIES.md for the research trail.

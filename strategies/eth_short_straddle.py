@@ -1,19 +1,22 @@
 """
-ETH short straddle — live options strategy.
+Short straddle — live options strategy for ETH and BTC on Delta India.
 
 Sells one ATM call + one ATM put at a fixed target DTE, holds until:
   • 50% of the entry credit is captured (buy back at 50% of credit), or
   • the combined mark reaches 200% of the entry credit (loss = 100% of credit), or
-  • expiry is within a few hours.
+  • expiry is reached.
 
-Research file: delta_exchange/backtest_eth_short_straddle_portfolio.py
+Asset-specific subclasses:
+  • ETHShortStraddleSignal — enabled by default, contract size 0.01 ETH
+  • BTCShortStraddleSignal — disabled by default, contract size 0.001 BTC
+
+Research file: docs/ALTERNATIVE_STRATEGIES.md
 Selected config: 5 DTE, 50% profit target, 200% stop.
 """
 
 from __future__ import annotations
 
 import logging
-import math
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -25,6 +28,7 @@ from core.risk_management import (
     OPTIONS_STOP_MULT,
     OPTIONS_MARGIN_PCT_PER_LEG,
     OPTIONS_FIXED_CAPITAL_INR,
+    OPTIONS_FIXED_CAPITAL_INR_BY_ASSET,
     OPTIONS_FEE_BPS,
     OPTIONS_SLIPPAGE_BPS,
     OPTIONS_MAX_MARGIN_PCT_PER_POSITION,
@@ -33,11 +37,12 @@ from core.risk_management import (
 logger = logging.getLogger(__name__)
 
 
-class ETHShortStraddleSignal(CryptoStrategy):
-    """Short ATM straddle on ETH options traded on Delta India."""
+class ShortStraddleSignal(CryptoStrategy):
+    """Short ATM straddle on a configurable underlying."""
 
-    name = "eth_short_straddle"
-    symbol = "ETHUSD"  # underlying perp symbol for context
+    name = "short_straddle"
+    underlying = "ETH"
+    symbol = "ETHUSD"
 
     def __init__(self, broker=None):
         super().__init__(broker=broker)
@@ -122,7 +127,7 @@ class ETHShortStraddleSignal(CryptoStrategy):
             logger.debug("%s: no spot mark", self.name)
             return None
 
-        chain = self.broker.get_option_chain("ETH")
+        chain = self.broker.get_option_chain(self.underlying)
         if len(chain) < 6:
             logger.debug("%s: option chain too small (%d)", self.name, len(chain))
             return None
@@ -140,21 +145,25 @@ class ETHShortStraddleSignal(CryptoStrategy):
 
         contract_size_raw = pair["call"].get("contract_size") or pair["call"].get("lot_size")
         if contract_size_raw is None:
-            # Fallback: assume 1 ETH per contract if the broker did not report
-            # a size. The runner will warn loudly so the operator can correct it.
-            contract_size = 1.0
+            # Fallback: assume 0.01 underlying per contract if the broker did
+            # not report a size. The runner will warn loudly so the operator
+            # can correct it.
+            contract_size = 0.01
         else:
             try:
                 contract_size = float(contract_size_raw)
             except (TypeError, ValueError):
-                contract_size = 1.0
+                contract_size = 0.01
 
         # Entry credit and margin
-        credit = call_mark + put_mark
+        credit = (call_mark + put_mark) * contract_size
         leg_notional = spot * contract_size
         margin_per_straddle = 2 * leg_notional * OPTIONS_MARGIN_PCT_PER_LEG
 
-        capital_usd = OPTIONS_FIXED_CAPITAL_INR / USD_INR_RATE
+        capital_inr = OPTIONS_FIXED_CAPITAL_INR_BY_ASSET.get(
+            self.underlying, OPTIONS_FIXED_CAPITAL_INR
+        )
+        capital_usd = capital_inr / USD_INR_RATE
         if margin_per_straddle <= 0:
             return None
 
@@ -169,7 +178,7 @@ class ETHShortStraddleSignal(CryptoStrategy):
             logger.warning(
                 "%s: fixed capital $%.2f (₹%.0f) cannot cover one straddle "
                 "margin $%.2f at spot %.2f; skipping",
-                self.name, capital_usd, OPTIONS_FIXED_CAPITAL_INR,
+                self.name, capital_usd, capital_inr,
                 margin_per_straddle, spot,
             )
             return None
@@ -186,7 +195,7 @@ class ETHShortStraddleSignal(CryptoStrategy):
 
         return OptionsSignalDecision(
             name=self.name,
-            underlying="ETH",
+            underlying=self.underlying,
             expiry=pair["expiry"].isoformat(),
             call_symbol=pair["call"]["symbol"],
             put_symbol=pair["put"]["symbol"],
@@ -205,3 +214,17 @@ class ETHShortStraddleSignal(CryptoStrategy):
             slippage_bps=OPTIONS_SLIPPAGE_BPS,
             metadata={"dte": pair["dte"]},
         )
+
+
+class ETHShortStraddleSignal(ShortStraddleSignal):
+    """ETH-specific short straddle."""
+    name = "eth_short_straddle"
+    underlying = "ETH"
+    symbol = "ETHUSD"
+
+
+class BTCShortStraddleSignal(ShortStraddleSignal):
+    """BTC-specific short straddle."""
+    name = "btc_short_straddle"
+    underlying = "BTC"
+    symbol = "BTCUSD"
