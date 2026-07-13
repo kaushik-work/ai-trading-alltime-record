@@ -34,6 +34,9 @@ type SignalRow = {
   tp_pct: number;
   vol_24h?: number;
   vol_filter_ok?: boolean;
+  candles_count?: number;
+  warmup_target?: number;
+  warmup_pct?: number;
   side: "buy" | "sell" | null;
   ready: boolean;
 };
@@ -56,15 +59,6 @@ type StreamDiag = {
   marks_fresh?: number;
   marks_total?: number;
   last_msg_age_s?: number | null;
-};
-
-type FuturesStat = {
-  funding_rate?: number | null;
-  open_interest?: number | null;
-  open_interest_usd?: number | null;
-  mark_price?: number | null;
-  volume_24h_usd?: number | null;
-  mark_change_24h?: number | null;
 };
 
 type ShadowTrade = {
@@ -110,7 +104,6 @@ type MissedSignal = {
 type Snapshot = {
   ts: string;
   perp_marks: Record<string, number>;
-  futures_stats?: Record<string, FuturesStat>;
   shadow_trades?: ShadowTrade[];
   shadow_summary?: ShadowSummary;
   missed_signals?: MissedSignal[];
@@ -240,7 +233,6 @@ export default function CryptoHome() {
   const stream = snap?.stream;
   const firing = signals.filter(s => s.side != null);
   const liveEth = snap?.perp_marks?.["ETHUSD"];
-  const ethFutures = snap?.futures_stats?.["ETHUSD"];
   const shadowTrades = snap?.shadow_trades ?? [];
   const shadowSummary = snap?.shadow_summary;
   const lastShadow = shadowTrades.length ? shadowTrades[shadowTrades.length - 1] : null;
@@ -251,26 +243,6 @@ export default function CryptoHome() {
   const maxRangePct = signals.length
     ? Math.max(...signals.map(s => Math.abs(s.width_pct)))
     : 0;
-
-  const fmtUsd = (v?: number | null) => {
-    if (v == null) return "—";
-    if (Math.abs(v) >= 1_000_000) return `$${(v / 1_000_000).toFixed(2)}M`;
-    if (Math.abs(v) >= 1_000)     return `$${(v / 1_000).toFixed(1)}K`;
-    return `$${v.toFixed(0)}`;
-  };
-  const fmtFunding = (fr?: number | null) => {
-    if (fr == null) return { text: "—", color: "#475569", hint: "" };
-    // Delta India returns funding_rate already in PERCENT units (e.g. 0.0074
-    // = 0.0074% per 8h). We were multiplying by 100 again and showing
-    // 0.7427% instead of 0.0074%. Same trap with mark_change_24h.
-    const sign = fr >= 0 ? "+" : "";
-    const text = `${sign}${fr.toFixed(4)}%`;
-    // Positive funding -> longs paying shorts -> heavy-long, mean-revert risk
-    // Negative funding -> shorts paying longs -> heavy-short, squeeze risk
-    const color = fr > 0.005  ? "#ef4444" : fr < -0.005 ? "#22c55e" : "#94a3b8";
-    const hint  = fr > 0.005  ? "longs paying" : fr < -0.005 ? "shorts paying" : "neutral";
-    return { text, color, hint };
-  };
 
   return (
     <div className="min-h-screen bg-[#0a0a14] text-gray-200">
@@ -533,20 +505,6 @@ export default function CryptoHome() {
           </div>
         )}
 
-        {/* Futures market stats — perp-specific signals not in NIFTY land */}
-        <div className="border border-[#1e1e30] rounded-2xl p-4 mb-6 bg-[#0e0e1a]">
-          <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between gap-1 mb-3">
-            <h2 className="text-sm font-semibold text-gray-300">Futures · Perp Stats</h2>
-            <span className="text-[10px] text-gray-600 leading-tight">
-              funding: + longs paying · − shorts paying
-            </span>
-          </div>
-          <div className="grid grid-cols-1 md:grid-cols-1 gap-3 md:gap-4">
-            <FuturesCard label="ETHUSD" futures={ethFutures} color="#627eea"
-                         fmtUsd={fmtUsd} fmtFunding={fmtFunding} />
-          </div>
-        </div>
-
         {/* Live ETH chart — Signal Radar below covers 4h S/R width + retest state */}
         <div className="mb-6">
           <CryptoChart livePrices={{ ETH: liveEth }} />
@@ -566,6 +524,28 @@ export default function CryptoHome() {
               {wsState === "open" ? "No signals yet — stream warming up." : "Connecting…"}
             </p>
           ) : (
+            <>
+            {signals.some(s => !s.ready) && (
+              <div className="mb-4">
+                {signals.filter(s => !s.ready).map((s, i) => (
+                  <div key={i} className="mb-2 last:mb-0">
+                    <div className="flex justify-between text-xs text-gray-400 mb-1">
+                      <span>{s.underlying} warmup</span>
+                      <span>{s.candles_count ?? 0} / {s.warmup_target ?? 1440} candles ({s.warmup_pct ?? 0}%)</span>
+                    </div>
+                    <div className="h-1.5 w-full bg-[#1e1e30] rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-[#627eea] transition-all duration-500"
+                        style={{ width: `${s.warmup_pct ?? 0}%` }}
+                      />
+                    </div>
+                    <p className="text-[10px] text-gray-500 mt-1">
+                      Strategy needs 24h of 1-minute candles before it can generate signals.
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="overflow-x-auto -mx-2 sm:mx-0">
             <table className="w-full text-xs sm:text-sm min-w-[560px]">
               <thead className="text-gray-500 border-b border-[#1e1e30]">
@@ -622,6 +602,7 @@ export default function CryptoHome() {
               </tbody>
             </table>
             </div>
+            </>
           )}
         </div>
 
@@ -659,51 +640,4 @@ function StatCard({ label, value, accent, customColor, footnote }: {
   );
 }
 
-function FuturesCard({
-  label, futures, color, fmtUsd, fmtFunding,
-}: {
-  label: string;
-  futures?: FuturesStat;
-  color: string;
-  fmtUsd: (v?: number | null) => string;
-  fmtFunding: (fr?: number | null) => { text: string; color: string; hint: string };
-}) {
-  const fund = fmtFunding(futures?.funding_rate);
-  // Delta returns mark_change_24h already in PERCENT units (e.g. -3.14 for
-  // -3.14%). We were multiplying by 100 again and showing -316.57%.
-  const chgPct = futures?.mark_change_24h ?? null;
-  return (
-    <div className="border border-[#1e1e30] rounded-lg p-3 sm:p-4">
-      <div className="flex items-baseline justify-between mb-2 gap-2">
-        <span className="text-sm font-semibold flex-shrink-0" style={{ color }}>{label}</span>
-        <span className="text-[11px] sm:text-xs text-gray-500 font-mono truncate">
-          {futures?.mark_price != null
-            ? `$${futures.mark_price.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
-            : "—"}
-        </span>
-      </div>
-      <div className="grid grid-cols-3 gap-2 sm:gap-3 text-[11px] sm:text-xs">
-        <div className="min-w-0">
-          <p className="text-gray-500 mb-0.5 leading-tight">
-            Funding<span className="hidden sm:inline text-gray-700"> (per 8h)</span>
-          </p>
-          <p className="font-semibold font-mono truncate" style={{ color: fund.color }}>{fund.text}</p>
-          <p className="text-[10px] text-gray-600 mt-0.5 truncate">{fund.hint}</p>
-        </div>
-        <div className="min-w-0">
-          <p className="text-gray-500 mb-0.5 leading-tight">Open Int.</p>
-          <p className="font-semibold text-white font-mono truncate">{fmtUsd(futures?.open_interest_usd)}</p>
-        </div>
-        <div className="min-w-0">
-          <p className="text-gray-500 mb-0.5 leading-tight">24h Δ</p>
-          <p className={`font-semibold font-mono truncate ${
-            chgPct == null ? "text-white"
-              : chgPct > 0 ? "text-green-400" : "text-red-400"
-          }`}>
-            {chgPct == null ? "—" : `${chgPct >= 0 ? "+" : ""}${chgPct.toFixed(2)}%`}
-          </p>
-        </div>
-      </div>
-    </div>
-  );
-}
+

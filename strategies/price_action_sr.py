@@ -477,10 +477,14 @@ class PriceActionSRSignal(CryptoStrategy):
 
     def latest_state(self) -> dict:
         """Read-only snapshot for the dashboard. Safe to call from API."""
+        candles_count = len(self._candles)
         return {
             "underlying": self.underlying,
             "symbol": self.symbol,
-            "ready": len(self._candles) >= TREND_CANDLES,
+            "ready": candles_count >= TREND_CANDLES,
+            "candles_count": candles_count,
+            "warmup_target": TREND_CANDLES,
+            "warmup_pct": min(100, int(100 * candles_count / TREND_CANDLES)),
             "retest_mode": RETEST_MODE,
             **self._last_state,
             "last_decision": {

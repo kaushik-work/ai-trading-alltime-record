@@ -1,14 +1,15 @@
 # AI Trading All-Time Record
 
-Production crypto-futures trading bot on **Delta Exchange India** + NSE
-option-chain **data collectors** for research.
+Production crypto-futures trading bot on **Delta Exchange India**.
 
 ## What this is
 
-**Live trading surface:** crypto perpetual futures only (BTCUSD, ETHUSD).
+**Live trading surface:** **ETHUSD perpetual futures only**. BTCUSD is disabled.
+
 The strategy is **Price-action S/R retest** — a pure perp price-action strategy
 decoded from a Hindi livestream. It trades at 4h S/R levels in the direction of
-the 24h trend, using tiny stops and asymmetric targets.
+the 24h trend, using tight stops and asymmetric targets, filtered by 24h
+realized volatility.
 
 **Data surface:** NIFTY / BANKNIFTY / FINNIFTY / SENSEX 5-min option-chain
 snapshots into MongoDB. Pure data collection. No NSE trading, no NSE bot,
@@ -19,68 +20,65 @@ no NSE strategies.
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
 │                           Delta India                               │
-│   WebSocket (perp + option marks)        REST (wallet, orders)      │
+│   WebSocket (ETH perp + ETH option marks)    REST (wallet, orders)  │
 └──────────────────┬──────────────────────────────┬───────────────────┘
                    │                              │
                    ▼                              ▼
        ┌───────────────────────┐      ┌──────────────────────┐
        │  core/ws/delta_stream │      │  core/brokers/       │
-       │  (993 symbols / 2s)   │      │  delta_crypto.py     │
+       │  (ETH-only stream)    │      │  delta_crypto.py     │
        └───────────┬───────────┘      └──────┬───────────────┘
                    │                          │
                    └────────────┬─────────────┘
                                 ▼
        ┌─────────────────────────────────────────┐
        │  strategies/price_action_sr.py          │
-       │  S/R retest · tiny SL · 1:7 R:R         │
+       │  ETH S/R retest · 0.7% SL · 4.9% TP     │
+       │  24h vol filter ≤ 34%                   │
        └─────────────┬───────────────────────────┘
                      │
                      ▼
        ┌─────────────────────────────────────────┐
        │  core/execution/crypto_runner.py        │
-       │  tick 2s · stop 1.5% · trail 0.25%      │
-       │  partial TP @ 1% · max hold 72h         │
+       │  tick 2s · entry every 15m · 1:7 R:R    │
+       │  fixed Rs 50k capital per trade         │
        └─────────────┬───────────────────────────┘
                      │
                      ▼
        ┌─────────────────────────────────────────┐
        │  Dashboard (Next.js, /)                 │
-       │  Live signal radar + chart + KILL btn   │
+       │  ETH signal radar + chart + KILL btn    │
        └─────────────────────────────────────────┘
 ```
 
-## Strategy: Price-action S/R retest
+## Strategy: Price-action S/R retest (ETH-only)
 
 1. **Trend filter**: only trade in the direction of the 24h moving average.
 2. **Levels**: enter only near the 4h range high/low; skip mid-range.
 3. **Aggression**: require a strong reversal candle (body ≥ 1.3× average, wick ≤ 45%).
-4. **Risk**: wider SL, big target (BTC 0.6% / 1:7, ETH 0.7% / 1:7).
-5. **Trail**: move stop to breakeven after +1R.
+4. **Volatility filter**: skip if 24h realized vol > 34%.
+5. **Risk**: ETH 0.7% SL / 4.9% TP (1:7 R:R).
+6. **Trail**: move stop to breakeven after +1R.
 
 | Parameter | Value |
 |---|---|
+| Asset | ETHUSD |
 | S/R lookback | 4h |
 | Trend lookback | 24h |
-| Stop loss BTC | -0.6% |
 | Stop loss ETH | -0.7% |
-| Target BTC | +4.2% |
 | Target ETH | +4.9% |
-| Leverage | 40× |
-| Capital per cycle | 50% of pool |
+| Leverage | 15× |
+| Capital per trade | Fixed Rs 50,000 INR |
+| Vol filter | 24h realized vol ≤ 34% |
 | Max hold | 4h |
 | Daily kill | -5% of base equity |
 
-Backtest validation (April–June 2026, ~80 days, $10k per asset,
-`wick_touch` retest + 180-min block-after-loss):
-- BTCUSD SL 0.6% / 1:7: **+17.28%**, PF 1.79, 124 trades, 57.3% WR, MaxDD 2.52%
-- ETHUSD SL 0.7% / 1:7: **+18.10%**, PF 2.01, 83 trades, 56.6% WR, MaxDD 2.33%
+Backtest validation (April–July 2026, fixed Rs 50k notional per trade,
+15× leverage, vol filter ≤ 34%, `wick_touch` retest):
+- **ETHUSD**: 17 trades, **82.4% WR**, **+Rs 39,708 gross**, **MaxDD Rs 5,250 (10.5%)**.
 
-Leverage is set to **30×** (effective ~15× pool exposure at 50% capital use) as
-a safer-aggressive target (~200%/mo BTC, ~238%/mo ETH) per the liquidation-aware
-sweep in `delta_exchange/backtest_leverage_liquidation.py`. This assumes zero
-in-sample liquidations but carries real liquidation risk on a ~3.3% adverse wick.
-Leverage is hardcoded in `core/risk_management.py` (not `.env`) so every change
-is tracked in git.
+Production dials are hardcoded in `core/risk_management.py` and
+`strategies/price_action_sr.py` (not `.env`) so every change is tracked in git.
 
 ## Repo layout
 
@@ -95,9 +93,8 @@ is tracked in git.
 │   ├── execution/
 │   │   └── crypto_runner.py   Tick loop, entry/exit, kill switch, shadow trades
 │   ├── ws/
-│   │   └── delta_stream.py    Persistent Delta WebSocket client
-│   ├── risk_management.py     Production dials (LEVERAGE, gate, kill thresholds)
-│   ├── memory.py              SQLite trade memory
+│   │   └── delta_stream.py    Persistent Delta WebSocket client (ETH-only)
+│   ├── risk_management.py     Production dials (LEVERAGE, fixed capital, gates)
 │   ├── mongo.py               Mongo connection + collections
 │   ├── ipc.py                 NSE market-holiday helper (used by collectors)
 │   └── utils.py               Date/timezone helpers
@@ -120,42 +117,43 @@ is tracked in git.
 docker compose up -d              # crypto api only
 ```
 
-**Plus the NSE data collectors:**
+**With NSE option-chain collectors:**
 ```bash
 docker compose --profile nse up -d
 ```
 
-**Local backtest:**
+**Deploy manually:**
 ```bash
-cd delta_exchange
-./.venv/Scripts/python.exe backtest_price_action_sweep.py
+./deploy.sh
 ```
 
-## Required env (in `.env`, not committed)
+## Environment variables
 
-```
-DELTA_API_KEY=...               # with Read + Trade scopes + IP whitelist
-DELTA_API_SECRET=...
-MONGODB_URL=...
-MONGODB_DB_NAME=...
-JWT_SECRET=...                  # dashboard auth
-ANGEL_*=...                     # only for NSE collectors
-DASHBOARD_ORIGINS=...           # CORS allowlist
-```
+Create a `.env` file in the project root. Required:
 
-Risk dials live in `core/risk_management.py`, not `.env` — change via PR review.
+| Variable | Purpose |
+|---|---|
+| `DELTA_API_KEY` / `DELTA_API_SECRET` | Delta India REST/WS HMAC auth |
+| `MONGODB_URL` / `MONGODB_DB_NAME` | MongoDB Atlas mirror |
+| `DASHBOARD_SECRET` / `DASHBOARD_USER` / `DASHBOARD_PASS` | JWT auth |
+| `ENABLE_CRYPTO_RUNNER` | `true` to start the bot |
+| `CRYPTO_TRADING_MODE` | `live` or `paper` |
 
-## Mongo collections
+Production dials (leverage, capital, SL/TP, vol filter) are **hardcoded in code**,
+not in `.env`.
 
-| Collection | Owner | Purpose |
-|---|---|---|
-| `crypto_trades` | crypto bot | every entry/exit event |
-| `crypto_signal_log` | crypto bot | gated signal observations |
-| `option_snapshots` | NSE collectors | 5-min option chain dumps (NIFTY/BANKNIFTY/FINNIFTY/SENSEX) |
+## Dashboard
 
-NSE-side legacy collections (`shadow_trades`, `daily_journals`, etc) are untouched
-but no longer written to.
+Login at `/login`. The dashboard shows:
+- ETHUSD live signal radar (spot, 4h range, trend, state, SL/TP, 24h vol)
+- Warmup progress bar until 1,440 one-minute candles are collected
+- Live ETH chart with S/R zones
+- Portfolio: fixed Rs 50k budget badge, day P&L, open positions
+- Manual kill switch
 
-## License
+## Security
 
-Private.
+- Live money is on the line in `live` mode.
+- `.env` is git-ignored and never committed.
+- Manual kill switch closes positions and halts new entries.
+- Daily-loss kill at -5% of base equity.
