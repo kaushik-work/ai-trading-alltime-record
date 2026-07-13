@@ -40,7 +40,7 @@ no NSE strategies.
                      ▼
        ┌─────────────────────────────────────────┐
        │  core/execution/crypto_runner.py        │
-       │  tick 2s · entry every 15m · 1:7 R:R    │
+       │  tick 2s · entry every 1m · 1:7 R:R     │
        │  fixed Rs 50k capital per trade         │
        └─────────────┬───────────────────────────┘
                      │
@@ -58,7 +58,7 @@ no NSE strategies.
 3. **Aggression**: require a strong reversal candle (body ≥ 1.3× average, wick ≤ 45%).
 4. **Volatility filter**: skip if 24h realized vol > 34%.
 5. **Risk**: ETH 0.7% SL / 4.9% TP (1:7 R:R).
-6. **Trail**: move stop to breakeven after +1R.
+6. **Exit regime**: pure SL/TP bracket — full close on stop or target (no trail).
 
 | Parameter | Value |
 |---|---|
@@ -73,9 +73,15 @@ no NSE strategies.
 | Max hold | 4h |
 | Daily kill | -5% of base equity |
 
-Backtest validation (April–July 2026, fixed Rs 50k notional per trade,
-15× leverage, vol filter ≤ 34%, `wick_touch` retest):
-- **ETHUSD**: 17 trades, **82.4% WR**, **+Rs 39,708 gross**, **MaxDD Rs 5,250 (10.5%)**.
+Backtest validation (`delta_exchange/backtest_eth_live_config.py`,
+April–July 2026, fixed Rs 50k notional per trade, 15× leverage,
+vol filter ≤ 34%, `wick_touch` retest, **5 bps/side fee, 2 bps slippage**):
+- **ETHUSD**: 17 trades, **47.1% WR**, **+Rs 21,995 net**, **MaxDD Rs 8,656 (17.3%)**.
+
+> ⚠️ The previous 82.4% / +Rs 39,708 number was from an optimistic backtest
+> that ignored fees, ignored exit slippage, and allowed entries on every minute.
+> The live bot now evaluates entries every minute (the strategy is 1m-based),
+> so the corrected numbers above are the realistic projection.
 
 Production dials are hardcoded in `core/risk_management.py` and
 `strategies/price_action_sr.py` (not `.env`) so every change is tracked in git.

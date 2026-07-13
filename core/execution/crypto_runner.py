@@ -45,11 +45,14 @@ from core.risk_management import (
     TICK_INTERVAL_SECONDS, BASE_EQUITY_USD,
     CAPITAL_USE_PCT, BTC_CAPITAL_PCT, ETH_CAPITAL_PCT, capital_pct_for,
     DAILY_LOSS_KILL_PCT, MAX_LIVE_CONTRACTS, MAX_LIVE_CONTRACTS_BY_ASSET,
-    MAX_HOLD_HOURS, LEVERAGE, CONTRACT_SIZE_BY_ASSET,
+    LEVERAGE, CONTRACT_SIZE_BY_ASSET,
     ENABLE_CRYPTO_RUNNER, EXIT_REGIME,
     FIXED_CAPITAL_MODE, FIXED_CAPITAL_INR, USD_INR_RATE,
 )
-from strategies.price_action_sr import ETHPriceActionSRSignal
+from strategies.price_action_sr import (
+    ETHPriceActionSRSignal, MAX_HOLD_MINUTES,
+)
+
 from strategies.crypto_base import CryptoSignalDecision
 
 logger = logging.getLogger(__name__)
@@ -197,7 +200,7 @@ def _manage_open_position(strategy_name: str, broker, pos: dict) -> bool:
     side = pos["side"]                       # "buy" or "sell"
     sign = 1 if side == "buy" else -1
     entry_px = pos["entry_price"]
-    held_h = (time.time() - pos["entry_ts"]) / 3600
+    held_min = (time.time() - pos["entry_ts"]) / 60
 
     current_mark = broker.get_perp_mark(symbol)
     if current_mark is None: return False
@@ -208,7 +211,7 @@ def _manage_open_position(strategy_name: str, broker, pos: dict) -> bool:
     if EXIT_REGIME == "pure_sltp":
         # ── PURE BRACKET — full exit on stop or target ──
         exit_reason = None
-        if held_h >= MAX_HOLD_HOURS:
+        if held_min >= MAX_HOLD_MINUTES:
             exit_reason = "max_hold"
         elif unrealized_pct >= dec.partial_tp_pct:   # +1% target → full exit
             exit_reason = "target"
@@ -241,7 +244,7 @@ def _manage_open_position(strategy_name: str, broker, pos: dict) -> bool:
                 logger.info("%s partial_tp at %s, pnl=%.2f", strategy_name,
                              order.get("fill_price"), pnl)
         exit_reason = None
-        if held_h >= MAX_HOLD_HOURS:
+        if held_min >= MAX_HOLD_MINUTES:
             exit_reason = "max_hold"
         elif unrealized_pct <= -dec.stop_loss_pct:
             exit_reason = "stop_loss"
@@ -267,7 +270,7 @@ def _manage_open_position(strategy_name: str, broker, pos: dict) -> bool:
         "symbol": symbol, "side": side,
         "event": exit_reason, "exit_price": fill,
         "contracts_closed": pos["contracts"], "pnl_usd": pnl,
-        "unrealized_pct": unrealized_pct, "held_hours": held_h,
+        "unrealized_pct": unrealized_pct, "held_minutes": held_min,
     })
     logger.info("%s EXIT (%s) at %s, pnl=%.2f", strategy_name, exit_reason, fill, pnl)
     # Notify strategy for block-after-loss logic
@@ -296,17 +299,17 @@ def _manage_shadow_positions(broker) -> None:
             unreal_pct = sign * (mark - entry_px) / entry_px
             pos["peak_pct"] = max(pos.get("peak_pct", 0.0), unreal_pct)
             entry_dt = _dt.fromisoformat(pos["entry_ts"].replace("Z", "+00:00"))
-            held_h = (_dt.now(timezone.utc) - entry_dt).total_seconds() / 3600
+            held_min = (_dt.now(timezone.utc) - entry_dt).total_seconds() / 60
             exit_reason = None
             # Use partial_tp_pct as the target threshold under pure_sltp regime
             # (same numeric value, different semantics — see _manage_open_position).
             target_pct = pos.get("partial_tp_pct", 0.010)
             if EXIT_REGIME == "pure_sltp":
-                if held_h >= MAX_HOLD_HOURS:        exit_reason = "max_hold"
-                elif unreal_pct >= target_pct:      exit_reason = "target"
+                if held_min >= MAX_HOLD_MINUTES:        exit_reason = "max_hold"
+                elif unreal_pct >= target_pct:          exit_reason = "target"
                 elif unreal_pct <= -pos["stop_loss_pct"]: exit_reason = "stop_loss"
             else:
-                if held_h >= MAX_HOLD_HOURS:        exit_reason = "max_hold"
+                if held_min >= MAX_HOLD_MINUTES:        exit_reason = "max_hold"
                 elif unreal_pct <= -pos["stop_loss_pct"]: exit_reason = "stop_loss"
                 elif pos["peak_pct"] >= pos["trail_peak_pct"] and \
                      (pos["peak_pct"] - unreal_pct) > pos["trail_giveback"]:
@@ -316,7 +319,7 @@ def _manage_shadow_positions(broker) -> None:
                 pos["exit_ts"]     = _dt.now(timezone.utc).isoformat()
                 pos["exit_px"]     = mark
                 pos["pnl_pct"]     = float(unreal_pct * 100)
-                pos["held_hours"]  = float(held_h)
+                pos["held_minutes"]  = float(held_min)
                 pos["exit_reason"] = exit_reason
                 _SHADOW_POSITIONS.pop(sid, None)
                 logger.info("shadow %s %s closed at %s reason=%s pnl=%+0.2f%%",
@@ -521,7 +524,7 @@ def init_crypto_runner(scheduler) -> None:
     broker = get_crypto_broker()
     mode = broker.mode
     logger.info("crypto runner enabled — mode=%s regime=%s mgmt_tick=%ds "
-                "sample=5m entry=15min@HH:00/15/30/45:30 UTC equity=$%.0f kill=-%.1f%% "
+                "sample=5m entry=1min@*:05 UTC equity=$%.0f kill=-%.1f%% "
                 "max_contracts=%d",
                 mode, EXIT_REGIME, TICK_INTERVAL_SECONDS, BASE_EQUITY_USD,
                 DAILY_LOSS_KILL_PCT * 100, MAX_LIVE_CONTRACTS)
@@ -559,13 +562,15 @@ def init_crypto_runner(scheduler) -> None:
             next_run_time=datetime.now(timezone.utc),
             max_instances=1, coalesce=True,
         )
-        # 3) 15-minute entry decision — at :00/:15/:30/:45 + 30s grace for WS marks
-        #    to settle after the boundary. Recalibrated to match the observed
-        #    signal resolution (median dislocations resolve within ~15-30 min).
+        # 3) 1-minute entry decision — the price-action S/R strategy is
+        #    intrinsically 1m-candle based. A 15-minute grid was inherited from
+        #    the old options strategy and was shown to miss ~88% of valid setups
+        #    in the corrected backtest. Evaluate every minute at :05s so the
+        #    just-completed 1m candle is fully formed and WS marks have settled.
         scheduler.add_job(
             tick_entry_decisions, "cron",
-            minute="0,15,30,45", second=30, timezone="UTC",
-            id="crypto_15min_entry_tick", replace_existing=True,
+            minute="*", second=5, timezone="UTC",
+            id="crypto_1min_entry_tick", replace_existing=True,
             max_instances=1, coalesce=True,
         )
         # 4) Wallet heartbeat — every 5 min, log Delta wallet breakdown.

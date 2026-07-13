@@ -217,7 +217,7 @@ team agrees on a testing framework.
 |---|---|---|
 | `tick_position_management` | every 2s | SL, TP, trail, max-hold, shadow positions |
 | `tick_signal_sample` | every 5m | Record raw pred into `_sig_history` for persistence gate |
-| `tick_entry_decisions` | every 15 min UTC (`:00/:15/:30/:45:30`) | New entry decisions only |
+| `tick_entry_decisions` | every 1 min UTC (`*:05`) | New entry decisions only |
 | `_wallet_heartbeat` | every 5m | Log Delta wallet breakdown |
 
 `max_instances=1, coalesce=True` so ticks never overlap.
@@ -247,11 +247,11 @@ Decoded rules from the Hindi livestream:
 2. Trade at the 4-hour S/R range edges only; skip mid-range setups.
 3. Wait for a strong reversal candle (body ≥ 1.3× average, wick ≤ 45%).
 4. Wider SL (0.6% BTC / 0.7% ETH), big target (1:7 R:R).
-5. Trail stop to breakeven at +1R.
+5. Pure SL/TP bracket exit (no trail) under the current `pure_sltp` regime.
 
 The strategy builds its own 1-minute candles from live perp mark updates. The
 2-second position-management tick feeds marks into the candle buffer; the
-15-minute entry tick evaluates the signal.
+1-minute entry tick evaluates the signal on each completed 1m candle.
 
 ### Production dials
 
@@ -412,8 +412,9 @@ with `crypto_`.
   wallet pool = USD stablecoins + INR / `USD_INR_RATE`.
 - **Position management is split from entry decisions.** This matches backtest
   semantics and reduces noise from real-time WS mark jitter.
-- **15-minute entry grid.** Entries are evaluated at `:00/:15/:30/:45:30 UTC`, the same
-  cadence used for backtests.
+- **1-minute entry grid.** Entries are evaluated at `*:05 UTC` on each completed
+  1m candle, matching the 1m candle basis of the price-action strategy. The old
+  15-minute grid was shown to miss ~88% of setups in the corrected backtest.
 - **No trailing commas or wildcard imports** by convention; follow the existing
   file style.
 
