@@ -3,8 +3,7 @@ OptionsRunner — live manager for short-option strategies.
 
 Runs alongside CryptoRunner but is completely separate: it manages two-leg
 option positions (call + put) with their own entry cadence, margin checks, and
-exit rules. Defaults to paper mode even when enabled; live mode must be set
-explicitly via OPTIONS_TRADING_MODE=live.
+exit rules. Trading mode is controlled by `core.risk_management.OPTIONS_TRADING_MODE`.
 
 Positions are evaluated on the same 2-second tick as the perp runner so exits
 are caught promptly, but entries are intentionally slow (once per day) to match
@@ -346,7 +345,7 @@ def init_options_runner(scheduler) -> None:
         return
     logger.warning(
         "OPTIONS RUNNER ENABLED — mode=%s. Short options carry tail risk; "
-        "verify margin rules on Delta before switching to live.",
+        "monitor margin rules and fill slippage closely.",
         OPTIONS_TRADING_MODE,
     )
     # Eagerly instantiate strategy so symbol discovery has a head start.

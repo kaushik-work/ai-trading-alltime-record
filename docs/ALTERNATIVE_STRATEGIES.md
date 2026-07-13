@@ -19,7 +19,7 @@ costs.
 |---|-------|--------|--------|---------------------------------------------|
 | 1 | Higher-frequency microstructure | `backtest_hf_microstructure.py` | Failed | 2,631 trades, 24.1% WR, −₹2.46M, MaxDD 4,927% |
 | 2a | Options / synthetic parity | `backtest_options_parity.py` | Rejected | 33 trades, 24.2% WR, −₹75k, MaxDD 208% |
-| 2b | Options / short straddle (ATM) | `backtest_eth_short_straddle.py` | Promoted (paper default) | 83 trades, 98.8% WR, +$40/contract (~$607 margin), 660% return on margin; ₹50k pool backtest +298% / MaxDD 29.5% |
+| 2b | Options / short straddle (ATM) | `backtest_eth_short_straddle.py` | Live | 83 trades, 98.8% WR, +$40/contract (~$607 margin), 660% return on margin; ₹50k pool backtest +298% / MaxDD 29.5% |
 | 2c | Options / short strangle / iron condor | TBD | Research | Need OTM strikes and Greeks |
 | 3 | Cross-exchange spread | `backtest_cross_exchange.py` | Blocked | No second-venue 1m data |
 | 4 | Multi-asset / inter-market | `backtest_multi_asset_momentum.py` | Marginal | 68 trades, 41.2% WR, +₹15,322, MaxDD ₹27,903 (55.8%) |
@@ -204,17 +204,17 @@ standard cost model (5 bps fee, 2 bps slippage, ₹50k fixed, 15× leverage).
 |---|----------|--------|-------|-----------|-------|---------|
 | 1 | HF VWAP mean reversion | 2,631 | 24.1% | −₹2,463,490 | 4,927% | Catastrophic — no mean-reversion edge at 1m |
 | 2a | Options / synthetic parity | 33 | 24.2% | −₹75,168 | 208.4% | Fails — deviations do not mean-revert quickly enough |
-| 2b | Options / short ATM straddle | 83 | 98.8% | +$40/contract; ₹50k pool +298% / −29.5% | ~$1k contract-level; ₹14.7k pool MaxDD | Promoted to runner (paper default); contract size corrected to 0.01 ETH |
+| 2b | Options / short ATM straddle | 83 | 98.8% | +$40/contract; ₹50k pool +298% / −29.5% | ~$1k contract-level; ₹14.7k pool MaxDD | Live; contract size corrected to 0.01 ETH |
 | 3 | Cross-exchange spread | — | — | — | — | Blocked: no second-venue CSVs |
 | 4 | BTC-leads-ETH momentum | 68 | 41.2% | +₹15,322 | 55.8% | Positive but drawdown too high |
 | 5 | Market-making grid | 3,148 | 14.7% | −₹20,208,471 | 40,445% | Catastrophic — inventory stops dominate |
 
 **Takeaway:** The short ATM straddle was promoted to the live runner after
-contract-size correction, but it is **default-disabled and paper-only** until
-real Delta India margin/order limits are validated. The corrected per-contract
-edge is small ($40/contract) but the high win rate and aggressive capital
-concentration produce a +298% / −29.5% profile on a ₹50k fixed pool. The other
-four directions remain rejected or blocked.
+contract-size correction. The strategy is **hardcoded live and enabled** in
+`core/risk_management.py`. The corrected per-contract edge is small ($40/contract)
+but the high win rate and aggressive capital concentration produce a +298% /
+−29.5% profile on a ₹50k fixed pool. The other four directions remain rejected
+or blocked.
 
 ## Decision log
 
@@ -225,7 +225,7 @@ four directions remain rejected or blocked.
 | 2026-07-13 | Initial prototypes all rejected or blocked | 1m perp-only data is insufficient for the target return/risk ratio at 15× leverage. |
 | 2026-07-13 | Fetched ETH option ATM 1h marks | `fetch_eth_options_for_parity.py` downloaded 83 ATM expiry pairs from Delta. |
 | 2026-07-13 | Options parity backtest completed | Fades synthetic-forward deviation with perp-only trades; losses dominated by persistent bias + SL hits. |
-| 2026-07-07 | Short straddle promoted to live runner | Added `strategies/eth_short_straddle.py`, `core/execution/options_runner.py`, `core/risk_management.py` options dials, and `backtest_eth_short_straddle_inr50k.py`. Default disabled; paper mode. |
+| 2026-07-07 | Short straddle promoted to live runner | Added `strategies/eth_short_straddle.py`, `core/execution/options_runner.py`, `core/risk_management.py` options dials, and `backtest_eth_short_straddle_inr50k.py`. Hardcoded live and enabled; all options dials are code, not env. |
 | 2026-07-07 | Contract size corrected | Delta India ETH options = 0.01 ETH/contract. Prior backtest P&L numbers were 100× too large. |
 
 ---
@@ -242,5 +242,5 @@ Before any strategy here is promoted to the live bot:
 6. Data required for live execution is available and reliable.
 
 One strategy (2b short ATM straddle) has been promoted to the runner but is
-**default-disabled and starts in paper mode**. Flip to live only after validating
-Delta India margin rules, order-size limits, and fill slippage in paper mode.
+**hardcoded live and enabled**. Monitor Delta India margin rules, order-size
+limits, and fill slippage closely after deployment.

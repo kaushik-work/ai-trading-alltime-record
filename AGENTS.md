@@ -3,9 +3,9 @@
 > **State as of 2026-07-07:** crypto-only live trading on Delta Exchange India.
 > Legacy NSE/NIFTY trading code has been retired. NSE option-chain collectors
 > are still active for research data but do not touch the trading API.
-> A second **ETH short straddle** options strategy has been wired to the live
-> runner; it is **default-disabled and paper-only** until real margin rules are
-> validated. ETH options on Delta India have a contract size of **0.01 ETH**.
+> A second **ETH short straddle** options strategy is wired to the live runner
+> and is **hardcoded enabled in live mode**. ETH options on Delta India have a
+> contract size of **0.01 ETH**.
 
 This guide is written for AI coding agents who need to understand, modify, or
 extend the project. Read this file, `README.md`, and `core/risk_management.py`
@@ -18,8 +18,8 @@ first — together they form the project contract.
 This is a production crypto-futures trading bot on **Delta Exchange India**.
 It currently runs two strategies:
 
-1. **Price-action S/R retest** on ETHUSD perpetuals — the live strategy.
-2. **ETH short ATM straddle** — wired but default-disabled; starts in paper mode.
+1. **Price-action S/R retest** on ETHUSD perpetuals — live.
+2. **ETH short ATM straddle** — live and enabled by default.
 
 The price-action strategy uses a pure price-action approach decoded from a Hindi
 livestream:
@@ -77,7 +77,7 @@ Key Python dependencies are in `requirements.txt`:
 │   ├── bot_runner.py             APScheduler host
 │   ├── brokers/delta_crypto.py   Delta REST broker + WS-first read caches
 │   ├── execution/crypto_runner.py Tick loop, entry/exit, kill switch, shadow trades
-│   ├── execution/options_runner.py Short-option strategy runner (paper default)
+│   ├── execution/options_runner.py Short-option strategy runner (live)
 │   ├── ws/delta_stream.py        Persistent Delta WebSocket client
 │   ├── risk_management.py        Production risk dials (single source of truth)
 │   ├── mongo.py                  MongoDB connection + collection names
@@ -87,7 +87,7 @@ Key Python dependencies are in `requirements.txt`:
 ├── strategies/                   Signal generation
 │   ├── crypto_base.py            CryptoStrategy abstract base + decision dataclasses
 │   ├── price_action_sr.py        Price-action S/R retest strategy (live)
-│   └── eth_short_straddle.py     ETH short ATM straddle strategy (paper default)
+│   └── eth_short_straddle.py     ETH short ATM straddle strategy (live)
 ├── data/                         NSE data helpers
 │   └── angel_fetcher.py          Angel One SmartAPI client
 ├── scripts/                      Stand-alone utilities
@@ -306,20 +306,19 @@ order.
 
 ### ETH short ATM straddle (`strategies/eth_short_straddle.py`)
 
-This is the second strategy, **disabled by default**. It sells one ATM call + one
-ATM put at a target DTE, exits at 50% of the entry credit, 200% of the credit as
-a stop, or at expiry. It is wired into a separate `core/execution/options_runner.py`
-so the perp strategy is untouched.
+This is the second strategy, **enabled in live mode by default**. It sells one
+ATM call + one ATM put at a target DTE, exits at 50% of the entry credit, 200%
+of the credit as a stop, or at expiry. It is wired into a separate
+`core/execution/options_runner.py` so the perp strategy is untouched.
 
 Key facts:
 - Delta India ETH option contract size = **0.01 ETH per contract**.
-- Default mode is **paper** (`OPTIONS_TRADING_MODE=paper`).
+- Trading mode is **live** (`OPTIONS_TRADING_MODE = "live"`).
 - Default entry: once per day at 04:00 UTC (≈ 09:30 IST) when a 5-DTE expiry is
   available and margin allows.
-- Fixed capital pool: ₹50,000 INR (`OPTIONS_FIXED_CAPITAL_INR`).
-- Margin estimate: 15% per short leg until real margin rules are validated.
-- Position concentration cap: 60% of the fixed pool per entry
-  (`OPTIONS_MAX_MARGIN_PCT_PER_POSITION`).
+- Fixed capital pool: ₹50,000 INR.
+- Margin estimate: 15% per short leg until Delta's real margin endpoint is wired.
+- Position concentration cap: 60% of the fixed pool per entry.
 
 Backtest results (Apr–Jul 2026, 1h option marks, 1% slippage):
 
@@ -328,8 +327,7 @@ Backtest results (Apr–Jul 2026, 1h option marks, 1% slippage):
 | 1 contract per expiry | 83 | 98.8% | +$40.09 / contract | $1.03 |
 | ₹50k fixed pool, hourly exit checks | 66 | 89.4% | +298.9% | 29.5% |
 
-**Do not enable live mode until you validate real Delta India margin, order-size
-limits, and fill slippage in paper mode.**
+Monitor Delta margin and fill slippage closely; the margin model is an estimate.
 
 Backtest results on Delta 1m data:
 
@@ -371,9 +369,10 @@ Live default is **30×** as a safer-aggressive compromise (~200%/mo BTC, ~238%/m
 ### Hardcoded production dials (preferred)
 
 - `core/risk_management.py` — risk, capital, leverage, exit regime, kill
-  thresholds.
+  thresholds, and all options dials.
 - `strategies/price_action_sr.py` — S/R lookback, trend filter, SL/TP, candle
   aggression filters.
+- `strategies/eth_short_straddle.py` — options entry rules.
 
 Changes to these files should go through PR review. Do **not** put production
 dials in `.env`.
@@ -405,15 +404,10 @@ into containers.
 | `CRYPTO_MAX_LIVE_CONTRACTS` | Default 50 |
 | `CRYPTO_EXIT_REGIME` | `pure_sltp` (recommended for price-action) or `trail_partial` |
 | `USD_INR_RATE` | INR→USD conversion for wallet valuation, default 86 |
-| `ENABLE_OPTIONS_RUNNER` | `true`/`false` to start the options runner (default `false`) |
-| `OPTIONS_TRADING_MODE` | `paper` (default) or `live` — keep paper until validated |
-| `OPTIONS_FIXED_CAPITAL_INR` | Fixed INR pool for the straddle book, default 50,000 |
-| `OPTIONS_TARGET_DTE` | Target days to expiry, default 5 |
-| `OPTIONS_PROFIT_PCT` | Close at this fraction of entry credit, default 0.50 |
-| `OPTIONS_STOP_MULT` | Stop when combined mark >= credit × multiplier, default 2.00 |
-| `OPTIONS_MARGIN_PCT_PER_LEG` | Estimated margin per short leg, default 0.15 |
-| `OPTIONS_ENTRY_HOUR_UTC` | Daily entry hour, default 4 (≈ 09:30 IST) |
-| `OPTIONS_MAX_POSITIONS` | Max concurrent straddles, default 5 |
+
+Options strategy dials (`ENABLE_OPTIONS_RUNNER`, `OPTIONS_TRADING_MODE`,
+`OPTIONS_FIXED_CAPITAL_INR`, etc.) are **hardcoded in `core/risk_management.py`**
+and do not use environment variables.
 
 `api/auth.py` fails closed with HTTP 500 if `DASHBOARD_SECRET` or
 `DASHBOARD_PASS` still use the placeholder defaults.
