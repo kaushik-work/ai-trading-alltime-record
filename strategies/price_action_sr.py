@@ -453,6 +453,7 @@ class PriceActionSRSignal(CryptoStrategy):
             "r_high": float(r_high),
             "r_low": float(r_low),
             "width_pct": float(width_pct * 100),
+            "trend_ma": float(trend_ma),
             "trend": "bullish" if allow_long else ("bearish" if allow_short else "neutral"),
             "near_support": bool(near_low),
             "near_resistance": bool(near_high),

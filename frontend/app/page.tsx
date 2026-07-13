@@ -23,6 +23,7 @@ type SignalRow = {
   r_high: number;
   r_low: number;
   trend: "bullish" | "bearish" | "neutral";
+  trend_ma?: number;
   near_support: boolean;
   near_resistance: boolean;
   wick_touch_support: boolean;
@@ -30,6 +31,9 @@ type SignalRow = {
   strong_green: boolean;
   strong_red: boolean;
   in_cooldown: boolean;
+  time_ok?: boolean;
+  block_long?: boolean;
+  block_short?: boolean;
   sl_pct: number;
   tp_pct: number;
   vol_24h?: number;
@@ -112,16 +116,51 @@ type Snapshot = {
   stream: StreamDiag;
 };
 
-function signalState(s: SignalRow): { label: string; color: string } {
-  if (s.side === "buy") return { label: "LONG", color: "text-green-400" };
-  if (s.side === "sell") return { label: "SHORT", color: "text-red-400" };
-  if (!s.ready) return { label: "warmup", color: "text-gray-500" };
-  if (s.in_cooldown) return { label: "cooldown", color: "text-gray-500" };
-  if (s.wick_touch_support && s.trend === "bullish") return { label: "armed long", color: "text-green-600" };
-  if (s.wick_touch_resistance && s.trend === "bearish") return { label: "armed short", color: "text-red-600" };
-  if (s.near_support && s.trend === "bullish") return { label: "near support", color: "text-green-700" };
-  if (s.near_resistance && s.trend === "bearish") return { label: "near resistance", color: "text-red-700" };
-  return { label: "flat", color: "text-gray-500" };
+function signalState(s: SignalRow): { label: string; color: string; hex: string } {
+  if (s.side === "buy") return { label: "LONG", color: "text-green-400", hex: "#4ade80" };
+  if (s.side === "sell") return { label: "SHORT", color: "text-red-400", hex: "#f87171" };
+  if (!s.ready) return { label: "warmup", color: "text-gray-500", hex: "#6b7280" };
+  if (s.in_cooldown) return { label: "cooldown", color: "text-gray-500", hex: "#6b7280" };
+  if (s.wick_touch_support && s.trend === "bullish") return { label: "armed long", color: "text-green-600", hex: "#16a34a" };
+  if (s.wick_touch_resistance && s.trend === "bearish") return { label: "armed short", color: "text-red-600", hex: "#dc2626" };
+  if (s.near_support && s.trend === "bullish") return { label: "near support", color: "text-green-700", hex: "#15803d" };
+  if (s.near_resistance && s.trend === "bearish") return { label: "near resistance", color: "text-red-700", hex: "#b91c1c" };
+  return { label: "flat", color: "text-gray-500", hex: "#6b7280" };
+}
+
+function signalTooltips(s: SignalRow) {
+  const ma = s.trend_ma ?? 0;
+  const trendReason = s.trend === "bullish"
+    ? `Spot $${s.spot.toLocaleString()} is above 24h MA $${ma.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+    : s.trend === "bearish"
+    ? `Spot $${s.spot.toLocaleString()} is below 24h MA $${ma.toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+    : "Trend unclear — price near 24h MA";
+
+  const parts: string[] = [];
+  if (!s.ready) parts.push("Strategy still in warmup");
+  if (s.in_cooldown) parts.push("In 1h post-trade cooldown");
+  if (s.block_long) parts.push("Long side blocked after recent loss");
+  if (s.block_short) parts.push("Short side blocked after recent loss");
+  if (s.time_ok === false) parts.push("Outside configured trading hours");
+  if (s.vol_filter_ok === false) parts.push(`24h vol ${((s.vol_24h ?? 0) * 100).toFixed(1)}% > 34% filter`);
+  if (!s.near_support && !s.near_resistance) parts.push("Price not near 4h S/R edge");
+  else if (s.near_support && s.trend !== "bullish") parts.push("Near support but trend is not bullish");
+  else if (s.near_resistance && s.trend !== "bearish") parts.push("Near resistance but trend is not bearish");
+  if (s.near_support && s.trend === "bullish" && !s.wick_touch_support) parts.push("No wick touch at support yet");
+  if (s.near_resistance && s.trend === "bearish" && !s.wick_touch_resistance) parts.push("No wick touch at resistance yet");
+  if (s.wick_touch_support && s.trend === "bullish" && !s.strong_green) parts.push("Wick touched support but candle not strong green");
+  if (s.wick_touch_resistance && s.trend === "bearish" && !s.strong_red) parts.push("Wick touched resistance but candle not strong red");
+  if (parts.length === 0 && s.side == null) parts.push("No S/R retest setup currently");
+
+  return {
+    spot: `ETHUSD mark price from Delta stream`,
+    range: `4h S/R range width. High $${(s.r_high ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}, Low $${(s.r_low ?? 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
+    trend: trendReason,
+    state: parts.join(" • ") || "Strategy state",
+    sl: `Stop loss distance per ETH trade (0.7%)`,
+    tp: `Take profit distance per ETH trade (4.9%, 1:7 R:R)`,
+    vol: `Annualized 24h realized volatility from 1m returns. Filter max = 34%`,
+  };
 }
 
 function isTokenValid(token: string | null): boolean {
@@ -233,6 +272,18 @@ export default function CryptoHome() {
   const stream = snap?.stream;
   const firing = signals.filter(s => s.side != null);
   const liveEth = snap?.perp_marks?.["ETHUSD"];
+  // Strategy state summary for the chart header so it matches Signal Radar.
+  const ethSignal = signals[0];
+  const chartSignal = ethSignal
+    ? {
+        stateLabel: signalState(ethSignal).label,
+        stateColor: signalState(ethSignal).hex,
+        reason: signalTooltips(ethSignal).state,
+        trend: ethSignal.trend,
+        volFilterOk: ethSignal.vol_filter_ok,
+        vol24h: (ethSignal.vol_24h ?? 0) * 100,
+      }
+    : null;
   const shadowTrades = snap?.shadow_trades ?? [];
   const shadowSummary = snap?.shadow_summary;
   const lastShadow = shadowTrades.length ? shadowTrades[shadowTrades.length - 1] : null;
@@ -507,7 +558,7 @@ export default function CryptoHome() {
 
         {/* Live ETH chart — Signal Radar below covers 4h S/R width + retest state */}
         <div className="mb-6">
-          <CryptoChart livePrices={{ ETH: liveEth }} />
+          <CryptoChart livePrices={{ ETH: liveEth }} signal={chartSignal} />
         </div>
 
         {/* Signal Radar */}
@@ -564,35 +615,40 @@ export default function CryptoHome() {
                 {signals.map((s, i) => {
                   const state = signalState(s);
                   const fires = s.side != null;
+                  const tips = signalTooltips(s);
                   return (
                     <tr key={i}
                         className={`border-b border-[#13131f] ${fires ? "bg-[#f7931a08]" : ""}`}>
-                      <td className="py-2 px-2">
+                      <td className="py-2 px-2" title={tips.state}>
                         <span className={`inline-block w-2 h-2 rounded-full mr-2 ${
                           fires ? "bg-[#f7931a]" : "bg-gray-700"
                         }`} />
                         {s.underlying}
                       </td>
-                      <td className="text-right px-2">${s.spot.toLocaleString()}</td>
-                      <td className="text-right px-2 font-mono">{s.width_pct.toFixed(3)}%</td>
-                      <td className={`text-right px-2 ${
+                      <td className="text-right px-2 cursor-help" title={tips.spot}>
+                        ${s.spot.toLocaleString()}
+                      </td>
+                      <td className="text-right px-2 font-mono cursor-help" title={tips.range}>
+                        {s.width_pct.toFixed(3)}%
+                      </td>
+                      <td className={`text-right px-2 cursor-help ${
                         s.trend === "bullish" ? "text-green-400" :
                         s.trend === "bearish" ? "text-red-400" : "text-gray-400"
-                      }`}>
+                      }`} title={tips.trend}>
                         {s.trend}
                       </td>
-                      <td className={`text-right px-2 ${state.color}`}>
+                      <td className={`text-right px-2 cursor-help ${state.color}`} title={tips.state}>
                         {state.label}
                       </td>
-                      <td className="text-right px-2 hidden sm:table-cell text-red-400">
+                      <td className="text-right px-2 hidden sm:table-cell text-red-400 cursor-help" title={tips.sl}>
                         {(s.sl_pct * 100).toFixed(2)}%
                       </td>
-                      <td className="text-right px-2 hidden sm:table-cell text-green-400">
+                      <td className="text-right px-2 hidden sm:table-cell text-green-400 cursor-help" title={tips.tp}>
                         {(s.tp_pct * 100).toFixed(2)}%
                       </td>
-                      <td className={`text-right px-2 hidden sm:table-cell font-mono ${
+                      <td className={`text-right px-2 hidden sm:table-cell font-mono cursor-help ${
                         (s.vol_24h ?? 0) > 0.34 ? "text-red-400" : "text-gray-300"
-                      }`}>
+                      }`} title={tips.vol}>
                         {((s.vol_24h ?? 0) * 100).toFixed(1)}%
                         {(s.vol_filter_ok === false) && <span className="ml-1 text-[10px] text-red-500">(filtered)</span>}
                       </td>

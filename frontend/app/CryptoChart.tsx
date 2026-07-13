@@ -28,11 +28,22 @@ type ChartData = {
   error?: string;
 };
 
+type SignalSummary = {
+  stateLabel: string;
+  stateColor: string;
+  reason: string;
+  trend: string;
+  volFilterOk?: boolean;
+  vol24h?: number;
+};
+
 type Props = {
   // Asset → live mark mapping. The chart picks the correct one based on
   // its internal asset toggle, so the LIVE line and candle extension never
   // get the WRONG asset's price.
   livePrices?: { ETH?: number | null };
+  // Current strategy signal state so the chart header matches Signal Radar.
+  signal?: SignalSummary | null;
 };
 
 // Timeframe → (resolution sent to Delta, lookback hours). Tuned to keep
@@ -53,15 +64,7 @@ const STRUCTURE_COLORS: Record<string, string> = {
   ranging:   "#94a3b8",
 };
 
-const POSITION_LABELS: Record<string, { label: string; color: string }> = {
-  at_resistance: { label: "⚠ AT SUPPLY — watch for SHORT", color: "#ef4444" },
-  at_support:    { label: "⚡ AT DEMAND — watch for LONG", color: "#22c55e" },
-  breaking_up:   { label: "🚀 BREAKING UP", color: "#22c55e" },
-  breaking_down: { label: "🔻 BREAKING DOWN", color: "#ef4444" },
-  open_air:      { label: "Open air — between zones", color: "#94a3b8" },
-};
-
-export default function CryptoChart({ livePrices }: Props) {
+export default function CryptoChart({ livePrices, signal }: Props) {
   const [asset] = useState<"ETH">("ETH");
   const [timeframe, setTimeframe] = useState<Timeframe>(DEFAULT_TF);
   const containerRef   = useRef<HTMLDivElement>(null);
@@ -285,7 +288,6 @@ export default function CryptoChart({ livePrices }: Props) {
   }, [livePrice]);
 
   const struct = data?.structure ? STRUCTURE_COLORS[data.structure] ?? "#94a3b8" : "#94a3b8";
-  const pos    = data?.position ? POSITION_LABELS[data.position] : null;
   const nSupplyZones = data?.supply_zones?.length ?? 0;
   const nDemandZones = data?.demand_zones?.length ?? 0;
 
@@ -312,9 +314,16 @@ export default function CryptoChart({ livePrices }: Props) {
               {data.structure.toUpperCase()}
             </span>
           )}
-          {pos && (
-            <span className="text-xs font-medium" style={{ color: pos.color }}>
-              {pos.label}
+          {signal && (
+            <span className="text-xs font-medium px-2 py-0.5 rounded-full cursor-help"
+                  style={{ background: signal.stateColor + "22", color: signal.stateColor }}
+                  title={signal.reason}>
+              {signal.stateLabel}
+              {signal.volFilterOk === false && (
+                <span className="ml-1 text-[10px] opacity-80">
+                  · vol {(signal.vol24h ?? 0).toFixed(1)}%
+                </span>
+              )}
             </span>
           )}
         </div>
