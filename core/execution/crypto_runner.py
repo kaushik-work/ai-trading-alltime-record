@@ -534,6 +534,10 @@ def init_crypto_runner(scheduler) -> None:
             if hasattr(strat, "backfill_history"):
                 n = strat.backfill_history(lookback_hours=24)
                 logger.info("%s: seeded %d historical candles", name, n)
+                # Run one signal evaluation to populate _last_state (trend,
+                # range, vol) so the dashboard is useful immediately.
+                if hasattr(strat, "signal_now"):
+                    strat.signal_now()
     except Exception as e:
         logger.warning("crypto runner history backfill failed: %s", e)
 

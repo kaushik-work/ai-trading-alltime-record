@@ -252,6 +252,17 @@ class PriceActionSRSignal(CryptoStrategy):
         bearish = ema20.iloc[-1] < ema20.iloc[-2] and slope < -threshold
         return bullish, bearish
 
+    def _refresh_vol_state(self) -> None:
+        """Update vol_24h and vol_filter_ok in _last_state every minute so the
+        dashboard reflects volatility changes without waiting for the 15-min
+        signal tick.
+        """
+        if not self._last_state:
+            return
+        vol = self._realized_vol_24h()
+        self._last_state["vol_24h"] = float(vol)
+        self._last_state["vol_filter_ok"] = (vol <= self.vol_filter_max) if self.vol_filter_max > 0 else True
+
     def _realized_vol_24h(self) -> float:
         """Annualized 24h realized volatility from 1m closes."""
         candles = list(self._candles)
@@ -291,6 +302,8 @@ class PriceActionSRSignal(CryptoStrategy):
                 # trim to max needed length
                 while len(self._candles) > TREND_CANDLES + 10:
                     self._candles.popleft()
+                # A new completed 1m candle just landed — refresh vol display.
+                self._refresh_vol_state()
             self._current_bar = {"minute": minute, "open": mark, "high": mark, "low": mark, "close": mark}
         else:
             self._current_bar["high"] = max(self._current_bar["high"], mark)
