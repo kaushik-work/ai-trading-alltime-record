@@ -119,6 +119,12 @@ def _ensure_indexes(db) -> None:
         # Multi-strategy support: filter open positions per (strategy, status)
         db.shadow_trades.create_index([("strategy", ASCENDING), ("date", DESCENDING)])
         db.shadow_trades.create_index([("strategy", ASCENDING), ("status", ASCENDING)])
+        # NSE synthetic-forward trades and signals
+        db.nse_trades.create_index([("ts", DESCENDING)])
+        db.nse_trades.create_index([("symbol", ASCENDING), ("ts", DESCENDING)])
+        db.nse_trades.create_index([("position_id", ASCENDING)])
+        db.nse_signals.create_index([("ts", DESCENDING)])
+        db.nse_signals.create_index([("symbol", ASCENDING), ("ts", DESCENDING)])
     except Exception as e:
         logger.warning("Mongo index creation failed (non-fatal): %s", e)
 
@@ -254,6 +260,24 @@ def mirror_record(description: str, value: Any, symbol: str = "",
         "_mirrored_at": datetime.now(timezone.utc),
     }
     db.records.update_one({"description": description}, {"$set": doc}, upsert=True)
+
+
+@_safe
+def mirror_nse_event(doc: dict) -> None:
+    """Append an NSE trade/signal event to nse_trades."""
+    db = _get_db()
+    if db is None:
+        return
+    db.nse_trades.insert_one({**doc, "_mirrored_at": datetime.now(timezone.utc)})
+
+
+@_safe
+def mirror_nse_signal(doc: dict) -> None:
+    """Append a raw NSE synthetic-forward signal sample to nse_signals."""
+    db = _get_db()
+    if db is None:
+        return
+    db.nse_signals.insert_one({**doc, "_mirrored_at": datetime.now(timezone.utc)})
 
 
 # ── Read helpers (dashboard / scripts) ────────────────────────────────────────

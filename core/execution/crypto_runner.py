@@ -660,6 +660,7 @@ def _wallet_heartbeat() -> None:
         return
     usd = float(breakdown.get("usd_total", 0))
     inr = float(breakdown.get("inr_balance", 0))
+    by_asset = breakdown.get("by_asset", {})
     rate = float(os.environ.get("USD_INR_RATE", "86"))
     total_usd = usd + (inr / rate if rate > 0 else 0)
     if FIXED_CAPITAL_MODE:
@@ -685,11 +686,14 @@ def manual_kill():
     broker = get_crypto_broker()
     for name, pos in list(_OPEN_POSITIONS.items()):
         try:
-            broker.place_order(pos["symbol"],
-                               "sell" if pos["side"] == "buy" else "buy",
-                               size=pos["contracts"], order_type="market_order",
-                               reduce_only=True, tag=f"{name}_manual_kill")
-            del _OPEN_POSITIONS[name]
+            order = broker.place_order(pos["symbol"],
+                                       "sell" if pos["side"] == "buy" else "buy",
+                                       size=pos["contracts"], order_type="market_order",
+                                       reduce_only=True, tag=f"{name}_manual_kill")
+            if order.get("ok"):
+                del _OPEN_POSITIONS[name]
+            else:
+                logger.error("manual_kill %s order failed: %s", name, order)
         except Exception as e:
             logger.error("manual_kill %s failed: %s", name, e)
     logger.warning("MANUAL KILL — all positions closed, new entries halted")

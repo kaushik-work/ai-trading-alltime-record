@@ -17,6 +17,7 @@ import os
 import time
 from datetime import datetime, timezone
 import requests
+from dotenv import get_key, set_key
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.security import HTTPBearer
 from api.auth import get_current_user
@@ -102,12 +103,6 @@ def _build_crypto_snapshot() -> dict:
         stream = get_stream().diagnostics()
     except Exception:
         stream = {"connected": False}
-    options_state: dict = {}
-    try:
-        from core.execution.options_runner import get_options_state
-        options_state = get_options_state()
-    except Exception:
-        pass
     return {
         "ts":            datetime.now(timezone.utc).isoformat(),
         "perp_marks":    perp_marks,
@@ -117,7 +112,6 @@ def _build_crypto_snapshot() -> dict:
         "shadow_trades":  shadow_trades,
         "shadow_summary": shadow_summary,
         "missed_signals": missed_signals,
-        "options":        options_state,
         "stream":         stream,
     }
 
@@ -444,26 +438,116 @@ def crypto_kill():
     """
     try:
         from core.execution.crypto_runner import manual_kill, get_state
-        from core.execution.options_runner import kill_options_runner
         before = get_state()
         positions_before = list(before.get("open_positions", {}).keys())
         manual_kill()
-        kill_options_runner()
         after = get_state()
         return {
             "ok": True,
             "killed_strategies": positions_before,
             "open_after": list(after.get("open_positions", {}).keys()),
             "kill_switch_armed": after.get("killed", True),
-            "message": f"Killed {len(positions_before)} perp position(s) and "
-                       f"halted new options entries. Bot will not enter new "
-                       f"positions until restart.",
+            "message": f"Killed {len(positions_before)} perp position(s). "
+                       f"Bot will not enter new positions until restart.",
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
 
 
 # ── strategy / instrument toggles ────────────────────────────────────────────
+
+# ── dashboard-managed env overrides ───────────────────────────────────────────
+# These knobs are normally set in .env. The dashboard exposes them as switches
+# and inputs so operators don't have to SSH in for routine changes. Because the
+# container environment is loaded at startup, any change here requires a
+# container restart to take effect.
+
+_ENV_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".env"))
+
+_MANAGED_SETTINGS = {
+    "ENABLE_CRYPTO_RUNNER": {"type": "bool", "default": "true"},
+    "CRYPTO_TRADING_MODE":  {"type": "choice", "choices": {"live", "paper"}, "default": "live"},
+    "DELTA_API_KEY":        {"type": "secret"},
+    "DELTA_API_SECRET":     {"type": "secret"},
+    "CRYPTO_EQUITY_USD":    {"type": "float", "default": "1000"},
+}
+
+_SECRET_PLACEHOLDER = "********"
+
+
+def _read_managed_setting(key: str, meta: dict):
+    raw = get_key(_ENV_PATH, key)
+    if raw is None:
+        raw = meta.get("default", "")
+    raw = raw.strip()
+    if meta["type"] == "bool":
+        return raw.lower() in ("1", "true", "yes", "on")
+    if meta["type"] == "float":
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return float(meta.get("default", "0"))
+    if meta["type"] == "secret":
+        return bool(raw and raw != _SECRET_PLACEHOLDER)
+    # choice / str
+    return raw if raw else meta.get("default", "")
+
+
+@router.get("/settings")
+def crypto_settings(user: str = Depends(get_current_user)):
+    """Current dashboard-managed env values. Secrets are returned as present/absent."""
+    try:
+        values = {k: _read_managed_setting(k, m) for k, m in _MANAGED_SETTINGS.items()}
+        return {
+            "values": values,
+            "requires_restart": list(_MANAGED_SETTINGS.keys()),
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/settings")
+def update_crypto_settings(body: dict, user: str = Depends(get_current_user)):
+    """Update dashboard-managed env values in .env. Restart required to apply."""
+    updated: list[str] = []
+    errors: list[str] = []
+    for key, meta in _MANAGED_SETTINGS.items():
+        if key not in body:
+            continue
+        value = body[key]
+        if meta["type"] == "bool":
+            value = "true" if value else "false"
+        elif meta["type"] == "float":
+            try:
+                value = str(float(value))
+            except (TypeError, ValueError):
+                errors.append(f"{key} must be a number")
+                continue
+        elif meta["type"] == "choice":
+            if value not in meta["choices"]:
+                errors.append(f"{key} must be one of {sorted(meta['choices'])}")
+                continue
+            value = str(value)
+        elif meta["type"] == "secret":
+            if not value or value == _SECRET_PLACEHOLDER:
+                continue
+            value = str(value)
+        else:
+            value = str(value)
+        try:
+            set_key(_ENV_PATH, key, value, quote_mode="never")
+            updated.append(key)
+        except Exception as e:
+            errors.append(f"{key}: {e}")
+    if errors:
+        raise HTTPException(status_code=400, detail="; ".join(errors))
+    return {
+        "ok": True,
+        "updated": updated,
+        "requires_restart": list(_MANAGED_SETTINGS.keys()),
+        "values": {k: _read_managed_setting(k, m) for k, m in _MANAGED_SETTINGS.items()},
+    }
+
 
 @router.get("/strategies")
 def crypto_strategies(user: str = Depends(get_current_user)):

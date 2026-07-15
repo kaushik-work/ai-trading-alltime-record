@@ -39,6 +39,7 @@ from fastapi.security import OAuth2PasswordRequestForm
 
 from api.auth import verify_password, create_token, decode_token, DASHBOARD_USER
 from api.routes_crypto import router as crypto_router
+from api.routes_nse import router as nse_router
 
 
 @asynccontextmanager
@@ -49,18 +50,22 @@ async def lifespan(app: FastAPI):
     # have been gutted; BotRunner just provides the scheduler now.
     from core.bot_runner import get_runner
     from core.execution.crypto_runner import init_crypto_runner
-    from core.execution.options_runner import init_options_runner
     from core.ws.delta_stream import start_stream, stop_stream
-    from core.risk_management import ENABLE_CRYPTO_RUNNER, ENABLE_OPTIONS_RUNNER
+    from core.risk_management import ENABLE_CRYPTO_RUNNER
 
     runner = get_runner()
     runner.start()
     # Delta WS stream feeds the crypto runner with real-time perp + option
     # marks. Must start BEFORE the runner so the first tick has fresh data.
-    if ENABLE_CRYPTO_RUNNER or ENABLE_OPTIONS_RUNNER:
+    if ENABLE_CRYPTO_RUNNER:
         start_stream()
     init_crypto_runner(runner.scheduler)
-    init_options_runner(runner.scheduler)
+    # NSE synthetic-forward runner (paper by default).
+    try:
+        from nse.execution.nse_runner import init_nse_runner
+        init_nse_runner(runner.scheduler)
+    except Exception as e:
+        logger.error("Failed to initialize NSE runner: %s", e)
     yield
     # ── shutdown ─────────────────────────────────────────────────────────────
     runner.stop()
@@ -97,6 +102,7 @@ app.add_middleware(
 )
 
 app.include_router(crypto_router)
+app.include_router(nse_router)
 
 
 # ── Auth + Health ────────────────────────────────────────────────────────────

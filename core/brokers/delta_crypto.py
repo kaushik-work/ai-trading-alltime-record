@@ -33,7 +33,6 @@ _BROKER_INSTANCE = None
 _lock = threading.Lock()
 
 # Cache TTLs (seconds)
-_CHAIN_CACHE_TTL = 30
 _PERP_CACHE_TTL  = 5
 _POS_CACHE_TTL   = 15
 _BAL_CACHE_TTL   = 15
@@ -60,7 +59,6 @@ class DeltaCryptoBroker:
         else:
             from core.risk_management import CRYPTO_TRADING_MODE
             self.mode = CRYPTO_TRADING_MODE
-        self._chain_cache: dict[str, dict] = {}
         self._perp_cache: dict[str, dict] = {}
         self._pos_cache: dict[str, dict] = {"data": None, "ts": 0.0}
         self._bal_cache: dict[str, float] = {"value": -1.0, "ts": 0.0}
@@ -157,127 +155,6 @@ class DeltaCryptoBroker:
                     return mark
         except Exception as e:
             logger.error("get_perp_mark(%s): %s", symbol, e)
-        return None
-
-    def _fetch_option_product_meta(self, underlying: str) -> dict[str, dict]:
-        """Fetch static product metadata from /v2/products and cache briefly.
-
-        The tickers endpoint gives mark + strike but not settlement_time or
-        contract_size. We merge these from /v2/products to let the options
-        strategy pick an expiry and size positions correctly.
-        """
-        cache_key = f"{underlying}_meta"
-        cached = self._chain_cache.get(cache_key)
-        if cached and time.time() - cached["ts"] < 300:
-            return cached["meta"]
-        out: dict[str, dict] = {}
-        try:
-            after = None
-            while True:
-                params = {
-                    "contract_types": "call_options,put_options",
-                    "underlying_asset_symbols": underlying,
-                }
-                if after:
-                    params["after"] = after
-                data = self._request("GET", "/v2/products", params=params)
-                rows = data.get("result", [])
-                for p in rows:
-                    sym = p.get("symbol")
-                    if not sym:
-                        continue
-                    out[sym] = {
-                        "expiry": p.get("settlement_time") or p.get("expiry"),
-                        "contract_size": p.get("contract_size") or p.get("lot_size")
-                                         or p.get("trading_precision"),
-                    }
-                after = data.get("meta", {}).get("after")
-                if not after or not rows:
-                    break
-            self._chain_cache[cache_key] = {"meta": out, "ts": time.time()}
-        except Exception as e:
-            logger.warning("option product meta fetch failed for %s: %s", underlying, e)
-        return out
-
-    def get_option_chain(self, underlying: str) -> list[dict]:
-        """All call+put options for an underlying. Returns normalized list.
-
-        Returns REST-derived chain with full metadata (strike, expiry,
-        contract_type, contract_size). The live WS stream chain is used only
-        as a fallback because it currently carries symbol+mark only, and the
-        options strategy needs expiry/strike/contract-size to pick an ATM pair.
-        """
-        cached = self._chain_cache.get(underlying)
-        if cached and time.time() - cached["ts"] < _CHAIN_CACHE_TTL:
-            return cached["chain"]
-        try:
-            meta = self._fetch_option_product_meta(underlying)
-            data = self._request(
-                "GET", "/v2/tickers",
-                params={"contract_types": "call_options,put_options",
-                        "underlying_asset_symbols": underlying},
-            )
-            chain = []
-            for o in data.get("result", []):
-                sym = o.get("symbol", "")
-                try:
-                    mark = float(o.get("mark_price") or 0)
-                except (TypeError, ValueError):
-                    mark = 0
-                if mark <= 0:
-                    continue
-                m = meta.get(sym, {})
-                # Delta India options quote a mark_price per contract_size ETH.
-                # contract_value from tickers / contract_size from products is
-                # the ETH notional per contract (e.g. 0.01 ETH).
-                contract_size = m.get("contract_size")
-                if contract_size is None:
-                    try:
-                        contract_size = float(o.get("contract_value") or 0)
-                    except (TypeError, ValueError):
-                        contract_size = 0.0
-                chain.append({
-                    "symbol": sym,
-                    "mark":   mark,
-                    "oi":     o.get("oi"),
-                    "mark_iv": o.get("mark_vol") or o.get("mark_iv"),
-                    "greeks": o.get("greeks", {}),
-                    "strike_price": o.get("strike_price"),
-                    "contract_type": o.get("contract_type"),
-                    "contract_size": contract_size if contract_size > 0 else None,
-                    "expiry": m.get("expiry"),
-                })
-            self._chain_cache[underlying] = {"chain": chain, "ts": time.time()}
-            return chain
-        except Exception as e:
-            logger.error("get_option_chain(%s): %s", underlying, e)
-        # Degraded fallback: fresh WS marks only
-        try:
-            from core.ws.delta_stream import get_stream
-            stream_chain = get_stream().get_option_chain(underlying)
-            if len(stream_chain) >= 6:
-                logger.warning("get_option_chain(%s): using stream fallback; "
-                               "contract_size/expiry may be missing", underlying)
-                return stream_chain
-        except Exception as e:
-            logger.debug("stream chain lookup failed (%s)", e)
-        return []
-
-    def get_option_mark(self, symbol: str) -> Optional[float]:
-        """Current mark for an option symbol. Prefers WS stream, then REST."""
-        try:
-            from core.ws.delta_stream import get_stream
-            stream_mark = get_stream().get_mark(symbol)
-            if stream_mark is not None:
-                return stream_mark
-        except Exception as e:
-            logger.debug("stream option mark lookup failed (%s); falling back to REST", e)
-        # REST fallback: refresh chain for the underlying and scan
-        for underlying in ("ETH", "BTC"):
-            chain = self.get_option_chain(underlying)
-            for o in chain:
-                if o.get("symbol") == symbol:
-                    return float(o.get("mark") or 0)
         return None
 
     def get_funding_rate(self, symbol: str) -> Optional[float]:
@@ -511,19 +388,47 @@ class DeltaCryptoBroker:
             body["limit_price"] = str(limit_price)
         try:
             resp = self._request("POST", "/v2/orders", body=body, authed=True)
-            logger.info("placed %s %d %s → %s", side, size, symbol,
-                         resp.get("result", {}).get("id"))
-            return {"ok": True, "paper": False, "response": resp}
+            result = resp.get("result", {}) if isinstance(resp, dict) else {}
+            fill_price = self._parse_fill_price(result)
+            logger.info("placed %s %d %s → %s fill=%s",
+                        side, size, symbol,
+                        result.get("id"), fill_price)
+            out = {"ok": True, "paper": False, "response": resp}
+            if fill_price is not None:
+                out["fill_price"] = fill_price
+            return out
         except Exception as e:
             logger.error("place_order failed: %s", e)
             return {"ok": False, "error": str(e)}
 
+    def _parse_fill_price(self, result: dict) -> Optional[float]:
+        """Best-effort extraction of the average fill price from a Delta order response.
+
+        Delta's response shape varies by product and order state. We try the most
+        common keys and fall back to None, in which case the runner uses the mark.
+        """
+        for key in ("average_fill_price", "fill_price", "price", "order_price"):
+            val = result.get(key)
+            if val is not None:
+                try:
+                    return float(val)
+                except (TypeError, ValueError):
+                    pass
+        # Sometimes fills are nested.
+        fills = result.get("fills") or result.get("fill") or []
+        if isinstance(fills, dict):
+            fills = [fills]
+        if isinstance(fills, list) and fills:
+            try:
+                return sum(float(f.get("price") or f.get("fill_price", 0)) for f in fills) / len(fills)
+            except (TypeError, ValueError):
+                pass
+        return None
+
     def _paper_fill_price(self, symbol: str) -> Optional[float]:
-        """Best-effort paper fill price for any Delta symbol."""
+        """Best-effort paper fill price for perp symbols."""
         if symbol.endswith("USD"):
             return self.get_perp_mark(symbol)
-        if symbol.startswith(("C-", "P-")):
-            return self.get_option_mark(symbol)
         return None
 
     def cancel_order(self, order_id: str, symbol: str) -> bool:

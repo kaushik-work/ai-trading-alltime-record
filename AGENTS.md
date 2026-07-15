@@ -1,11 +1,11 @@
 # Agent Guide — AI Trading All-Time Record
 
-> **State as of 2026-07-07:** crypto-only live trading on Delta Exchange India.
-> Legacy NSE/NIFTY trading code has been retired. NSE option-chain collectors
-> are still active for research data but do not touch the trading API.
-> A second **ETH short straddle** options strategy is wired to the live runner
-> and is **hardcoded enabled in live mode**. ETH options on Delta India have a
-> contract size of **0.01 ETH**.
+> **State as of 2026-07-14:** crypto-only live trading on Delta Exchange India
+> by default; NSE synthetic-forward trading via Angel One is opt-in and live-only.
+> NSE option-chain collectors remain active and also feed the new `nse/` module.
+> The previously added ETH short straddle options strategy has been removed from
+> the live runner after corrected entry-time-ATM backtests showed it is
+> unprofitable.
 
 This guide is written for AI coding agents who need to understand, modify, or
 extend the project. Read this file, `README.md`, and `core/risk_management.py`
@@ -15,11 +15,21 @@ first — together they form the project contract.
 
 ## 1. Project overview
 
-This is a production crypto-futures trading bot on **Delta Exchange India**.
-It currently runs two strategies:
+This is a production trading bot. By default it runs crypto-futures on **Delta
+Exchange India**, and NSE options trading is available as an opt-in module.
 
-1. **Price-action S/R retest** on ETHUSD perpetuals — live.
-2. **ETH short ATM straddle** — live and enabled by default.
+Live strategies:
+
+1. **Price-action S/R retest** on ETHUSD perpetuals — live (default).
+2. **Synthetic-forward NSE options combo** on NIFTY/BANKNIFTY/FINNIFTY/SENSEX —
+   live only; enabled when the API starts. No paper mode and no leverage: the
+   live broker enforces SPAN + exposure margin for the combo, and position
+   sizing is computed from Angel One's `getMarginApi` result against
+   `TOTAL_CAPITAL_INR` in `nse/config.py`.
+
+A previously tested ETH short ATM straddle options strategy was removed from
+live deployment in July 2026 after corrected backtests showed heavy losses; the
+backtest scripts remain in `delta_exchange/` for research only.
 
 The price-action strategy uses a pure price-action approach decoded from a Hindi
 livestream:
@@ -34,8 +44,8 @@ livestream:
 5. Trail stop to breakeven at +1R.
 
 A separate Next.js dashboard visualizes live signals, positions, charts, and a
-manual kill switch. NSE option-chain collectors run only as data harvesters for
-research/backtest data; they do not trade.
+manual kill switch. NSE option-chain collectors still harvest premium/OI data,
+and now also feed the `nse/` module for live signals and backtests.
 
 Backtest (Apr–Jun 2026, BTC + ETH, 1m data, wick_touch + block-after-loss 180 min):
 - **BTCUSD** SL 0.6% / 1:7: **+17.28%**, PF 1.79, 124 trades, 57.3% WR, MaxDD 2.52%.
@@ -77,7 +87,6 @@ Key Python dependencies are in `requirements.txt`:
 │   ├── bot_runner.py             APScheduler host
 │   ├── brokers/delta_crypto.py   Delta REST broker + WS-first read caches
 │   ├── execution/crypto_runner.py Tick loop, entry/exit, kill switch, shadow trades
-│   ├── execution/options_runner.py Short-option strategy runner (live)
 │   ├── ws/delta_stream.py        Persistent Delta WebSocket client
 │   ├── risk_management.py        Production risk dials (single source of truth)
 │   ├── mongo.py                  MongoDB connection + collection names
@@ -86,10 +95,17 @@ Key Python dependencies are in `requirements.txt`:
 │   └── sr_levels.py              Supply/demand zone math for chart overlays
 ├── strategies/                   Signal generation
 │   ├── crypto_base.py            CryptoStrategy abstract base + decision dataclasses
-│   ├── price_action_sr.py        Price-action S/R retest strategy (live)
-│   └── eth_short_straddle.py     ETH short ATM straddle strategy (live)
+│   └── price_action_sr.py        Price-action S/R retest strategy (live)
 ├── data/                         NSE data helpers
 │   └── angel_fetcher.py          Angel One SmartAPI client
+├── nse/                          NSE synthetic-forward module (opt-in)
+│   ├── broker/angel_broker.py    Angel One order placement
+│   ├── data/option_chain.py      Option-chain cache / historical loaders
+│   ├── strategies/synthetic_forward.py  Signal generator
+│   ├── backtest/synthetic_forward.py    Backtest engine
+│   ├── execution/nse_runner.py   Live scheduler + risk
+│   ├── config.py                 NSE production dials
+│   └── risk.py                   NSE kill switches / capital
 ├── scripts/                      Stand-alone utilities
 │   └── collect_option_snapshots.py  NSE 5-min option-chain collector
 ├── delta_exchange/               Backtest sandbox (own .venv + CSV data)
@@ -130,14 +146,21 @@ docker compose up -d
 docker compose logs -f api
 ```
 
-### With NSE data collectors
+### With NSE data collectors + synthetic-forward runner
 
 ```bash
+# NSE collectors + optional live/paper runner
 docker compose --profile nse up -d
+
+# Backtest only (no live orders)
+python -m nse.backtest.synthetic_forward --symbol NIFTY
+python -m nse.backtest.synthetic_forward --all
 ```
 
 Collectors run only between **03:30–10:05 UTC** (09:00–15:35 IST) and sleep
-otherwise. They restart daily via `unless-stopped`.
+otherwise. They restart daily via `unless-stopped`. The `nse-runner` service
+runs during NSE market hours **09:15–15:30 IST** and is live-only; backtest
+first, then enable the service.
 
 ### Manual droplet deploy
 
@@ -216,11 +239,9 @@ team agrees on a testing framework.
 ### Startup flow (`api/server.py` lifespan)
 
 1. `BotRunner.start()` initializes APScheduler (Linux/cloud only).
-2. `start_stream()` launches `DeltaStream` in a background thread if either
-   `ENABLE_CRYPTO_RUNNER` or `ENABLE_OPTIONS_RUNNER` is true.
+2. `start_stream()` launches `DeltaStream` in a background thread if
+   `ENABLE_CRYPTO_RUNNER` is true.
 3. If `ENABLE_CRYPTO_RUNNER` is true, four scheduled jobs are added.
-4. If `ENABLE_OPTIONS_RUNNER` is true, the options runner registers an hourly
-   entry job and a 2-second position-management job.
 
 ### Scheduler jobs (`core/execution/crypto_runner.py`)
 
@@ -231,19 +252,10 @@ team agrees on a testing framework.
 | `tick_entry_decisions` | every 1 min UTC (`*:05`) | New entry decisions only |
 | `_wallet_heartbeat` | every 5m | Log Delta wallet breakdown |
 
-### Scheduler jobs (`core/execution/options_runner.py`)
-
-| Job | Cadence | Purpose |
-|---|---|---|
-| `tick_entry` | hourly (`:00`) | Evaluate one short-straddle entry per day |
-| `tick_position_management` | every 2s | Profit target, stop, expiry checks on open straddles |
-
-`max_instances=1, coalesce=True` so ticks never overlap.
-
 ### WebSocket data flow
 
-- `DeltaStream` subscribes to `MARKET:ETHUSD` for the ETH perp + ~15
-  near-money ETH option strikes per expiry. BTC is not subscribed.
+- `DeltaStream` subscribes to `MARKET:ETHUSD` for the ETH perp. BTC is not
+  subscribed.
 - Broker read methods prefer stream marks, falling back to REST caches.
 - `/ws/crypto` pushes `_build_crypto_snapshot()` every second to authenticated
   dashboard clients.
@@ -304,30 +316,12 @@ strategy sets `partial_tp_pct` to the asset-specific target and `stop_loss_pct`
 to the asset-specific SL, so the position manager executes a clean bracket
 order.
 
-### ETH short ATM straddle (`strategies/eth_short_straddle.py`)
+### Removed strategy: ETH short ATM straddle
 
-This is the second strategy, **enabled in live mode by default**. It sells one
-ATM call + one ATM put at a target DTE, exits at 50% of the entry credit, 200%
-of the credit as a stop, or at expiry. It is wired into a separate
-`core/execution/options_runner.py` so the perp strategy is untouched.
-
-Key facts:
-- Delta India ETH option contract size = **0.01 ETH per contract**.
-- Trading mode is **live** (`OPTIONS_TRADING_MODE = "live"`).
-- Default entry: once per day at 04:00 UTC (≈ 09:30 IST) when a 5-DTE expiry is
-  available and margin allows.
-- Fixed capital pool: ₹50,000 INR.
-- Margin estimate: 15% per short leg until Delta's real margin endpoint is wired.
-- Position concentration cap: 60% of the fixed pool per entry.
-
-Backtest results (Apr–Jul 2026, 1h option marks, 1% slippage):
-
-| Variant | Trades | WR | P&L | MaxDD |
-|---|---|---:|---:|---:|---:|
-| 1 contract per expiry | 83 | 98.8% | +$40.09 / contract | $1.03 |
-| ₹50k fixed pool, hourly exit checks | 66 | 89.4% | +298.9% | 29.5% |
-
-Monitor Delta margin and fill slippage closely; the margin model is an estimate.
+This strategy was previously live but **removed on 2026-07-14**. Corrected entry-time-ATM backtests showed heavy losses (ETH −183.2%,
+BTC −72.1% over Apr–Jul 2026). The research backtest scripts remain in
+`delta_exchange/` and `docs/ALTERNATIVE_STRATEGIES.md` for reference; the live
+runner code has been deleted.
 
 Backtest results on Delta 1m data:
 
@@ -369,10 +363,9 @@ Live default is **30×** as a safer-aggressive compromise (~200%/mo BTC, ~238%/m
 ### Hardcoded production dials (preferred)
 
 - `core/risk_management.py` — risk, capital, leverage, exit regime, kill
-  thresholds, and all options dials.
+  thresholds.
 - `strategies/price_action_sr.py` — S/R lookback, trend filter, SL/TP, candle
   aggression filters.
-- `strategies/eth_short_straddle.py` — options entry rules.
 
 Changes to these files should go through PR review. Do **not** put production
 dials in `.env`.
@@ -405,10 +398,6 @@ into containers.
 | `CRYPTO_EXIT_REGIME` | `pure_sltp` (recommended for price-action) or `trail_partial` |
 | `USD_INR_RATE` | INR→USD conversion for wallet valuation, default 86 |
 
-Options strategy dials (`ENABLE_OPTIONS_RUNNER`, `OPTIONS_TRADING_MODE`,
-`OPTIONS_FIXED_CAPITAL_INR`, etc.) are **hardcoded in `core/risk_management.py`**
-and do not use environment variables.
-
 `api/auth.py` fails closed with HTTP 500 if `DASHBOARD_SECRET` or
 `DASHBOARD_PASS` still use the placeholder defaults.
 
@@ -435,7 +424,6 @@ the running code. Do not update them expecting the bot to pick up changes.
 | `crypto_trades` | crypto bot | entry/exit events |
 | `crypto_signal_log` | crypto bot | gated signal observations |
 | `crypto_signal_history` | crypto bot | every raw pred sample (persistence gate recovery) |
-| `crypto_options_trades` | options runner | option entry/exit events |
 | `option_snapshots` | NSE collectors | 5-min option chain dumps |
 
 Old NSE collections (`shadow_trades`, `daily_journals`, `trades`, `records`)
@@ -456,12 +444,14 @@ with `crypto_`.
 - **Linux-only scheduler.** `core/bot_runner.py` refuses to start APScheduler
   on non-Linux unless `ALLOW_LOCAL_SCHEDULER=1`.
 - **Paper vs live mode.** `CRYPTO_TRADING_MODE=paper` journals orders but does
-  not hit Delta. The options runner has its own mode (`OPTIONS_TRADING_MODE`)
-  and defaults to paper even when the perp runner is live.
+  not hit Delta.
 - **INR is tradeable capital.** Delta auto-converts INR→USD at trade time, so
   wallet pool = USD stablecoins + INR / `USD_INR_RATE`.
-- **Position management is split from entry decisions.** This matches backtest
-  semantics and reduces noise from real-time WS mark jitter.
+- **Backtest before live, then live-backtest before enabling.** Every new
+  strategy must first pass corrected historical backtests, then run in paper /
+  shadow mode against live data, before `CRYPTO_TRADING_MODE` or any strategy
+  toggle is flipped to live. This rule is what caught the short straddle before
+  it could do more damage.
 - **1-minute entry grid.** Entries are evaluated at `*:05 UTC` on each completed
   1m candle, matching the 1m candle basis of the price-action strategy. The old
   15-minute grid was shown to miss ~88% of setups in the corrected backtest.
@@ -521,7 +511,31 @@ The Next.js dashboard is deployed to **Vercel**. API calls go directly to
 
 ---
 
-## 12. Known risks and open gaps
+## 12. NSE synthetic-forward backtest vs. live trading — known faults
+
+| Fault | Backtest assumption | Live reality | Severity |
+|---|---|---|---|
+| **PnL driver** | PnL = change in actual combo net premium (CE − PE) × lots × lot size. | Live PnL also depends on IV, theta, and skew; the snapshot bid/ask may not be executable. | Medium |
+| **Two-leg execution** | Both CE and PE legs fill instantly at bid/ask. | Second leg may slip, reject, or move before fill; partial combos need manual square-off. | High |
+| **Liquidity** | Backtest can trade any strike with a valid LTP and passable spread. | Far OTM strikes often have wide spreads or no counterparty; ATM can also widen in fast markets. | Medium |
+| **Margin** | Backtest uses `BACKTEST_MARGIN_FALLBACK_INR` (rough estimate). | Live runner calls Angel One `getMarginApi` for the exact combo before every order. Backtest cannot replicate live SPAN. | High |
+| **Lot size / capital** | Per-symbol independent capital by default; `--shared` uses one pool. | Live bot uses a single `TOTAL_CAPITAL_INR` pool. With ₹3L total it can usually run only 1–2 combos at a time, not all four. | Critical |
+| **Costs** | Fixed spread + fixed fee per fill. | Brokerage, STT, exchange charges, GST, and stamp duty vary by broker and state. | Medium |
+| **Time decay (theta)** | Captured indirectly via actual option marks, but not explicitly modeled. | Short-dated options decay daily and can dominate PnL near expiry. | Medium |
+| **Volatility smile/skew** | Median put-call parity across strikes; no skew model. | Real options have sticky skew that changes the forward-implied curve. | Medium |
+| **Market gaps** | Decisions on regular 5-min buckets. | Snapshot may miss gaps, auction opens, or circuit limits. | Low |
+| **Kill switch / safety** | Daily kill is modeled only in live runner. | Backtest cannot simulate broker outages, auth failures, or network blips. | Medium |
+
+**Recommended mitigations before going live**
+1. Run backtest on at least 3 months of real collector CSV/Mongo data.
+2. Compare backtest exit prices to actual fills from Angel `tradeBook` during paper-less validation.
+3. Confirm margin requirements for 1 lot of each underlying with your broker.
+4. Start with 1 lot per symbol and widen SL if single-trade risk feels too high.
+5. Add an IV/vega filter if theta/IV drift causes repeated stop-outs.
+
+---
+
+## 13. Known risks and open gaps
 
 | Risk | Mitigation today | Open gap |
 |---|---|---|
@@ -531,37 +545,36 @@ The Next.js dashboard is deployed to **Vercel**. API calls go directly to
 | Backtest ≠ live PnL | Backtest assumes 5bps slippage | Live slippage not measured |
 | Position state drift | Manual KILL button | No 30s reconciliation engine |
 | Wide-spread strike contaminates signal | None | Liquidity filter deferred per user policy |
-| Short option margin rules unverified | Paper mode + 15% estimate | Real Delta margin may change sizing/P&L |
-| Option contract size was mis-estimated | Corrected to 0.01 ETH | Prior research numbers were 100× too large |
-| Short gamma tail risk | 200% stop per straddle | A single large ETH move can hit stop or worse |
-| Option liquidity / wide bid-ask | 1% slippage assumption in backtest | Live fills may differ, especially size >100 contracts |
+
 
 ---
 
-## 13. How a new agent should orient
+## 14. How a new agent should orient
 
 1. Read this file + `README.md` + `core/risk_management.py`.
 2. Crypto bot logic: `core/execution/crypto_runner.py` +
    `strategies/price_action_sr.py`.
-3. Options runner: `core/execution/options_runner.py` +
-   `strategies/eth_short_straddle.py`.
-4. Delta WebSocket plumbing: `core/ws/delta_stream.py`.
-5. Broker/orders: `core/brokers/delta_crypto.py`.
-6. Backtests: `delta_exchange/backtest_price_action_sweep.py` and
-   `delta_exchange/backtest_eth_short_straddle_inr50k.py`.
+3. Delta WebSocket plumbing: `core/ws/delta_stream.py`.
+4. Broker/orders: `core/brokers/delta_crypto.py`.
+5. Backtests: `delta_exchange/backtest_price_action_sweep.py`.
 7. Dashboard: `frontend/app/page.tsx` and `frontend/app/CryptoChart.tsx`.
 8. NSE collectors: `scripts/collect_option_snapshots.py`; enable with
    `docker compose --profile nse up -d`.
+9. NSE synthetic-forward bot: `nse/execution/nse_runner.py` +
+   `nse/strategies/synthetic_forward.py` + `nse/backtest/synthetic_forward.py`.
 
 ---
 
-## 14. Don't do
+## 15. Don't do
 
 - Don't write to old NSE Mongo collections from crypto code.
-- Don't put production dials in `.env`. They live in `core/risk_management.py`
-  and `strategies/price_action_sr.py`.
+- Don't put production dials in `.env`. They live in `core/risk_management.py`,
+  `strategies/price_action_sr.py`, and `nse/config.py` / `nse/risk.py`.
 - Don't add LLM/RL/ML to signal generation. The strategy is deterministic by
   design.
-- Don't reintroduce NSE trading endpoints in `api/server.py` or elsewhere.
+- Don't enable the `nse-runner` service until the NSE synthetic-forward
+  backtest has been run on recent data and reviewed. The runner is live-only.
+- Don't treat NSE options as "leveraged." Size by actual broker margin and lot
+  count, not notional exposure multiples.
 - Don't rely on `config/assets/*.yml` for live crypto parameters; the bot does
   not load them.

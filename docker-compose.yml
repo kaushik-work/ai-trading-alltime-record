@@ -116,9 +116,35 @@ services:
     depends_on:
       - api
 
-# api handles all live trading via BotRunner (ATR Intraday only).
-# collector is independent — its only job is to capture historical option premium
-# data for backtest realism.
+  # ── NSE synthetic-forward live runner ────────────────────────────────────────
+  # Always enabled when the container starts. Live only.
+  # Market hours: 09:15–15:30 IST = 03:45–10:00 UTC.
+  nse-runner:
+    build: .
+    profiles: ["nse"]
+    command: >
+      sh -c '
+        while true; do
+          NOW=$$(date -u +%H%M)
+          if [ "$$NOW" -ge "0340" ] && [ "$$NOW" -lt "1005" ]; then
+            python -c "from core.bot_runner import get_runner; r=get_runner(); r.start(); from nse.execution.nse_runner import init_nse_runner; init_nse_runner(r.scheduler); import time; time.sleep(36000)" || true
+          else
+            sleep 60
+          fi
+        done
+      '
+    env_file: .env
+    volumes:
+      - ./.env:/app/.env
+      - app_data:/app/db
+      - app_logs:/app/logs
+    restart: unless-stopped
+    depends_on:
+      - api
+
+# api handles crypto live trading via CryptoRunner.
+# collector captures historical option premium data for backtest realism.
+# nse-runner executes NSE synthetic-forward combos (live only).
 volumes:
   app_data:
   app_logs:

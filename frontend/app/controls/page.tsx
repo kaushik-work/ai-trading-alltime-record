@@ -23,6 +23,23 @@ type ToggleState = {
   strategies: Strategy[];
 };
 
+type SettingsValues = {
+  ENABLE_CRYPTO_RUNNER: boolean;
+  CRYPTO_TRADING_MODE: string;
+  CRYPTO_EQUITY_USD: number;
+  CRYPTO_DAILY_LOSS_KILL_PCT: number;
+  DELTA_API_KEY: boolean;
+  DELTA_API_SECRET: boolean;
+};
+
+type SettingsForm = {
+  ENABLE_CRYPTO_RUNNER: boolean;
+  CRYPTO_TRADING_MODE: string;
+  CRYPTO_EQUITY_USD: string;
+  DELTA_API_KEY: string;
+  DELTA_API_SECRET: string;
+};
+
 function isTokenValid(token: string | null): boolean {
   if (!token) return false;
   try {
@@ -58,6 +75,21 @@ export default function StrategiesPage() {
   });
   const [busy, setBusy] = useState<Record<string, boolean>>({});
 
+  const [settings, setSettings] = useState<SettingsValues | null>(null);
+  const [settingsForm, setSettingsForm] = useState<SettingsForm>({
+    ENABLE_CRYPTO_RUNNER: true,
+    CRYPTO_TRADING_MODE: "live",
+    CRYPTO_EQUITY_USD: "1000",
+    DELTA_API_KEY: "",
+    DELTA_API_SECRET: "",
+  });
+  const [settingsLoading, setSettingsLoading] = useState(true);
+  const [settingsSaving, setSettingsSaving] = useState(false);
+  const [settingsError, setSettingsError] = useState<string | null>(null);
+  const [settingsSuccess, setSettingsSuccess] = useState<string | null>(null);
+  const [showKey, setShowKey] = useState(false);
+  const [showSecret, setShowSecret] = useState(false);
+
   async function fetchStrategies() {
     const t = localStorage.getItem("aq_token");
     if (!isTokenValid(t)) {
@@ -77,6 +109,90 @@ export default function StrategiesPage() {
       setState({ loading: false, error: null, strategies: data.strategies ?? [] });
     } catch (e: any) {
       setState((s) => ({ ...s, loading: false, error: e?.message || "Failed to load strategies" }));
+    }
+  }
+
+  async function fetchSettings() {
+    const t = localStorage.getItem("aq_token");
+    if (!isTokenValid(t)) {
+      logoutAndLogin(router);
+      return;
+    }
+    setSettingsLoading(true);
+    try {
+      const r = await fetch(`${_API}/api/crypto/settings`, {
+        headers: { Authorization: `Bearer ${t}` },
+      });
+      if (r.status === 401) {
+        logoutAndLogin(router);
+        return;
+      }
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      const values: SettingsValues = data.values ?? {};
+      setSettings(values);
+      setSettingsForm({
+        ENABLE_CRYPTO_RUNNER: !!values.ENABLE_CRYPTO_RUNNER,
+        CRYPTO_TRADING_MODE: values.CRYPTO_TRADING_MODE || "live",
+        CRYPTO_EQUITY_USD: String(values.CRYPTO_EQUITY_USD ?? 1000),
+        DELTA_API_KEY: values.DELTA_API_KEY ? "********" : "",
+        DELTA_API_SECRET: values.DELTA_API_SECRET ? "********" : "",
+      });
+      setSettingsError(null);
+    } catch (e: any) {
+      setSettingsError(e?.message || "Failed to load settings");
+    } finally {
+      setSettingsLoading(false);
+    }
+  }
+
+  async function saveSettings() {
+    const t = localStorage.getItem("aq_token");
+    if (!isTokenValid(t)) {
+      logoutAndLogin(router);
+      return;
+    }
+    setSettingsSaving(true);
+    setSettingsError(null);
+    setSettingsSuccess(null);
+    try {
+      const payload: Record<string, any> = {
+        ENABLE_CRYPTO_RUNNER: settingsForm.ENABLE_CRYPTO_RUNNER,
+        CRYPTO_TRADING_MODE: settingsForm.CRYPTO_TRADING_MODE,
+        CRYPTO_EQUITY_USD: parseFloat(settingsForm.CRYPTO_EQUITY_USD),
+      };
+      if (settingsForm.DELTA_API_KEY && settingsForm.DELTA_API_KEY !== "********") {
+        payload.DELTA_API_KEY = settingsForm.DELTA_API_KEY;
+      }
+      if (settingsForm.DELTA_API_SECRET && settingsForm.DELTA_API_SECRET !== "********") {
+        payload.DELTA_API_SECRET = settingsForm.DELTA_API_SECRET;
+      }
+      const r = await fetch(`${_API}/api/crypto/settings`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${t}`, "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      });
+      if (r.status === 401) {
+        logoutAndLogin(router);
+        return;
+      }
+      if (!r.ok) {
+        const err = await r.json().catch(() => ({ detail: "Save failed" }));
+        throw new Error(err.detail || "Save failed");
+      }
+      const data = await r.json();
+      const values: SettingsValues = data.values ?? {};
+      setSettings(values);
+      setSettingsForm((f) => ({
+        ...f,
+        DELTA_API_KEY: values.DELTA_API_KEY ? "********" : "",
+        DELTA_API_SECRET: values.DELTA_API_SECRET ? "********" : "",
+      }));
+      setSettingsSuccess("Saved to .env. Restart the container for changes to take effect.");
+    } catch (e: any) {
+      setSettingsError(e?.message || "Save failed");
+    } finally {
+      setSettingsSaving(false);
     }
   }
 
@@ -142,10 +258,15 @@ export default function StrategiesPage() {
     } else {
       setAuthed(true);
       fetchStrategies();
+      fetchSettings();
     }
   }, []);
 
   if (!authed) return null;
+
+  const dailyKillUsd = settings
+    ? settings.CRYPTO_EQUITY_USD * (settings.CRYPTO_DAILY_LOSS_KILL_PCT || 0.05)
+    : null;
 
   return (
     <div className="min-h-screen bg-[#0a0a14] text-gray-200">
@@ -283,10 +404,10 @@ function Toggle({
       onClick={() => onChange(!checked)}
       className={`relative inline-flex ${h} items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-[#627eea] focus:ring-offset-2 focus:ring-offset-[#0a0a14] ${
         disabled ? "opacity-50 cursor-not-allowed" : "cursor-pointer"
-      } ${checked ? "bg-green-500" : "bg-gray-600"}`}
+      } ${checked ? "bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.6)]" : "bg-red-500 shadow-[0_0_10px_rgba(239,68,68,0.5)]"}`}
     >
       <span
-        className={`inline-block ${dot} transform rounded-full bg-white transition-transform ${translate}`}
+        className={`inline-block ${dot} transform rounded-full bg-white shadow-md transition-transform ${translate}`}
       />
     </button>
   );

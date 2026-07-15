@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Header from "./components/Header";
 import CryptoChart from "./CryptoChart";
+import NseView from "./NseView";
 
 const _API = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 const _WS  = _API.replace(/^http/, "ws");
@@ -181,6 +182,7 @@ function logoutAndLogin(router: ReturnType<typeof useRouter>) {
 export default function CryptoHome() {
   const router = useRouter();
   const [authed, setAuthed] = useState(false);
+  const [viewMode, setViewMode] = useState<"crypto" | "nse">("crypto");
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [wsState, setWsState] = useState<"connecting" | "open" | "closed">("connecting");
   const [killConfirm, setKillConfirm] = useState(false);
@@ -298,7 +300,8 @@ export default function CryptoHome() {
   return (
     <div className="min-h-screen bg-[#0a0a14] text-gray-200">
       <Header
-        mode="crypto"
+        mode={viewMode}
+        onModeChange={setViewMode}
         connected={wsState === "open"}
         botStatus={portfolio?.open_positions ? "running" : "idle"}
         onBotToggle={() => { /* crypto bot toggle TBD via /api/crypto/toggle */ }}
@@ -306,6 +309,8 @@ export default function CryptoHome() {
         settings={{ min_lots: 1 }}
       />
       <main className="max-w-6xl mx-auto px-4 sm:px-6 py-6 sm:py-8">
+      {viewMode === "crypto" ? (
+        <>
 
         {/* Header bar — stacks on mobile, side-by-side on tablet+ */}
         <div className="flex flex-col sm:flex-row sm:items-baseline sm:justify-between gap-3 mb-6">
@@ -668,6 +673,10 @@ export default function CryptoHome() {
           touches the level and a strong reversal candle forms. Risk controls:
           ETH 0.7% SL / 4.9% TP (1:7), 24h vol filter ≤ 34%, breakeven trail at +1R.
         </p>
+        </>
+      ) : (
+        <NseView />
+      )}
       </main>
     </div>
   );

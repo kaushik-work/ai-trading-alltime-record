@@ -847,6 +847,28 @@ class AngelFetcher:
                 self._invalidate_token()
             return []
 
+    def get_margin_required(self, positions: list[dict]) -> Optional[float]:
+        """Query Angel One margin API for a basket of positions.
+
+        positions: list of dicts with keys:
+            exchange, qty, price, productType, token, tradeType
+        Returns totalMarginRequired (float) or None on failure.
+        """
+        if not positions:
+            return 0.0
+        if not self._ensure_logged_in():
+            return None
+        try:
+            payload = {"positions": positions}
+            resp = self._api.getMarginApi(payload)
+            if not resp or not resp.get("status") or not resp.get("data"):
+                logger.warning("get_margin_required: bad response: %s", resp)
+                return None
+            return float(resp["data"].get("totalMarginRequired", 0) or 0)
+        except Exception as e:
+            logger.error("get_margin_required failed: %s", e)
+            return None
+
     # ── NSE equity support (kept for API compat) ──────────────────────────────
 
     def fetch_equity_daily(self, symbol: str, days: int = 365):

@@ -29,14 +29,7 @@ _DEFAULTS = {
             "enabled": True,
             "instruments": {"ETHUSD": True},
         },
-        "eth_short_straddle": {
-            "enabled": True,
-            "instruments": {"ETH": True},
-        },
-        "btc_short_straddle": {
-            "enabled": False,
-            "instruments": {"BTC": False},
-        },
+
     },
 }
 

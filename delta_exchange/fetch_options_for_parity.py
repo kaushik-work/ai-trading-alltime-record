@@ -1,12 +1,13 @@
 """
 Generic option parity fetcher for any Delta India underlying.
 
-For each expiry in the window, finds the ATM call+put pair and downloads 1m
-mark history from (expiry - 6 days) to expiry. Also fetches the underlying
-perp 1m history if missing.
+For each expiry in the window, finds the ATM call+put pair at the target
+entry DTE (default 5 days before expiry) and downloads 1m mark history from
+that entry time to expiry. Also fetches the underlying perp 1m history if
+missing.
 
 Usage:
-  UNDERLYING=BTC .venv/Scripts/python fetch_options_for_parity.py
+  UNDERLYING=BTC TARGET_DTE=5 RESOLUTION=1h .venv/Scripts/python fetch_options_for_parity.py
 """
 import sys, os
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -36,6 +37,9 @@ API_SECRET = os.environ.get("DELTA_API_SECRET", "").strip()
 
 START_DT = datetime.fromisoformat(os.environ.get("START_DT", "2026-04-01")).replace(tzinfo=timezone.utc)
 END_DT   = datetime.fromisoformat(os.environ.get("END_DT",   "2026-07-07")).replace(tzinfo=timezone.utc)
+TARGET_DTE = int(os.environ.get("TARGET_DTE", "5"))
+RESOLUTION = os.environ.get("RESOLUTION", "1m")
+MIN_HISTORY_DAYS = float(os.environ.get("MIN_HISTORY_DAYS", "2.0"))
 
 
 def sign(method: str, path: str, query: str, body: str, ts: str) -> dict:
@@ -146,6 +150,7 @@ def parse_symbol(sym: str):
 
 def main():
     print(f"Fetching {UNDERLYING} option ATM pairs: {START_DT.date()} → {END_DT.date()}")
+    print(f"Target entry DTE: {TARGET_DTE}, resolution: {RESOLUTION}, min history: {MIN_HISTORY_DAYS} days")
     perp = fetch_perp()
     perp_ts = perp.set_index("timestamp")["close"].sort_index()
 
@@ -161,49 +166,86 @@ def main():
     print(f"  expired contracts in window: {len(chain)}")
 
     atm_pairs = []
+    skipped: dict[str, int] = {}
+
+    def skip(exp, reason: str):
+        skipped[reason] = skipped.get(reason, 0) + 1
+
     for exp, grp in chain.groupby("settlement_dt"):
-        spot = perp_ts.reindex([exp], method="nearest").iloc[0]
-        if pd.isna(spot):
+        # Target entry is TARGET_DTE days before expiry. Pick the ATM strike
+        # using spot at entry time, not at expiry, to avoid look-ahead bias.
+        entry_dt = exp - timedelta(days=TARGET_DTE)
+        if entry_dt < perp_ts.index.min() or entry_dt > perp_ts.index.max():
+            skip(exp, "entry outside perp history")
             continue
+        spot_entry = perp_ts.asof(entry_dt)
+        if pd.isna(spot_entry):
+            skip(exp, "no perp mark at entry")
+            continue
+
         strikes = grp["strike_price"].dropna().unique()
         if len(strikes) == 0:
+            skip(exp, "no strikes")
             continue
-        atm = min(strikes, key=lambda k: abs(k - spot))
+        atm = min(strikes, key=lambda k: abs(k - spot_entry))
         calls = grp[(grp["contract_type"] == "call_options") & (grp["strike_price"] == atm)]
         puts = grp[(grp["contract_type"] == "put_options") & (grp["strike_price"] == atm)]
-        if not calls.empty and not puts.empty:
-            atm_pairs.append({
-                "expiry": exp,
-                "strike": atm,
-                "call_sym": calls.iloc[0]["symbol"],
-                "put_sym": puts.iloc[0]["symbol"],
-                "spot": spot,
-            })
+        if calls.empty or puts.empty:
+            skip(exp, "missing call or put")
+            continue
 
-    print(f"Found {len(atm_pairs)} ATM expiry pairs.")
+        atm_pairs.append({
+            "expiry": exp,
+            "entry_dt": entry_dt,
+            "strike": atm,
+            "call_sym": calls.iloc[0]["symbol"],
+            "put_sym": puts.iloc[0]["symbol"],
+            "spot_entry": spot_entry,
+            "spot_exp": perp_ts.reindex([exp], method="nearest").iloc[0],
+        })
+
+    if skipped:
+        print(f"  skipped {sum(skipped.values())} expiries:")
+        for reason, n in sorted(skipped.items(), key=lambda x: -x[1]):
+            print(f"    {reason}: {n}")
+
+    print(f"Found {len(atm_pairs)} ATM expiry pairs (entry-time selection, {TARGET_DTE} DTE).")
     if not atm_pairs:
         return
 
     for pair in atm_pairs:
         exp = pair["expiry"]
-        print(f"  {exp.date()} K={pair['strike']}  call={pair['call_sym']} put={pair['put_sym']}")
+        print(f"  entry {pair['entry_dt'].date()} expiry {exp.date()} K={pair['strike']} "
+              f"spot@entry={pair['spot_entry']:.2f} spot@exp={pair['spot_exp']:.2f} "
+              f"call={pair['call_sym']} put={pair['put_sym']}")
 
-    print("\nDownloading 1m mark history (expiry - 6d → expiry)...")
+    print(f"\nDownloading 1m mark history (entry {TARGET_DTE} DTE → expiry)...")
+    empty_or_short = []
     for pair in atm_pairs:
         exp = pair["expiry"]
+        entry_dt = pair["entry_dt"]
         end_ts = int(exp.timestamp())
-        start_ts = int((exp - timedelta(days=6)).timestamp())
+        start_ts = int(entry_dt.timestamp())
         for side, sym in [("C", pair["call_sym"]), ("P", pair["put_sym"])]:
-            out_path = OUT_DIR / f"{sym}_mark_1m.csv"
+            out_path = OUT_DIR / f"{sym}_mark_{RESOLUTION}.csv"
             if out_path.exists():
                 print(f"    cached {out_path.name}")
                 continue
-            df = fetch_candles(f"MARK:{sym}", "1m", start_ts, end_ts)
+            df = fetch_candles(f"MARK:{sym}", RESOLUTION, start_ts, end_ts)
             if df.empty:
                 print(f"    empty {sym}")
+                empty_or_short.append((sym, 0))
+                continue
+            history_days = (df["timestamp"].max() - df["timestamp"].min()).total_seconds() / 86400
+            if history_days < MIN_HISTORY_DAYS:
+                print(f"    short {sym}: {history_days:.2f} days < {MIN_HISTORY_DAYS}")
+                empty_or_short.append((sym, history_days))
                 continue
             df.to_csv(out_path, index=False)
-            print(f"    saved {out_path.name} ({len(df)} rows)")
+            print(f"    saved {out_path.name} ({len(df)} rows, {history_days:.2f} days)")
+
+    if empty_or_short:
+        print(f"\n  {len(empty_or_short)} symbols had empty or short history and were not cached")
 
     print("\nDone.")
 
