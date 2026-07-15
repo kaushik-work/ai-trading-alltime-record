@@ -59,12 +59,19 @@ def nse_test_buy_ce(user: dict = Depends(_get_current_user)):
     """Place a test buy CE market order at current spot NIFTY ATM strike.
 
     WARNING: This places a real order in live mode. Use only for API testing.
+    The order is placed regardless of available funds; Angel One will reject if
+    the account is not funded, and the rejection reason is returned.
     """
     try:
         from data.angel_fetcher import AngelFetcher
         fetcher = AngelFetcher.get()
         broker = AngelBroker(fetcher)
         cache = OptionChainCache("NIFTY", fetcher)
+
+        # Auth + RMS check for visibility only.
+        if not fetcher._ensure_logged_in():
+            raise HTTPException(status_code=503, detail="Angel One not logged in")
+        rms = fetcher.get_rms() or {}
 
         spot = cache.get_underlying_ltp()
         if spot is None:
@@ -80,8 +87,10 @@ def nse_test_buy_ce(user: dict = Depends(_get_current_user)):
         if not ts or not token:
             raise HTTPException(status_code=503, detail=f"Could not resolve NIFTY {atm} CE")
 
+        quantity = LOT_SIZES["NIFTY"]
         resp = broker.place_single_order("NIFTY", ts, token, "CE", "BUY", 1)
-        logger.warning("NSE test buy CE placed by %s: %s", user, resp)
+        logger.warning("NSE test buy CE by %s | spot=%s strike=%s qty=%s | rms=%s | resp=%s",
+                       user, spot, atm, quantity, rms, resp)
         return {
             "spot": spot,
             "strike": atm,
@@ -89,7 +98,10 @@ def nse_test_buy_ce(user: dict = Depends(_get_current_user)):
             "tradingsymbol": ts,
             "token": token,
             "lots": 1,
-            "quantity": LOT_SIZES["NIFTY"],
+            "quantity": quantity,
+            "available_cash": rms.get("availablecash"),
+            "available_limit": rms.get("availablelimitmargin"),
+            "net": rms.get("net"),
             "order_response": resp,
         }
     except HTTPException:

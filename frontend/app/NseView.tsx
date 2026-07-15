@@ -184,11 +184,18 @@ export default function NseView() {
       )}
 
       {testOrderResult && (
-        <div className="p-3 rounded-lg bg-blue-900/30 border border-blue-700 text-blue-200 text-sm space-y-1">
-          <p className="font-semibold">Test order placed</p>
+        <div className={`p-3 rounded-lg border text-sm space-y-1 ${
+          testOrderResult.order_response?.status
+            ? "bg-green-900/30 border-green-700 text-green-200"
+            : "bg-red-900/30 border-red-700 text-red-200"
+        }`}>
+          <p className="font-semibold">
+            {testOrderResult.order_response?.status ? "Order accepted" : "Order rejected / failed"}
+          </p>
           <p>Spot: {testOrderResult.spot} | Strike: {testOrderResult.strike} | Expiry: {new Date(testOrderResult.expiry).toLocaleDateString()}</p>
           <p>Symbol: {testOrderResult.tradingsymbol} | Qty: {testOrderResult.quantity}</p>
-          <pre className="text-[11px] text-blue-300 overflow-x-auto">{JSON.stringify(testOrderResult.order_response, null, 2)}</pre>
+          <p>Available cash: ₹{Number(testOrderResult.available_cash || 0).toLocaleString()}</p>
+          <pre className="text-[11px] overflow-x-auto">{JSON.stringify(testOrderResult.order_response, null, 2)}</pre>
         </div>
       )}
 

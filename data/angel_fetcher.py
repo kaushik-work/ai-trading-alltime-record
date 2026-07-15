@@ -869,6 +869,20 @@ class AngelFetcher:
             logger.error("get_margin_required failed: %s", e)
             return None
 
+    def get_rms(self) -> Optional[dict]:
+        """Fetch RMS limits from Angel One. Returns dict or None on failure."""
+        if not self._ensure_logged_in():
+            return None
+        try:
+            resp = self._api.rmsLimit()
+            if not resp or not resp.get("status") or not resp.get("data"):
+                logger.warning("get_rms: bad response: %s", resp)
+                return None
+            return resp["data"]
+        except Exception as e:
+            logger.error("get_rms failed: %s", e)
+            return None
+
     # ── NSE equity support (kept for API compat) ──────────────────────────────
 
     def fetch_equity_daily(self, symbol: str, days: int = 365):
