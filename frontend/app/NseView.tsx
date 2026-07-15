@@ -141,12 +141,14 @@ export default function NseView() {
 
       {testOrderResult && (
         <div className={`p-3 rounded-lg border text-sm space-y-1 ${
-          testOrderResult.order_response?.status
+          testOrderResult.order_response?.status === true
             ? "bg-green-900/30 border-green-700 text-green-200"
             : "bg-red-900/30 border-red-700 text-red-200"
         }`}>
           <p className="font-semibold">
-            {testOrderResult.order_response?.status ? "Order accepted" : "Order rejected / failed"}
+            {testOrderResult.order_response?.status === true
+              ? `Order accepted — ID: ${testOrderResult.order_response.order_id}`
+              : "Order rejected / failed"}
           </p>
           <p>Spot: {testOrderResult.spot} | Strike: {testOrderResult.strike} | Expiry: {new Date(testOrderResult.expiry).toLocaleDateString()}</p>
           <p>Symbol: {testOrderResult.tradingsymbol} | Qty: {testOrderResult.quantity}</p>

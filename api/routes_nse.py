@@ -88,9 +88,9 @@ def nse_test_buy_ce(user: dict = Depends(_get_current_user)):
             raise HTTPException(status_code=503, detail=f"Could not resolve NIFTY {atm} CE")
 
         quantity = LOT_SIZES["NIFTY"]
-        resp = broker.place_single_order("NIFTY", ts, token, "CE", "BUY", 1)
-        logger.warning("NSE test buy CE by %s | spot=%s strike=%s qty=%s | rms=%s | resp=%s",
-                       user, spot, atm, quantity, rms, resp)
+        result = broker.place_single_order("NIFTY", ts, token, "CE", "BUY", 1)
+        logger.warning("NSE test buy CE by %s | spot=%s strike=%s qty=%s | rms=%s | result=%s",
+                       user, spot, atm, quantity, rms, result)
         return {
             "spot": spot,
             "strike": atm,
@@ -102,7 +102,7 @@ def nse_test_buy_ce(user: dict = Depends(_get_current_user)):
             "available_cash": rms.get("availablecash"),
             "available_limit": rms.get("availablelimitmargin"),
             "net": rms.get("net"),
-            "order_response": resp,
+            "order_response": result,
         }
     except HTTPException:
         raise

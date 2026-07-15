@@ -46,17 +46,17 @@ class OptionChainCache:
             raise ValueError(f"Unsupported symbol: {symbol}")
         self.symbol = symbol
         self.fetcher = fetcher or AngelFetcher.get()
-        self._instruments: Optional[list] = None
+        self._instrument_list: Optional[list] = None
         self._exchange = EXCHANGE[symbol]
         self._step = STEP_SIZES[symbol]
 
     def _instruments(self) -> list:
-        if self._instruments is None:
+        if self._instrument_list is None:
             if self._exchange == "BFO":
-                self._instruments = self.fetcher._bfo_instruments()
+                self._instrument_list = self.fetcher._bfo_instruments()
             else:
-                self._instruments = self.fetcher._nfo_instruments()
-        return self._instruments
+                self._instrument_list = self.fetcher._nfo_instruments()
+        return self._instrument_list
 
     def nearest_expiry(self, min_days: int = 0) -> Optional[date]:
         """Return nearest tradable expiry on or after today + min_days."""

@@ -30,6 +30,25 @@ class AngelBroker:
     def _ensure_logged_in(self) -> bool:
         return self.fetcher._ensure_logged_in()
 
+    @staticmethod
+    def _extract_order_id(resp) -> Optional[str]:
+        """Angel One placeOrder returns the orderid in many shapes."""
+        if isinstance(resp, str):
+            return resp.strip() or None
+        if not isinstance(resp, dict):
+            return None
+        top = resp.get("orderid") or resp.get("orderId") or resp.get("uniqueorderid")
+        if isinstance(top, str) and top.strip():
+            return top.strip()
+        data = resp.get("data")
+        if isinstance(data, str):
+            return data.strip() or None
+        if isinstance(data, dict):
+            oid = data.get("orderid") or data.get("orderId") or data.get("uniqueorderid")
+            if isinstance(oid, str) and oid.strip():
+                return oid.strip()
+        return None
+
     def _build_order_payload(self, leg: ComboLeg, variety: str = "NORMAL") -> dict:
         """Build Angel One placeOrder payload for an option leg."""
         return {
@@ -75,7 +94,7 @@ class AngelBroker:
 
     def place_single_order(self, symbol: str, tradingsymbol: str, token: str,
                            option_type: str, side: str, lots: int) -> dict:
-        """Place a single option leg order. Returns Angel One raw response."""
+        """Place a single option leg order. Returns structured result."""
         if not self._ensure_logged_in():
             return {"status": False, "message": "not logged in"}
         payload = {
@@ -94,7 +113,12 @@ class AngelBroker:
             "triggerprice": "0",
         }
         logger.info("TEST order | %s %s %s %s lots=%d", side, symbol, option_type, tradingsymbol, lots)
-        return self.fetcher._api.placeOrder(payload)
+        raw = self.fetcher._api.placeOrder(payload)
+        order_id = self._extract_order_id(raw)
+        if not order_id:
+            logger.error("place_single_order: no orderid in response: %r", raw)
+            return {"status": False, "message": "no orderid in response", "raw": raw}
+        return {"status": True, "order_id": order_id, "raw": raw}
 
     def place_combo(self, signal: SyntheticForwardSignal, legs: list[ComboLeg]) -> Optional[Position]:
         """Place a synthetic-forward combo. Returns Position or None on failure."""
@@ -116,12 +140,13 @@ class AngelBroker:
                 logger.info("LIVE order %s | %s %s %s @ %s",
                             position_id, leg.side, leg.option_type, leg.strike, leg.tradingsymbol)
                 resp = self.fetcher._api.placeOrder(payload)
-                if not resp or not resp.get("status") or not resp.get("data"):
+                order_id = self._extract_order_id(resp)
+                if not order_id:
                     err = (resp or {}).get("message", "unknown")
                     logger.error("place_combo: order failed for %s: %s", leg.tradingsymbol, err)
                     self._revert_partial_combo(filled_legs)
                     return None
-                leg.order_id = resp["data"]["orderid"]
+                leg.order_id = order_id
                 filled_legs.append(leg)
 
             self._attach_fill_prices(filled_legs)
