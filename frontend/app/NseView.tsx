@@ -34,25 +34,10 @@ type NseState = {
   journal_count: number;
 };
 
-type BacktestResult = {
-  symbol: string;
-  trades: number;
-  win_rate: number;
-  total_pnl: number;
-  total_return_pct: number;
-  profit_factor: number;
-  max_drawdown_pct: number;
-};
-
 export default function NseView() {
   const [state, setState] = useState<NseState | null>(null);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [killBusy, setKillBusy] = useState(false);
-  const [backtestSymbol, setBacktestSymbol] = useState("NIFTY");
-  const [backtestCapital, setBacktestCapital] = useState(300000);
-  const [backtestResult, setBacktestResult] = useState<BacktestResult | null>(null);
-  const [backtestLoading, setBacktestLoading] = useState(false);
   const [testOrderLoading, setTestOrderLoading] = useState(false);
   const [testOrderResult, setTestOrderResult] = useState<any>(null);
 
@@ -88,35 +73,6 @@ export default function NseView() {
       setError(e.message || "Kill switch failed");
     } finally {
       setKillBusy(false);
-    }
-  }
-
-  async function runBacktest(e: React.FormEvent) {
-    e.preventDefault();
-    if (!token) return;
-    setBacktestLoading(true);
-    setBacktestResult(null);
-    try {
-      const r = await fetch(`${_API}/api/nse/backtest/synthetic_forward`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${token}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          symbol: backtestSymbol,
-          source: "mongo",
-          capital: backtestCapital,
-          interval: 5,
-        }),
-      });
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      const data = await r.json();
-      setBacktestResult(data);
-    } catch (e: any) {
-      setError(e.message || "Backtest failed");
-    } finally {
-      setBacktestLoading(false);
     }
   }
 
@@ -248,55 +204,8 @@ export default function NseView() {
         </>
       )}
 
-      <div className="border border-[#1e1e30] rounded-lg p-4 bg-[#0e0e1a]">
-        <h2 className="text-sm font-semibold text-gray-300 mb-3">Backtest</h2>
-        <form onSubmit={runBacktest} className="flex flex-col sm:flex-row gap-3 items-start sm:items-end">
-          <div>
-            <label className="block text-[11px] text-gray-500 mb-1">Symbol</label>
-            <select
-              value={backtestSymbol}
-              onChange={(e) => setBacktestSymbol(e.target.value)}
-              className="bg-[#13131f] border border-[#1e1e30] rounded px-3 py-2 text-sm text-gray-200"
-            >
-              <option value="NIFTY">NIFTY</option>
-              <option value="BANKNIFTY">BANKNIFTY</option>
-              <option value="FINNIFTY">FINNIFTY</option>
-              <option value="SENSEX">SENSEX</option>
-            </select>
-          </div>
-          <div>
-            <label className="block text-[11px] text-gray-500 mb-1">Capital (₹)</label>
-            <input
-              type="number"
-              value={backtestCapital}
-              onChange={(e) => setBacktestCapital(Number(e.target.value))}
-              className="bg-[#13131f] border border-[#1e1e30] rounded px-3 py-2 text-sm text-gray-200 w-32"
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={backtestLoading}
-            className="px-4 py-2 rounded-lg text-sm font-semibold bg-[#627eea] text-white hover:bg-[#4c66d0] disabled:opacity-50"
-          >
-            {backtestLoading ? "Running..." : "Run Backtest"}
-          </button>
-        </form>
-
-        {backtestResult && (
-          <div className="mt-4 grid grid-cols-2 md:grid-cols-4 gap-3">
-            <StatCard label="Trades" value={String(backtestResult.trades)} />
-            <StatCard label="Win Rate" value={`${backtestResult.win_rate.toFixed(1)}%`} />
-            <StatCard label="Total PnL" value={`₹${Math.round(backtestResult.total_pnl).toLocaleString()}`} accent={backtestResult.total_pnl >= 0 ? "green" : "red"} />
-            <StatCard label="Return" value={`${backtestResult.total_return_pct.toFixed(2)}%`} accent={backtestResult.total_return_pct >= 0 ? "green" : "red"} />
-            <StatCard label="Profit Factor" value={backtestResult.profit_factor.toFixed(2)} />
-            <StatCard label="Max DD" value={`${backtestResult.max_drawdown_pct.toFixed(2)}%`} accent="red" />
-          </div>
-        )}
-      </div>
-
       <p className="text-xs text-gray-500">
-        NSE strategy: synthetic-forward combo on index options. Live margin is fetched from Angel One
-        before every order. Shared capital pool = ₹{state?.total_capital.toLocaleString() ?? "—"}.
+        Live NSE trading via Angel One SmartAPI. Shared capital pool = ₹{state?.total_capital.toLocaleString() ?? "—"}.
       </p>
     </div>
   );
