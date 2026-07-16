@@ -33,7 +33,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 p = argparse.ArgumentParser()
 p.add_argument("--symbol",   default="NIFTY",     choices=["NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX"])
 p.add_argument("--interval", type=int, default=5, help="snapshot interval minutes")
-p.add_argument("--strikes",  type=int, default=8, help="ATM +/- N strikes (default 8 → 17 strikes × 2 sides = 34 contracts per bar)")
+p.add_argument("--strikes",  type=int, default=8, help="ATM +/- N strikes (default 8 => 17 strikes x 2 sides = 34 contracts per bar)")
+p.add_argument("--expiries", type=int, default=1, help="number of nearest weekly expiries to collect (default 1)")
+p.add_argument("--greeks",   action="store_true", help="compute and store Black-Scholes Greeks + IV")
+p.add_argument("--vix",      action="store_true", help="also snapshot India VIX")
 p.add_argument("--dry-run",  action="store_true", help="skip market hours check")
 args = p.parse_args()
 
@@ -137,6 +140,10 @@ def _instruments(af: AngelFetcher) -> list:
 
 
 def nearest_expiry(af: AngelFetcher) -> date:
+    return near_expiries(af, 1)[0]
+
+
+def near_expiries(af: AngelFetcher, n: int = 1) -> list[date]:
     expiries = sorted({
         _parse_expiry(i["expiry"])
         for i in _instruments(af)
@@ -145,7 +152,9 @@ def nearest_expiry(af: AngelFetcher) -> date:
         and _parse_expiry(i["expiry"]) is not None
         and _parse_expiry(i["expiry"]) >= date.today()
     })
-    return expiries[0] if expiries else date.today() + timedelta(days=7)
+    if not expiries:
+        return [date.today() + timedelta(days=7)]
+    return expiries[:n]
 
 
 def build_tokens(af: AngelFetcher, expiry: date, atm: int) -> list:
@@ -177,9 +186,20 @@ def take_snapshot(af: AngelFetcher, token_map: list, expiry: date, out_file: Pat
         str(r["symbolToken"]): r
         for r in resp.get("data", {}).get("fetched", [])
     }
-    ts = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S")
+    ts = datetime.now(IST)
+    ts_str = ts.strftime("%Y-%m-%d %H:%M:%S")
     rows = 0
     mongo_docs = []
+    vix_value = None
+    if args.vix:
+        try:
+            vix_value = af.fetch_vix()
+        except Exception as e:
+            log.debug("VIX fetch failed (non-fatal): %s", e)
+
+    # Prepare a single timestamp object for Greek calculations.
+    greek_ts = ts.replace(tzinfo=IST)
+
     with open(out_file, "a", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
         for t in token_map:
@@ -191,12 +211,13 @@ def take_snapshot(af: AngelFetcher, token_map: list, expiry: date, out_file: Pat
             ask    = float(q.get("askPrice",    0) or 0)
             volume = int(  q.get("tradeVolume", 0) or 0)
             oi     = int(  q.get("opnInterest", 0) or 0)
-            w.writerow([
-                ts, SYMBOL, str(expiry), t["strike"], t["option_type"],
+
+            csv_row = [
+                ts_str, SYMBOL, str(expiry), t["strike"], t["option_type"],
                 ltp, bid, ask, volume, oi, round(spot, 2),
-            ])
-            mongo_docs.append({
-                "timestamp":    ts,
+            ]
+            doc = {
+                "timestamp":    ts_str,
                 "date":         today_str,
                 "symbol":       SYMBOL,
                 "expiry":       str(expiry),
@@ -208,7 +229,29 @@ def take_snapshot(af: AngelFetcher, token_map: list, expiry: date, out_file: Pat
                 "volume":       volume,
                 "oi":           oi,
                 "spot":         round(spot, 2),
-            })
+            }
+
+            if args.greeks:
+                from nse.data.greeks import option_greeks
+                g = option_greeks(
+                    spot=spot,
+                    strike=t["strike"],
+                    option_type=t["option_type"],
+                    expiry=datetime.combine(expiry, dtime(15, 30)).replace(tzinfo=IST),
+                    mark=ltp,
+                    timestamp=greek_ts,
+                )
+                for k in ("iv", "delta", "gamma", "theta", "vega", "rho"):
+                    v = g.get(k)
+                    csv_row.append(round(v, 6) if v is not None else "")
+                    doc[k] = v
+
+            if vix_value is not None:
+                doc["vix"] = round(vix_value, 2)
+                csv_row.append(round(vix_value, 2))
+
+            w.writerow(csv_row)
+            mongo_docs.append(doc)
             rows += 1
     # Mirror snapshot batch to Mongo (fire-and-forget — never blocks CSV write)
     if mongo_docs:
@@ -253,10 +296,15 @@ relogin_count   = 0
 out_file = SNAP_DIR / f"{today_str}_{SYMBOL}.csv"
 if not out_file.exists():
     with open(out_file, "w", newline="", encoding="utf-8") as f:
-        csv.writer(f).writerow([
+        hdr = [
             "timestamp", "symbol", "expiry", "strike", "option_type",
             "ltp", "bid", "ask", "volume", "oi", "spot",
-        ])
+        ]
+        if args.greeks:
+            hdr += ["iv", "delta", "gamma", "theta", "vega", "rho"]
+        if args.vix:
+            hdr += ["vix"]
+        csv.writer(f).writerow(hdr)
 
 log.info("Waiting for market open (09:10)...")
 
@@ -278,7 +326,7 @@ try:
                 log.warning("Session dead (health check) — re-logging in.")
                 try:
                     af = fresh_login()
-                    token_map = []; last_atm = None
+                    token_maps = {}; last_atm = None
                     relogin_count += 1
                 except RuntimeError as e:
                     log.error("Re-login failed: %s", e)
@@ -297,33 +345,38 @@ try:
             time.sleep(30); continue
 
         atm = int(round(spot / STEP)) * STEP
-        if expiry is None:
-            expiry = nearest_expiry(af)
-            log.info("Expiry: %s", expiry)
+        if not expiries:
+            expiries = near_expiries(af, args.expiries)
+            log.info("Expiries: %s", expiries)
         if last_atm is None or abs(atm - last_atm) >= STEP:
-            token_map = build_tokens(af, expiry, atm)
+            token_maps = {exp: build_tokens(af, exp, atm) for exp in expiries}
+            total_tokens = sum(len(v) for v in token_maps.values())
             last_atm  = atm
-            log.info("Tokens rebuilt: %d instruments (ATM=%d)", len(token_map), atm)
+            log.info("Tokens rebuilt: %d instruments (ATM=%d)", total_tokens, atm)
 
-        # Snapshot
-        try:
-            rows = take_snapshot(af, token_map, expiry, out_file)
-            total_rows  += rows
-            snaps_taken += 1
-            log.info("Snap #%d | spot=%.0f | %d rows | total=%d",
-                     snaps_taken, spot, rows, total_rows)
-        except Exception as e:
-            err_str = str(e)
-            log.error("Snapshot error: %s", err_str)
-            error_count += 1
-            if any(k in err_str for k in ("AG8001", "Invalid Token", "401")):
-                log.warning("Auth error — re-logging in.")
-                try:
-                    af = fresh_login()
-                    token_map = []; last_atm = None
-                    relogin_count += 1
-                except RuntimeError as re_e:
-                    log.error("Re-login failed: %s", re_e)
+        # Snapshot each expiry
+        for exp in expiries:
+            tm = token_maps.get(exp, [])
+            if not tm:
+                continue
+            try:
+                rows = take_snapshot(af, tm, exp, out_file)
+                total_rows  += rows
+                snaps_taken += 1
+                log.info("Snap #%d | exp=%s | spot=%.0f | %d rows | total=%d",
+                         snaps_taken, exp, spot, rows, total_rows)
+            except Exception as e:
+                err_str = str(e)
+                log.error("Snapshot error: %s", err_str)
+                error_count += 1
+                if any(k in err_str for k in ("AG8001", "Invalid Token", "401")):
+                    log.warning("Auth error — re-logging in.")
+                    try:
+                        af = fresh_login()
+                        token_maps = {}; last_atm = None
+                        relogin_count += 1
+                    except RuntimeError as re_e:
+                        log.error("Re-login failed: %s", re_e)
 
         # Sleep until next interval
         next_tick  = now + timedelta(seconds=INTERVAL_SEC)

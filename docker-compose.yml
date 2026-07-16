@@ -21,18 +21,19 @@ services:
   # MongoDB (option_snapshots collection) for queryable historical premium data.
   # The script auto-exits on weekends/holidays; the wrapper restarts it daily
   # at 09:00 IST so we don't need to script docker restart externally.
-  # NSE collectors are gated behind the "nse" compose profile so a regular
+  # NSE collectors are gated behind the "collectors" compose profile so a regular
   # `docker compose up -d` only starts the crypto api on a small droplet.
-  # To enable them: `docker compose --profile nse up -d`.
+  # To enable them: `docker compose --profile collectors up -d`.
+  # The legacy "nse" profile still exists for the synthetic-forward live runner.
   collector:
     build: .
-    profiles: ["nse"]
+    profiles: ["collectors", "nse"]
     command: >
       sh -c '
         while true; do
           NOW=$$(date -u +%H%M)
           if [ "$$NOW" -ge "0330" ] && [ "$$NOW" -lt "1005" ]; then
-            python scripts/collect_option_snapshots.py --symbol NIFTY --interval 5 --strikes 8 || true
+            python scripts/collect_option_snapshots.py --symbol NIFTY --interval 5 --strikes 8 --expiries 2 --greeks --vix || true
           else
             sleep 60
           fi
@@ -49,13 +50,13 @@ services:
 
   collector-banknifty:
     build: .
-    profiles: ["nse"]
+    profiles: ["collectors", "nse"]
     command: >
       sh -c '
         while true; do
           NOW=$$(date -u +%H%M)
           if [ "$$NOW" -ge "0330" ] && [ "$$NOW" -lt "1005" ]; then
-            python scripts/collect_option_snapshots.py --symbol BANKNIFTY --interval 5 --strikes 8 || true
+            python scripts/collect_option_snapshots.py --symbol BANKNIFTY --interval 5 --strikes 8 --expiries 2 --greeks --vix || true
           else
             sleep 60
           fi
@@ -72,13 +73,13 @@ services:
 
   collector-finnifty:
     build: .
-    profiles: ["nse"]
+    profiles: ["collectors", "nse"]
     command: >
       sh -c '
         while true; do
           NOW=$$(date -u +%H%M)
           if [ "$$NOW" -ge "0330" ] && [ "$$NOW" -lt "1005" ]; then
-            python scripts/collect_option_snapshots.py --symbol FINNIFTY --interval 5 --strikes 8 || true
+            python scripts/collect_option_snapshots.py --symbol FINNIFTY --interval 5 --strikes 8 --expiries 2 --greeks --vix || true
           else
             sleep 60
           fi
@@ -95,13 +96,13 @@ services:
 
   collector-sensex:
     build: .
-    profiles: ["nse"]
+    profiles: ["collectors", "nse"]
     command: >
       sh -c '
         while true; do
           NOW=$$(date -u +%H%M)
           if [ "$$NOW" -ge "0330" ] && [ "$$NOW" -lt "1005" ]; then
-            python scripts/collect_option_snapshots.py --symbol SENSEX --interval 5 --strikes 8 || true
+            python scripts/collect_option_snapshots.py --symbol SENSEX --interval 5 --strikes 8 --expiries 2 --greeks --vix || true
           else
             sleep 60
           fi

@@ -169,7 +169,8 @@ class OptionChainCache:
         return pd.DataFrame(rows)
 
 
-def load_snapshots_csv(symbol: str, db_dir: Optional[Path] = None) -> pd.DataFrame:
+def load_snapshots_csv(symbol: str, db_dir: Optional[Path] = None,
+                       compute_greeks: bool = True) -> pd.DataFrame:
     """Load historical snapshots from db/oi_snapshots/YYYY-MM-DD_SYMBOL.csv."""
     if db_dir is None:
         db_dir = Path(__file__).resolve().parents[2] / "db" / "oi_snapshots"
@@ -185,10 +186,10 @@ def load_snapshots_csv(symbol: str, db_dir: Optional[Path] = None) -> pd.DataFra
     if not dfs:
         return pd.DataFrame()
     df = pd.concat(dfs, ignore_index=True)
-    return _normalize_historical_df(df, symbol)
+    return _normalize_historical_df(df, symbol, compute_greeks=compute_greeks)
 
 
-def load_snapshots_mongo(symbol: str) -> pd.DataFrame:
+def load_snapshots_mongo(symbol: str, compute_greeks: bool = True) -> pd.DataFrame:
     """Load historical snapshots from MongoDB option_snapshots collection."""
     url = os.environ.get("MONGODB_URL")
     db_name = os.environ.get("MONGODB_DB_NAME")
@@ -200,11 +201,17 @@ def load_snapshots_mongo(symbol: str) -> pd.DataFrame:
     rows = list(col.find({"symbol": symbol}, {"_id": 0}))
     if not rows:
         return pd.DataFrame()
-    return _normalize_historical_df(pd.DataFrame(rows), symbol)
+    return _normalize_historical_df(pd.DataFrame(rows), symbol, compute_greeks=compute_greeks)
 
 
-def _normalize_historical_df(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
-    """Normalize collector CSV / Mongo documents to a common schema."""
+def _normalize_historical_df(df: pd.DataFrame, symbol: str,
+                             compute_greeks: bool = True) -> pd.DataFrame:
+    """Normalize collector CSV / Mongo documents to a common schema.
+
+    If compute_greeks is True and the source lacks iv/delta/theta/vega, they are
+    computed on the fly using Black-Scholes.  This keeps old Mongo snapshots
+    usable without a full backfill job.
+    """
     if df.empty:
         return df
     rename = {
@@ -240,6 +247,17 @@ def _normalize_historical_df(df: pd.DataFrame, symbol: str) -> pd.DataFrame:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
 
+    # Compute Greeks on the fly if missing.
+    greek_cols = ["iv", "delta", "gamma", "theta", "vega", "rho"]
+    if compute_greeks and not all(c in df.columns for c in greek_cols):
+        from nse.data.greeks_vectorized import add_greeks_to_dataframe
+        try:
+            add_greeks_to_dataframe(df)
+        except Exception as e:
+            logger.warning("_normalize_historical_df: Greek computation failed: %s", e)
+
     df = df.dropna(subset=["timestamp", "expiry", "strike", "mark", "side"])
     df["symbol"] = symbol
-    return df[["timestamp", "symbol", "expiry", "strike", "side", "mark", "spot"]]
+    base_cols = ["timestamp", "symbol", "expiry", "strike", "side", "mark", "spot"]
+    extra_cols = [c for c in ("bid", "ask", "volume", "oi", "iv", "delta", "gamma", "theta", "vega", "rho", "vix") if c in df.columns]
+    return df[base_cols + extra_cols]

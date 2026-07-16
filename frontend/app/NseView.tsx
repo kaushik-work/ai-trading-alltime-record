@@ -27,9 +27,16 @@ type NseState = {
   mode: string;
   killed: boolean;
   day_pnl: number;
+  unrealized_pnl: number;
   total_capital: number;
   margin_used: number;
   margin_available: number;
+  broker_rms?: {
+    available_cash?: number;
+    available_limit?: number;
+    net?: number;
+    utiliseddebits?: number;
+  };
   open_positions: NsePosition[];
   journal_count: number;
 };
@@ -78,7 +85,7 @@ export default function NseView() {
 
   async function placeTestBuyCe() {
     if (!token) return;
-    if (!confirm("This will place a REAL buy CE market order for 1 lot of NIFTY. Continue?")) return;
+    if (!confirm("This will place a REAL LIMIT buy CE order for 1 lot of NIFTY at current ask, with 10 pt SL and 50 pt target. Continue?")) return;
     setTestOrderLoading(true);
     setTestOrderResult(null);
     try {
@@ -159,12 +166,35 @@ export default function NseView() {
 
       {state && (
         <>
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4">
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3 sm:gap-4">
             <StatCard label="Runner" value={state.enabled ? "ON" : "OFF"} accent={state.enabled ? "green" : "gray"} />
             <StatCard label="Day PnL" value={`₹${state.day_pnl.toLocaleString()}`} accent={state.day_pnl >= 0 ? "green" : "red"} />
+            <StatCard label="Unrealized" value={`₹${(state.unrealized_pnl || 0).toLocaleString()}`} accent={(state.unrealized_pnl || 0) >= 0 ? "green" : "red"} />
             <StatCard label="Margin Used" value={`₹${Math.round(state.margin_used).toLocaleString()}`} />
             <StatCard label="Available" value={`₹${Math.round(state.margin_available).toLocaleString()}`} accent="green" />
+            <StatCard label="Total P&L" value={`₹${(state.day_pnl + (state.unrealized_pnl || 0)).toLocaleString()}`} accent={(state.day_pnl + (state.unrealized_pnl || 0)) >= 0 ? "green" : "red"} />
           </div>
+
+          {state.broker_rms && (
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-4 text-xs">
+              <div className="border border-[#1e1e30] rounded-lg px-3 py-2 bg-[#0e0e1a]">
+                <span className="text-gray-500">Broker Cash</span>
+                <p className="text-sm font-semibold">₹{Number(state.broker_rms.available_cash || 0).toLocaleString()}</p>
+              </div>
+              <div className="border border-[#1e1e30] rounded-lg px-3 py-2 bg-[#0e0e1a]">
+                <span className="text-gray-500">Broker Limit</span>
+                <p className="text-sm font-semibold">₹{Number(state.broker_rms.available_limit || 0).toLocaleString()}</p>
+              </div>
+              <div className="border border-[#1e1e30] rounded-lg px-3 py-2 bg-[#0e0e1a]">
+                <span className="text-gray-500">Broker Net</span>
+                <p className="text-sm font-semibold">₹{Number(state.broker_rms.net || 0).toLocaleString()}</p>
+              </div>
+              <div className="border border-[#1e1e30] rounded-lg px-3 py-2 bg-[#0e0e1a]">
+                <span className="text-gray-500">Utilised</span>
+                <p className="text-sm font-semibold">₹{Number(state.broker_rms.utiliseddebits || 0).toLocaleString()}</p>
+              </div>
+            </div>
+          )}
 
           <div className="border border-[#1e1e30] rounded-lg p-4 bg-[#0e0e1a]">
             <h2 className="text-sm font-semibold text-gray-300 mb-3">Open Positions ({state.open_positions.length})</h2>
@@ -207,7 +237,8 @@ export default function NseView() {
       )}
 
       <p className="text-xs text-gray-500">
-        Live NSE trading via Angel One SmartAPI. Shared capital pool = ₹{state?.total_capital.toLocaleString() ?? "—"}.
+        Live NSE trading via Angel One SmartAPI. Shared capital pool = ₹{state?.total_capital.toLocaleString() ?? "—"}.<br />
+        Day PnL / Margin Used are internal runner accounting. Broker Cash / Limit are live Angel One RMS values.
       </p>
     </div>
   );

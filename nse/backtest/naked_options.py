@@ -32,6 +32,7 @@ from nse.config import (
 )
 from nse.data.option_chain import load_snapshots_csv, load_snapshots_mongo
 from nse.strategies.naked_options import NakedOptionsStrategy
+from nse.strategies.greek_naked_options import GreekNakedOptionsStrategy, GreekFilters
 
 logger = logging.getLogger(__name__)
 
@@ -83,13 +84,14 @@ def _fees_for_lots(lots: int) -> float:
 
 
 def run_backtest(symbol: str, df: pd.DataFrame, capital: float = TOTAL_CAPITAL_INR,
-                 interval_minutes: int = 5) -> dict:
+                 interval_minutes: int = 5, strategy_class = NakedOptionsStrategy,
+                 strategy_kwargs: dict | None = None) -> dict:
     df = _bucket_to_interval(df, interval_minutes)
     buckets = sorted(df["t_bucket"].unique())
     if not buckets:
         return {"trades": 0, "pnl": 0.0, "equity": capital, "events": []}
 
-    strategy = NakedOptionsStrategy(symbol)
+    strategy = strategy_class(symbol, **(strategy_kwargs or {}))
     events = []
     equity = capital
     open_pos = None
@@ -160,9 +162,11 @@ def run_backtest(symbol: str, df: pd.DataFrame, capital: float = TOTAL_CAPITAL_I
         if idea is None:
             continue
 
-        atm = int(round(spot_t / step)) * step
         option_type = "CE" if idea["side"] == "call" else "PE"
-        q = _get_leg_quote(snap, atm, option_type)
+        strike = idea.get("strike")
+        if strike is None:
+            strike = int(round(spot_t / step)) * step
+        q = _get_leg_quote(snap, strike, option_type)
         if q is None:
             continue
 
@@ -179,7 +183,7 @@ def run_backtest(symbol: str, df: pd.DataFrame, capital: float = TOTAL_CAPITAL_I
         open_pos = {
             "symbol": symbol,
             "option_type": option_type,
-            "strike": atm,
+            "strike": strike,
             "entry_t": t,
             "entry_px": entry_px,
             "expiry": idea["expiry"],
@@ -268,6 +272,7 @@ def main():
     parser.add_argument("--all", action="store_true")
     parser.add_argument("--capital", type=float, default=TOTAL_CAPITAL_INR)
     parser.add_argument("--interval", type=int, default=5)
+    parser.add_argument("--greek", action="store_true", help="use Greek-aware naked strategy")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
@@ -282,7 +287,9 @@ def main():
             if df.empty:
                 print(f"[SKIP] {sym}: no data")
                 continue
-            metrics = run_backtest(sym, df, capital=args.capital, interval_minutes=args.interval)
+            strategy_class = GreekNakedOptionsStrategy if args.greek else NakedOptionsStrategy
+            metrics = run_backtest(sym, df, capital=args.capital, interval_minutes=args.interval,
+                                   strategy_class=strategy_class)
             _print_report(sym, metrics)
             tdf = pd.DataFrame(metrics["events"]).copy()
             if not tdf.empty:

@@ -749,6 +749,67 @@ class AngelFetcher:
         match = next((i for i in self._nfo_instruments() if i.get("symbol") == tradingsymbol), None)
         return match["token"] if match else None
 
+    def get_option_quote(self, tradingsymbol: str, token: str, exchange: str = "NFO") -> Optional[dict]:
+        """Fetch FULL market-data quote for a single option. Returns dict with
+        ltp, bid, ask, volume, oi, etc., or None on failure."""
+        if not self._ensure_logged_in():
+            return None
+        try:
+            resp = self._api.getMarketData("FULL", {exchange: [token]})
+            if self._is_auth_failure(resp):
+                if self._ensure_logged_in():
+                    resp = self._api.getMarketData("FULL", {exchange: [token]})
+            if not resp or not resp.get("status"):
+                logger.warning("get_option_quote: getMarketData failed for %s: %s", tradingsymbol, resp)
+                return None
+            fetched = resp.get("data", {}).get("fetched", [])
+            if not fetched:
+                return None
+            q = fetched[0]
+            return {
+                "ltp": float(q.get("ltp", 0) or 0),
+                "bid": float(q.get("bidPrice", 0) or 0),
+                "ask": float(q.get("askPrice", 0) or 0),
+                "volume": int(q.get("tradeVolume", 0) or 0),
+                "oi": int(q.get("opnInterest", 0) or 0),
+                "open": float(q.get("open", 0) or 0),
+                "high": float(q.get("high", 0) or 0),
+                "low": float(q.get("low", 0) or 0),
+                "close": float(q.get("close", 0) or 0),
+            }
+        except Exception as e:
+            logger.warning("get_option_quote %s: %s", tradingsymbol, e)
+            return None
+
+    def gtt_create_rule(self, tradingsymbol: str, token: str, exchange: str,
+                        transactiontype: str, producttype: str, qty: int,
+                        triggerprice: float, price: float,
+                        disclosedqty: int = 0, timeperiod: int = 365) -> Optional[dict]:
+        """Create a GTT rule (SL / target). Returns API response dict or None."""
+        if not self._ensure_logged_in():
+            return None
+        try:
+            payload = {
+                "tradingsymbol": tradingsymbol,
+                "symboltoken": token,
+                "exchange": exchange,
+                "producttype": producttype,
+                "transactiontype": transactiontype,
+                "price": str(price),
+                "qty": str(qty),
+                "disclosedqty": str(disclosedqty or qty),
+                "triggerprice": str(triggerprice),
+                "timeperiod": str(timeperiod),
+            }
+            resp = self._api.gttCreateRule(payload)
+            if self._is_auth_failure(resp):
+                if self._ensure_logged_in():
+                    resp = self._api.gttCreateRule(payload)
+            return resp
+        except Exception as e:
+            logger.error("gtt_create_rule failed: %s", e)
+            return None
+
     def get_option_ltps_bulk(self, symbol: str, strikes: list[int],
                              option_type: str, expiry: date) -> dict[int, tuple[str, float]]:
         """Fetch LTPs for many strikes in ONE API call via getMarketData.

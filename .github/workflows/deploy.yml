@@ -31,3 +31,5 @@ jobs:
             # cuts deploy time from ~60s to ~10s without staleness risk.
             docker compose build
             docker compose up -d --force-recreate
+            # Keep option-chain collectors alive; do NOT auto-start nse-runner.
+            docker compose --profile collectors up -d --force-recreate

@@ -13,7 +13,7 @@ from nse.execution.nse_runner import get_nse_runner_state
 from nse.risk import is_killed, set_killed
 from nse.broker.angel_broker import AngelBroker
 from nse.data.option_chain import OptionChainCache
-from nse.config import STEP_SIZES, LOT_SIZES
+from nse.config import STEP_SIZES, LOT_SIZES, EXCHANGE
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/nse")
@@ -56,7 +56,12 @@ class BacktestRequest(BaseModel):
 
 @router.post("/test_buy_ce")
 def nse_test_buy_ce(user: dict = Depends(_get_current_user)):
-    """Place a test buy CE market order at current spot NIFTY ATM strike.
+    """Place a test LIMIT buy CE order at current NIFTY ATM strike with GTT SL/Target.
+
+    Entry is placed at the current ask price (no entry slippage).  After fill,
+    two GTT rules are created:
+      - SL   : sell if premium drops 10 points from fill price
+      - Target: sell if premium rises 50 points from fill price
 
     WARNING: This places a real order in live mode. Use only for API testing.
     The order is placed regardless of available funds; Angel One will reject if
@@ -88,9 +93,21 @@ def nse_test_buy_ce(user: dict = Depends(_get_current_user)):
             raise HTTPException(status_code=503, detail=f"Could not resolve NIFTY {atm} CE")
 
         quantity = LOT_SIZES["NIFTY"]
-        result = broker.place_single_order("NIFTY", ts, token, "CE", "BUY", 1)
-        logger.warning("NSE test buy CE by %s | spot=%s strike=%s qty=%s | rms=%s | result=%s",
-                       user, spot, atm, quantity, rms, result)
+
+        # Fetch ask price so we can enter via LIMIT and avoid slippage.
+        quote = fetcher.get_option_quote(ts, token, EXCHANGE.get("NIFTY", "NFO"))
+        if not quote or quote.get("ask", 0) <= 0:
+            raise HTTPException(status_code=503, detail="Could not fetch NIFTY option quote")
+        limit_price = quote["ask"]
+
+        result = broker.place_single_order(
+            "NIFTY", ts, token, "CE", "BUY", 1,
+            limit_price=limit_price,
+            sl_points=10.0,
+            target_points=50.0,
+        )
+        logger.warning("NSE test buy CE by %s | spot=%s strike=%s qty=%s limit=%s | rms=%s | result=%s",
+                       user, spot, atm, quantity, limit_price, rms, result)
         return {
             "spot": spot,
             "strike": atm,
@@ -99,6 +116,7 @@ def nse_test_buy_ce(user: dict = Depends(_get_current_user)):
             "token": token,
             "lots": 1,
             "quantity": quantity,
+            "limit_price": limit_price,
             "available_cash": rms.get("availablecash"),
             "available_limit": rms.get("availablelimitmargin"),
             "net": rms.get("net"),

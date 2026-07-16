@@ -25,6 +25,7 @@ from nse.config import (
     MARKET_OPEN,
     MAX_HOLD_HOURS,
     STEP_SIZES,
+    STOP_LOSS_PCT,
     SYMBOLS,
     TARGET_PCT,
     TICK_ENTRY_MINUTES,
@@ -162,7 +163,10 @@ def _entry_tick():
                             symbol, margin, available)
                 continue
 
-            position = broker.place_combo(chosen, legs)
+            sl_points = chosen.spot * STOP_LOSS_PCT
+            target_points = chosen.spot * TARGET_PCT
+            position = broker.place_combo(chosen, legs, use_limit=True,
+                                          sl_points=sl_points, target_points=target_points)
             if position is None:
                 continue
 
@@ -227,8 +231,9 @@ def _position_tick():
                 pos.exit_reason = reason
                 pos.exit_time = now
                 pos.status = "CLOSED"
-                # Use unrealized as proxy PnL for position management.
-                pnl = TOTAL_CAPITAL_INR * unreal
+                # Actual P&L for one lot: spot_move × lot_size.
+                lot_size = LOT_SIZES.get(pos.symbol, 1)
+                pnl = side * (spot - pos.spot_at_entry) * lot_size
                 pos.pnl = pnl
                 add_day_pnl(pnl)
                 broker.close_combo(pos)
@@ -298,15 +303,37 @@ def init_nse_runner(scheduler: BaseScheduler) -> bool:
 
 
 def get_nse_runner_state() -> dict:
-    """Return serializable runtime state for the API."""
+    """Return serializable runtime state for the API.
+
+    Includes broker RMS when available so the dashboard reflects real limits,
+    not just internal accounting.
+    """
+    broker_rms = {}
+    try:
+        fetcher = AngelFetcher.get()
+        # Only hit RMS if already logged in; avoid blocking the status endpoint
+        # with a full TOTP re-login on every 5-second poll.
+        if fetcher.is_token_live():
+            rms = fetcher.get_rms() or {}
+            broker_rms = {
+                "available_cash": rms.get("availablecash"),
+                "available_limit": rms.get("availablelimitmargin"),
+                "net": rms.get("net"),
+                "utiliseddebits": rms.get("utiliseddebits"),
+            }
+    except Exception as e:
+        logger.debug("get_nse_runner_state: broker RMS fetch failed: %s", e)
+
     return {
         "enabled": _INITIALIZED,
         "mode": "live",
         "killed": is_killed(),
         "day_pnl": round(_day_pnl(), 2),
+        "unrealized_pnl": round(_unrealized_pnl(), 2),
         "total_capital": TOTAL_CAPITAL_INR,
         "margin_used": round(_MARGIN_USED_INR, 2),
         "margin_available": round(_margin_available(), 2),
+        "broker_rms": broker_rms,
         "open_positions": [
             {
                 "position_id": p.position_id,
@@ -332,3 +359,23 @@ def get_nse_runner_state() -> dict:
 def _day_pnl() -> float:
     from nse.risk import get_day_pnl
     return get_day_pnl()
+
+
+def _unrealized_pnl() -> float:
+    """Return mark-to-market P&L of all open positions using live spot."""
+    if not _OPEN_POSITIONS:
+        return 0.0
+    try:
+        fetcher = AngelFetcher.get()
+        total = 0.0
+        for pos in _OPEN_POSITIONS.values():
+            spot = fetcher.get_index_ltp(pos.symbol)
+            if spot is None or spot <= 0:
+                continue
+            side = 1 if pos.signal_side == "long" else -1
+            lot_size = LOT_SIZES.get(pos.symbol, 1)
+            total += side * (spot - pos.spot_at_entry) * lot_size
+        return total
+    except Exception as e:
+        logger.debug("_unrealized_pnl failed: %s", e)
+        return 0.0
