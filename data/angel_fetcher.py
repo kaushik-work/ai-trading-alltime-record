@@ -87,11 +87,13 @@ class AngelFetcher:
 
     _LOGIN_RETRY_SECS = 120  # retry failed login after 2 minutes
 
-    def _ensure_logged_in(self) -> bool:
+    def _ensure_logged_in(self, force: bool = False) -> bool:
         """
         Auto-login using TOTP (no manual step needed).
         Tries stored JWT first; falls back to full generateSession if expired.
-        Failed logins are retried after 10 min (not blocked all day).
+        Failed logins are retried after 2 min (not blocked all day).
+
+        Set force=True to bypass the cooldown on user-initiated actions.
         """
         from core.utils import now_ist
         now = now_ist()
@@ -99,14 +101,14 @@ class AngelFetcher:
 
         if self._api is not None and self._login_date == today:
             return True
-        if (self._failed_at is not None and
+        if not force and (self._failed_at is not None and
                 (now - self._failed_at).total_seconds() < self._LOGIN_RETRY_SECS):
             return False  # within cooldown window, skip retry
 
         with self._lock:
             if self._api is not None and self._login_date == today:
                 return True
-            if (self._failed_at is not None and
+            if not force and (self._failed_at is not None and
                     (now - self._failed_at).total_seconds() < self._LOGIN_RETRY_SECS):
                 return False
 

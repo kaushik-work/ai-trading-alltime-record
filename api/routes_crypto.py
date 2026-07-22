@@ -13,6 +13,7 @@ on the hot path). Routes:
 """
 
 from __future__ import annotations
+import logging
 import os
 import time
 from datetime import datetime, timezone
@@ -24,6 +25,7 @@ from api.auth import get_current_user
 
 router = APIRouter(prefix="/api/crypto", tags=["crypto"])
 _auth = HTTPBearer(auto_error=False)
+logger = logging.getLogger(__name__)
 
 DELTA_BASE = os.environ.get("DELTA_BASE_URL", "https://api.india.delta.exchange")
 
@@ -452,6 +454,58 @@ def crypto_kill():
         }
     except Exception as e:
         return {"ok": False, "error": str(e)}
+
+
+@router.post("/test_buy_btc")
+def crypto_test_buy_btc(user: str = Depends(get_current_user)):
+    """Place a test market BUY order for 1 BTCUSD contract at 200x leverage.
+
+    WARNING: This places a real order in live mode. Use only for API testing.
+    The order is not tracked by the crypto runner; close it manually if it fills.
+    """
+    from core.brokers.delta_crypto import get_broker
+    symbol = "BTCUSD"
+    size = 1
+    leverage = 200
+    try:
+        broker = get_broker()
+        mark = broker.get_perp_mark(symbol)
+        if mark is None or mark <= 0:
+            raise HTTPException(status_code=503, detail="BTCUSD mark price unavailable")
+
+        if broker.mode == "live":
+            if not broker.set_leverage(symbol, leverage):
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Could not set {symbol} leverage to {leverage}x",
+                )
+
+        result = broker.place_order(
+            symbol=symbol,
+            side="buy",
+            size=size,
+            order_type="market_order",
+            leverage=None,
+            tag="dashboard_test",
+        )
+        logger.warning(
+            "Crypto test buy BTC by %s | mark=%s size=%s leverage=%s | result=%s",
+            user, mark, size, leverage, result,
+        )
+        return {
+            "symbol": symbol,
+            "side": "buy",
+            "size": size,
+            "leverage": leverage,
+            "mark_price": mark,
+            "mode": broker.mode,
+            "order_response": result,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception("Crypto test buy BTC failed: %s", e)
+        raise HTTPException(status_code=500, detail=str(e)) from e
 
 
 # ── strategy / instrument toggles ────────────────────────────────────────────

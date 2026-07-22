@@ -67,66 +67,69 @@ def nse_test_buy_ce(user: dict = Depends(_get_current_user)):
     The order is placed regardless of available funds; Angel One will reject if
     the account is not funded, and the rejection reason is returned.
     """
-    try:
-        from data.angel_fetcher import AngelFetcher
-        fetcher = AngelFetcher.get()
-        broker = AngelBroker(fetcher)
-        cache = OptionChainCache("NIFTY", fetcher)
+    from data.angel_fetcher import AngelFetcher
+    fetcher = AngelFetcher.get()
+    broker = AngelBroker(fetcher)
+    cache = OptionChainCache("NIFTY", fetcher)
 
-        # Auth + RMS check for visibility only.
-        if not fetcher._ensure_logged_in():
-            raise HTTPException(status_code=503, detail="Angel One not logged in")
-        rms = fetcher.get_rms() or {}
+    # Force a fresh login attempt (bypass scheduler cooldown) for user-initiated tests.
+    if not fetcher._ensure_logged_in(force=True):
+        logger.error("NSE test buy CE by %s: Angel One login failed", user)
+        raise HTTPException(status_code=503, detail="Angel One not logged in")
 
-        spot = cache.get_underlying_ltp()
-        if spot is None:
-            raise HTTPException(status_code=503, detail="NIFTY spot not available")
+    rms = fetcher.get_rms() or {}
 
-        expiry = cache.nearest_expiry(min_days=0)
-        if expiry is None:
-            raise HTTPException(status_code=503, detail="NIFTY expiry not available")
+    spot = cache.get_underlying_ltp()
+    if spot is None:
+        logger.error("NSE test buy CE by %s: NIFTY spot unavailable", user)
+        raise HTTPException(status_code=503, detail="NIFTY spot not available")
 
-        step = STEP_SIZES["NIFTY"]
-        atm = int(round(spot / step)) * step
-        ts, token = cache.resolve_leg(atm, "CE", expiry)
-        if not ts or not token:
-            raise HTTPException(status_code=503, detail=f"Could not resolve NIFTY {atm} CE")
+    expiry = cache.nearest_expiry(min_days=0)
+    if expiry is None:
+        logger.error("NSE test buy CE by %s: NIFTY expiry unavailable", user)
+        raise HTTPException(status_code=503, detail="NIFTY expiry not available")
 
-        quantity = LOT_SIZES["NIFTY"]
+    step = STEP_SIZES["NIFTY"]
+    atm = int(round(spot / step)) * step
+    ts, token = cache.resolve_leg(atm, "CE", expiry)
+    if not ts or not token:
+        logger.error("NSE test buy CE by %s: could not resolve NIFTY %s CE", user, atm)
+        raise HTTPException(status_code=503, detail=f"Could not resolve NIFTY {atm} CE")
 
-        # Fetch ask price so we can enter via LIMIT and avoid slippage.
-        quote = fetcher.get_option_quote(ts, token, EXCHANGE.get("NIFTY", "NFO"))
-        if not quote or quote.get("ask", 0) <= 0:
-            raise HTTPException(status_code=503, detail="Could not fetch NIFTY option quote")
-        limit_price = quote["ask"]
+    quantity = LOT_SIZES["NIFTY"]
 
-        result = broker.place_single_order(
-            "NIFTY", ts, token, "CE", "BUY", 1,
-            limit_price=limit_price,
-            sl_points=10.0,
-            target_points=50.0,
+    # Fetch ask price so we can enter via LIMIT and avoid slippage.
+    quote = fetcher.get_option_quote(ts, token, EXCHANGE.get("NIFTY", "NFO"))
+    if not quote or quote.get("ask", 0) <= 0:
+        logger.error(
+            "NSE test buy CE by %s: option quote unavailable for %s (quote=%s)",
+            user, ts, quote,
         )
-        logger.warning("NSE test buy CE by %s | spot=%s strike=%s qty=%s limit=%s | rms=%s | result=%s",
-                       user, spot, atm, quantity, limit_price, rms, result)
-        return {
-            "spot": spot,
-            "strike": atm,
-            "expiry": expiry.isoformat(),
-            "tradingsymbol": ts,
-            "token": token,
-            "lots": 1,
-            "quantity": quantity,
-            "limit_price": limit_price,
-            "available_cash": rms.get("availablecash"),
-            "available_limit": rms.get("availablelimitmargin"),
-            "net": rms.get("net"),
-            "order_response": result,
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("NSE test buy CE failed: %s", e)
-        raise HTTPException(status_code=500, detail=str(e)) from e
+        raise HTTPException(status_code=503, detail="Could not fetch NIFTY option quote")
+    limit_price = quote["ask"]
+
+    result = broker.place_single_order(
+        "NIFTY", ts, token, "CE", "BUY", 1,
+        limit_price=limit_price,
+        sl_points=10.0,
+        target_points=50.0,
+    )
+    logger.warning("NSE test buy CE by %s | spot=%s strike=%s qty=%s limit=%s | rms=%s | result=%s",
+                   user, spot, atm, quantity, limit_price, rms, result)
+    return {
+        "spot": spot,
+        "strike": atm,
+        "expiry": expiry.isoformat(),
+        "tradingsymbol": ts,
+        "token": token,
+        "lots": 1,
+        "quantity": quantity,
+        "limit_price": limit_price,
+        "available_cash": rms.get("availablecash"),
+        "available_limit": rms.get("availablelimitmargin"),
+        "net": rms.get("net"),
+        "order_response": result,
+    }
 
 
 @router.post("/backtest/synthetic_forward")

@@ -188,6 +188,8 @@ export default function CryptoHome() {
   const [killConfirm, setKillConfirm] = useState(false);
   const [killBusy, setKillBusy] = useState(false);
   const [killResult, setKillResult] = useState<KillResult | null>(null);
+  const [testBtcLoading, setTestBtcLoading] = useState(false);
+  const [testBtcResult, setTestBtcResult] = useState<any>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimer = useRef<any>(null);
 
@@ -207,6 +209,26 @@ export default function CryptoHome() {
     } finally {
       setKillBusy(false);
       setKillConfirm(false);
+    }
+  }
+
+  async function placeTestBuyBtc() {
+    if (!confirm("This will place a REAL market BUY order for 1 BTCUSD contract at 200x leverage. Continue?")) return;
+    setTestBtcLoading(true);
+    setTestBtcResult(null);
+    try {
+      const token = localStorage.getItem("aq_token");
+      const r = await fetch(`${_API}/api/crypto/test_buy_btc`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await r.json();
+      if (!r.ok) throw new Error(data.detail || `HTTP ${r.status}`);
+      setTestBtcResult({ ok: true, ...data });
+    } catch (e: any) {
+      setTestBtcResult({ ok: false, error: e?.message || "Test order failed" });
+    } finally {
+      setTestBtcLoading(false);
     }
   }
 
@@ -336,6 +358,13 @@ export default function CryptoHome() {
           </div>
           <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
             <button
+              onClick={placeTestBuyBtc}
+              disabled={testBtcLoading}
+              className="px-3 py-2 text-xs font-semibold rounded-lg border border-blue-500 text-blue-400 bg-blue-600/20 hover:bg-blue-600/30 transition-colors disabled:opacity-50"
+            >
+              {testBtcLoading ? "Placing..." : <><span className="hidden sm:inline">TEST Buy BTC 200x</span><span className="sm:hidden">TEST BTC</span></>}
+            </button>
+            <button
               onClick={() => setKillConfirm(true)}
               disabled={killBusy}
               className="px-4 py-2 text-xs font-semibold text-white rounded-lg shadow-md hover:opacity-90 disabled:opacity-50"
@@ -366,6 +395,39 @@ export default function CryptoHome() {
               </div>
               <button
                 onClick={() => setKillResult(null)}
+                className="text-xs text-gray-500 hover:text-white"
+              >
+                dismiss
+              </button>
+            </div>
+          </div>
+        )}
+
+        {testBtcResult && (
+          <div className={`border rounded-lg p-4 mb-6 ${
+            testBtcResult.ok ? "border-green-700 bg-green-950/30" : "border-red-700 bg-red-950/30"
+          }`}>
+            <div className="flex items-baseline justify-between">
+              <div>
+                <p className="font-semibold text-white">
+                  {testBtcResult.ok ? "✓ Test order submitted" : "✗ Test order failed"}
+                </p>
+                {testBtcResult.ok ? (
+                  <>
+                    <p className="text-xs text-gray-400 mt-1">
+                      {testBtcResult.symbol} {testBtcResult.side?.toUpperCase()} · size {testBtcResult.size} · leverage {testBtcResult.leverage}x · mode {testBtcResult.mode}
+                    </p>
+                    <p className="text-xs text-gray-400 mt-1">
+                      Mark: ${testBtcResult.mark_price?.toLocaleString(undefined, { maximumFractionDigits: 2 })}
+                    </p>
+                    <pre className="text-[11px] overflow-x-auto mt-2 text-gray-500">{JSON.stringify(testBtcResult.order_response, null, 2)}</pre>
+                  </>
+                ) : (
+                  <p className="text-xs text-gray-400 mt-1">{testBtcResult.error}</p>
+                )}
+              </div>
+              <button
+                onClick={() => setTestBtcResult(null)}
                 className="text-xs text-gray-500 hover:text-white"
               >
                 dismiss
