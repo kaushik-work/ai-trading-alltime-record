@@ -492,6 +492,11 @@ def crypto_test_buy_btc(user: str = Depends(get_current_user)):
             "Crypto test buy BTC by %s | mark=%s size=%s leverage=%s | result=%s",
             user, mark, size, leverage, result,
         )
+        if not result.get("ok"):
+            raise HTTPException(
+                status_code=400,
+                detail=result.get("error") or "order failed",
+            )
         return {
             "symbol": symbol,
             "side": "buy",

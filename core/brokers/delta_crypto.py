@@ -413,14 +413,25 @@ class DeltaCryptoBroker:
         }
         if limit_price is not None:
             body["limit_price"] = str(limit_price)
+        if tag:
+            body["client_order_id"] = str(tag)
         try:
             resp = self._request("POST", "/v2/orders", body=body, authed=True)
-            result = resp.get("result", {}) if isinstance(resp, dict) else {}
+            logger.info("place_order %s %s raw response: %s", symbol, side, resp)
+            if not isinstance(resp, dict):
+                return {"ok": False, "error": "unexpected response type", "response": resp}
+            if not resp.get("success"):
+                return {"ok": False, "error": resp.get("message") or resp.get("error") or "order rejected", "response": resp}
+            result = resp.get("result", {}) or {}
             fill_price = self._parse_fill_price(result)
-            logger.info("placed %s %d %s → %s fill=%s",
+            state = result.get("state") or result.get("status")
+            if state in ("rejected", "cancelled", "failed"):
+                return {"ok": False, "error": f"order {state}", "response": resp}
+            logger.info("placed %s %d %s → id=%s state=%s fill=%s",
                         side, size, symbol,
-                        result.get("id"), fill_price)
-            out = {"ok": True, "paper": False, "response": resp}
+                        result.get("id"), state, fill_price)
+            out = {"ok": True, "paper": False, "response": resp,
+                   "order_id": result.get("id"), "state": state}
             if fill_price is not None:
                 out["fill_price"] = fill_price
             return out
