@@ -13,8 +13,10 @@ on the hot path). Routes:
 """
 
 from __future__ import annotations
+import json
 import logging
 import os
+import re
 import time
 from datetime import datetime, timezone
 import requests
@@ -456,6 +458,31 @@ def crypto_kill():
         return {"ok": False, "error": str(e)}
 
 
+def _format_delta_error(error: str) -> str:
+    """Turn Delta's JSON error body into a human-readable message."""
+    if not error:
+        return "order failed"
+    m = re.search(r"\| body:\s*(.+)$", error)
+    if not m:
+        return error
+    try:
+        payload = json.loads(m.group(1))
+    except Exception:
+        return error
+    err = payload.get("error") or {}
+    if isinstance(err, str):
+        return err
+    code = err.get("code")
+    ctx = err.get("context") or {}
+    if code == "insufficient_margin":
+        return (
+            f"Insufficient margin on Delta. "
+            f"Available: {ctx.get('available_balance')}, "
+            f"required additional: {ctx.get('required_additional_balance')}"
+        )
+    return err.get("message") or code or error
+
+
 @router.post("/test_buy_btc")
 def crypto_test_buy_btc(user: str = Depends(get_current_user)):
     """Place a test market BUY order for 1 BTCUSD contract at 200x leverage.
@@ -495,7 +522,7 @@ def crypto_test_buy_btc(user: str = Depends(get_current_user)):
         if not result.get("ok"):
             raise HTTPException(
                 status_code=400,
-                detail=result.get("error") or "order failed",
+                detail=_format_delta_error(result.get("error")) or "order failed",
             )
         return {
             "symbol": symbol,
