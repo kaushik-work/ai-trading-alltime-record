@@ -367,8 +367,8 @@ class DeltaCryptoBroker:
             logger.warning("set_leverage: product_id not found for %s", symbol)
             return False
         try:
-            resp = self._request("POST", "/v2/products/orders/leverage",
-                                 body={"product_id": pid, "leverage": str(leverage)},
+            resp = self._request("POST", f"/v2/products/{pid}/orders/leverage",
+                                 body={"leverage": leverage},
                                  authed=True)
             logger.info("leverage set: %s (id=%s) → %d×", symbol, pid, leverage)
             return resp.get("success", False)
@@ -398,10 +398,13 @@ class DeltaCryptoBroker:
                 "fill_price": mark, "tag": tag,
                 "timestamp": int(time.time()),
             }
+        pid = self.get_product_id(symbol)
+        if pid is None:
+            return {"ok": False, "error": f"product_id not found for {symbol}"}
         if leverage is not None:
             self.set_leverage(symbol, leverage)
         body = {
-            "product_symbol": symbol,
+            "product_id": pid,
             "size": int(size),
             "side": side,
             "order_type": order_type,

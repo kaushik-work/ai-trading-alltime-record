@@ -130,6 +130,14 @@ class AngelFetcher:
                 import pyotp
                 from SmartApi import SmartConnect
 
+                # Angel's python SDK currently points GTT create/modify/cancel at a
+                # `/gtt-service/...` prefix that the gateway rejects with
+                # "no Route matched with those values".  Fall back to the legacy
+                # paths that still work.
+                SmartConnect._routes["api.gtt.create"] = "/rest/secure/angelbroking/gtt/v1/createRule"
+                SmartConnect._routes["api.gtt.modify"] = "/rest/secure/angelbroking/gtt/v1/modifyRule"
+                SmartConnect._routes["api.gtt.cancel"] = "/rest/secure/angelbroking/gtt/v1/cancelRule"
+
                 api = SmartConnect(api_key=api_key)
 
                 # Try stored JWT first — avoids TOTP call on container restart
@@ -803,10 +811,10 @@ class AngelFetcher:
                 "triggerprice": str(triggerprice),
                 "timeperiod": str(timeperiod),
             }
-            resp = self._api.gttCreateRule(payload)
+            resp = self._api._request("api.gtt.create", "POST", payload)
             if self._is_auth_failure(resp):
                 if self._ensure_logged_in():
-                    resp = self._api.gttCreateRule(payload)
+                    resp = self._api._request("api.gtt.create", "POST", payload)
             return resp
         except Exception as e:
             logger.error("gtt_create_rule failed: %s", e)
