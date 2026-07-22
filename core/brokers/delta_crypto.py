@@ -114,9 +114,13 @@ class DeltaCryptoBroker:
                     time.sleep(wait); continue
                 # 4xx auth/scope errors don't recover with retry -- raise now
                 # so the caller can show a meaningful message and stop hammering.
-                if 400 <= r.status_code < 500 and r.status_code != 429:
-                    r.raise_for_status()
-                r.raise_for_status()
+                if r.status_code >= 400:
+                    text = r.text
+                    logger.warning("delta %s %s -> %s: %s", method, path, r.status_code, text)
+                    raise requests.HTTPError(
+                        f"{r.status_code} {r.reason} for url: {r.url} | body: {text}",
+                        response=r,
+                    )
                 return r.json()
             except requests.HTTPError as e:
                 if e.response is not None and 400 <= e.response.status_code < 500:
@@ -401,6 +405,7 @@ class DeltaCryptoBroker:
         pid = self.get_product_id(symbol)
         if pid is None:
             return {"ok": False, "error": f"product_id not found for {symbol}"}
+        logger.info("place_order resolved %s -> product_id=%s", symbol, pid)
         if leverage is not None:
             self.set_leverage(symbol, leverage)
         body = {
