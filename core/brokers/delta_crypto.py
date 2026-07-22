@@ -63,6 +63,7 @@ class DeltaCryptoBroker:
         self._pos_cache: dict[str, dict] = {"data": None, "ts": 0.0}
         self._bal_cache: dict[str, float] = {"value": -1.0, "ts": 0.0}
         self._futs_cache: dict = {"data": None, "ts": 0.0}
+        self._prod_cache: dict = {"data": None, "ts": 0.0}
         self._has_auth = bool(self.api_key and self.api_secret)
         if self.mode == "live" and not self._has_auth:
             raise RuntimeError(
@@ -338,15 +339,38 @@ class DeltaCryptoBroker:
                 logger.error("get_balance: %s (next retry in 60s)", e)
         return None
 
+    def _product_list(self) -> list:
+        if self._prod_cache.get("data") is None or time.time() - self._prod_cache["ts"] > 3600:
+            try:
+                data = self._request("GET", "/v2/products",
+                                      params={"contract_types": "perpetual_futures"})
+                self._prod_cache = {"data": data.get("result", []), "ts": time.time()}
+            except Exception as e:
+                logger.warning("delta product list fetch failed: %s", e)
+                return []
+        return self._prod_cache.get("data", [])
+
+    def get_product_id(self, symbol: str) -> Optional[int]:
+        """Resolve product_id from symbol using Delta product list."""
+        for p in self._product_list():
+            if p.get("symbol") == symbol:
+                pid = p.get("id")
+                return int(pid) if pid is not None else None
+        return None
+
     def set_leverage(self, symbol: str, leverage: int) -> bool:
         """Set leverage for a product before placing orders. No-op in paper mode."""
         if self.mode == "paper":
             return True
+        pid = self.get_product_id(symbol)
+        if pid is None:
+            logger.warning("set_leverage: product_id not found for %s", symbol)
+            return False
         try:
             resp = self._request("POST", "/v2/products/orders/leverage",
-                                 body={"product_symbol": symbol, "leverage": leverage},
+                                 body={"product_id": pid, "leverage": str(leverage)},
                                  authed=True)
-            logger.info("leverage set: %s → %d×", symbol, leverage)
+            logger.info("leverage set: %s (id=%s) → %d×", symbol, pid, leverage)
             return resp.get("success", False)
         except Exception as e:
             logger.warning("set_leverage(%s, %d) failed: %s", symbol, leverage, e)

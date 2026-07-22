@@ -99,14 +99,22 @@ def nse_test_buy_ce(user: dict = Depends(_get_current_user)):
     quantity = LOT_SIZES["NIFTY"]
 
     # Fetch ask price so we can enter via LIMIT and avoid slippage.
+    # Fall back to LTP when ask is zero (after-hours / illiquid quote).
     quote = fetcher.get_option_quote(ts, token, EXCHANGE.get("NIFTY", "NFO"))
-    if not quote or quote.get("ask", 0) <= 0:
+    if not quote:
         logger.error(
-            "NSE test buy CE by %s: option quote unavailable for %s (quote=%s)",
-            user, ts, quote,
+            "NSE test buy CE by %s: option quote unavailable for %s",
+            user, ts,
         )
         raise HTTPException(status_code=503, detail="Could not fetch NIFTY option quote")
-    limit_price = quote["ask"]
+    limit_price = quote.get("ask") or quote.get("ltp") or 0
+    if limit_price <= 0:
+        logger.error(
+            "NSE test buy CE by %s: option quote has no usable price for %s (quote=%s)",
+            user, ts, quote,
+        )
+        raise HTTPException(status_code=503, detail="NIFTY option quote has no usable price")
+    limit_price = round(float(limit_price), 2)
 
     result = broker.place_single_order(
         "NIFTY", ts, token, "CE", "BUY", 1,
