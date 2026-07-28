@@ -284,8 +284,8 @@ except RuntimeError as e:
     write_summary("LOGIN_FAILED", 0, 0, 1, 0)
     sys.exit(1)
 
-expiry          = None
-token_map       = []
+expiries        = []
+token_maps      = {}
 last_atm        = None
 last_health     = time.time()
 total_rows      = 0
