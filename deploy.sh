@@ -7,7 +7,9 @@ git pull
 docker compose down --remove-orphans 2>/dev/null || true
 docker rm -f ai-trading-alltime-record-api-1 2>/dev/null || true
 
-docker compose build --no-cache
+# Build profile-gated collector images explicitly — plain `compose build`
+# skips them and the recreate below would reuse stale images.
+docker compose build --no-cache api collector collector-banknifty collector-finnifty collector-sensex
 docker compose up -d --force-recreate
 
 # Restart NSE option-chain collectors (do NOT auto-start nse-runner here).
