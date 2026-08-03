@@ -2,122 +2,201 @@
 @tailwind components;
 @tailwind utilities;
 
-/* ── Base ─────────────────────────────────────────────────────────────────── */
+/* ═══════════════════════════════════════════════════════════════════════════
+   Design tokens — light theme, single source of truth.
+
+   Contrast ratios below are measured against --surface (#fcfcfb). Anything
+   used for body-size text clears 4.5:1; anything used only for marks, large
+   text, or borders clears 3:1. Values marked "marks only" must never carry
+   small text.
+
+   P&L direction is NEVER encoded by color alone: green vs red measures only
+   ΔE 4.1 under deuteranopia, so every signed value also carries a +/- sign
+   and a directional glyph, and candles use fill-vs-outline.
+   ═══════════════════════════════════════════════════════════════════════════ */
+:root {
+  color-scheme: light;
+
+  /* Surfaces */
+  --plane:      #f9f9f7;   /* page background          */
+  --surface:    #fcfcfb;   /* cards, panels            */
+  --surface-2:  #f2f2ef;   /* table headers, wells     */
+
+  /* Ink */
+  --ink:        #0b0b0b;   /* 19.2:1  primary          */
+  --ink-2:      #52514e;   /*  7.7:1  secondary        */
+  --ink-3:      #6f6d67;   /*  5.0:1  labels; 4.6:1 on --surface-2 */
+
+  /* Lines */
+  --line:       #e1e0d9;
+  --line-strong: rgba(11, 11, 11, 0.10);
+
+  /* Brand */
+  --brand:      #627eea;   /*  3.6:1  marks / large    */
+  --brand-ink:  #4a3aa7;   /*  8.3:1  accent text      */
+  --brand-wash: #eef1fd;
+
+  /* Semantic — profit */
+  --up:         #0ca30c;   /*  3.3:1  marks only       */
+  --up-ink:     #006300;   /*  7.3:1  text             */
+  --up-wash:    #e9f5e9;
+
+  /* Semantic — loss */
+  --down:       #d03b3b;   /*  4.7:1  text + marks     */
+  --down-ink:   #a82727;   /*  6.6:1  text             */
+  --down-wash:  #fbecec;
+
+  /* Semantic — caution */
+  --warn:       #fab219;   /*  1.8:1  marks only       */
+  --warn-ink:   #7a5200;   /*  6.4:1  text             */
+  --warn-wash:  #fdf4e3;
+
+  /* Geometry */
+  --r-sm: 8px;
+  --r-md: 12px;
+  --r-lg: 16px;
+  --shadow-sm: 0 1px 2px rgba(11, 11, 11, .04), 0 1px 3px rgba(11, 11, 11, .06);
+  --shadow-md: 0 2px 4px rgba(11, 11, 11, .04), 0 4px 12px rgba(11, 11, 11, .07);
+}
+
+html { -webkit-text-size-adjust: 100%; }
+
 body {
-  background: #f0f2f5;
-  color: #111827;
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  background: var(--plane);
+  color: var(--ink);
+  font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
-::-webkit-scrollbar { width: 5px; height: 5px; }
-::-webkit-scrollbar-track { background: #f0f2f5; }
-::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
+/* Numbers in columns must align; standalone display numbers must not. */
+.tnum { font-variant-numeric: tabular-nums; }
 
-/* ── Inputs ───────────────────────────────────────────────────────────────── */
-.aq-input {
-  width: 100%;
-  background: #ffffff;
-  border: 1.5px solid #e5e7eb;
-  border-radius: 12px;
-  padding: 13px 16px;
-  font-size: 14px;
-  color: #111827;
-  outline: none;
-  transition: border-color 0.2s, box-shadow 0.2s;
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb {
+  background: #d8d7d0; border-radius: 99px; border: 3px solid var(--plane);
 }
-.aq-input::placeholder { color: #9ca3af; }
-.aq-input:focus {
-  border-color: #6366f1;
-  box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.1);
+::-webkit-scrollbar-thumb:hover { background: #c3c2b7; }
+
+/* Respect users who ask for less motion. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: .01ms !important;
+    transition-duration: .01ms !important;
+  }
 }
 
-/* ── Buttons ──────────────────────────────────────────────────────────────── */
-.aq-btn-primary {
-  width: 100%;
-  background: #111827;
-  color: #ffffff;
-  font-weight: 700;
-  font-size: 14px;
-  padding: 14px;
-  border-radius: 999px;
-  border: none;
-  cursor: pointer;
-  transition: background 0.2s, opacity 0.2s;
-}
-.aq-btn-primary:hover   { background: #1f2937; }
-.aq-btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+@layer components {
+  /* ── Surfaces ─────────────────────────────────────────────────────────── */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: var(--r-lg);
+    box-shadow: var(--shadow-sm);
+  }
+  .card-pad { padding: 1rem; }
+  @media (min-width: 640px) { .card-pad { padding: 1.25rem; } }
 
-.aq-btn-outline {
-  width: 100%;
-  background: transparent;
-  color: #374151;
-  font-weight: 600;
-  font-size: 14px;
-  padding: 13px;
-  border-radius: 999px;
-  border: 1.5px solid #e5e7eb;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
-  transition: border-color 0.2s, background 0.2s;
-}
-.aq-btn-outline:hover { border-color: #d1d5db; background: #f9fafb; }
+  .card-head {
+    display: flex; align-items: center; justify-content: space-between;
+    gap: .75rem; padding: .875rem 1rem;
+    border-bottom: 1px solid var(--line);
+  }
+  @media (min-width: 640px) { .card-head { padding: 1rem 1.25rem; } }
 
-.aq-btn-danger {
-  background: #fef2f2;
-  color: #dc2626;
-  font-weight: 600;
-  font-size: 13px;
-  padding: 8px 16px;
-  border-radius: 8px;
-  border: none;
-  cursor: pointer;
-  transition: background 0.2s;
-}
-.aq-btn-danger:hover { background: #fee2e2; }
+  .card-title {
+    font-size: .8125rem; font-weight: 650; letter-spacing: .01em;
+    color: var(--ink);
+  }
 
-.aq-btn-success {
-  background: #f0fdf4;
-  color: #16a34a;
-  font-weight: 600;
-  font-size: 13px;
-  padding: 8px 16px;
-  border-radius: 8px;
-  border: none;
-  cursor: pointer;
-  transition: background 0.2s;
-}
-.aq-btn-success:hover { background: #dcfce7; }
+  /* ── Type ─────────────────────────────────────────────────────────────── */
+  .label {
+    font-size: .6875rem; font-weight: 550; letter-spacing: .04em;
+    text-transform: uppercase; color: var(--ink-3);
+  }
+  .muted { color: var(--ink-2); font-size: .8125rem; }
 
-/* ── Cards ────────────────────────────────────────────────────────────────── */
-.aq-card {
-  background: #ffffff;
-  border: 1px solid #e5e7eb;
-  border-radius: 16px;
-  padding: 20px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.06);
-}
+  /* ── Buttons ──────────────────────────────────────────────────────────── */
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    gap: .5rem; border-radius: var(--r-sm); border: 1px solid transparent;
+    font-size: .8125rem; font-weight: 600; padding: .5rem .875rem;
+    cursor: pointer; transition: background .15s, border-color .15s, opacity .15s;
+    white-space: nowrap; min-height: 40px;
+  }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+  .btn:focus-visible {
+    outline: 2px solid var(--brand); outline-offset: 2px;
+  }
 
-/* ── Divider with text ────────────────────────────────────────────────────── */
-.aq-divider {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  color: #9ca3af;
-  font-size: 13px;
-}
-.aq-divider::before,
-.aq-divider::after {
-  content: "";
-  flex: 1;
-  height: 1px;
-  background: #e5e7eb;
-}
+  .btn-primary { background: var(--ink); color: #fff; }
+  .btn-primary:hover:not(:disabled) { background: #2b2b2b; }
 
-/* ── Login page keeps dark bg ─────────────────────────────────────────────── */
-.login-bg {
-  background: #0d0d14;
-  color: #f0f0f0;
+  .btn-ghost {
+    background: var(--surface); color: var(--ink-2); border-color: var(--line);
+  }
+  .btn-ghost:hover:not(:disabled) { background: var(--surface-2); color: var(--ink); }
+
+  .btn-danger { background: var(--down); color: #fff; }
+  .btn-danger:hover:not(:disabled) { background: #b83232; }
+
+  .btn-danger-quiet {
+    background: var(--down-wash); color: var(--down-ink);
+    border-color: rgba(208, 59, 59, .25);
+  }
+  .btn-danger-quiet:hover:not(:disabled) { background: #f7dede; }
+
+  /* ── Status pill — always icon/label + color, never color alone ───────── */
+  .pill {
+    display: inline-flex; align-items: center; gap: .375rem;
+    border-radius: 99px; padding: .1875rem .5rem;
+    font-size: .6875rem; font-weight: 600; line-height: 1.4;
+    border: 1px solid transparent; white-space: nowrap;
+  }
+  .pill-up      { background: var(--up-wash);    color: var(--up-ink);    border-color: rgba(12,163,12,.22); }
+  .pill-down    { background: var(--down-wash);  color: var(--down-ink);  border-color: rgba(208,59,59,.22); }
+  .pill-warn    { background: var(--warn-wash);  color: var(--warn-ink);  border-color: rgba(250,178,25,.35); }
+  .pill-brand   { background: var(--brand-wash); color: var(--brand-ink); border-color: rgba(98,126,234,.25); }
+  .pill-neutral { background: var(--surface-2);  color: var(--ink-2);     border-color: var(--line); }
+
+  .dot { width: 6px; height: 6px; border-radius: 99px; flex: none; }
+
+  /* ── Inputs ───────────────────────────────────────────────────────────── */
+  .field {
+    width: 100%; background: var(--surface); color: var(--ink);
+    border: 1px solid var(--line); border-radius: var(--r-sm);
+    padding: .6875rem .875rem; font-size: .9375rem; outline: none;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .field::placeholder { color: var(--ink-3); }
+  .field:focus {
+    border-color: var(--brand);
+    box-shadow: 0 0 0 3px rgba(98, 126, 234, .15);
+  }
+
+  /* ── Tables (desktop) ─────────────────────────────────────────────────── */
+  .tbl { width: 100%; border-collapse: collapse; font-size: .8125rem; }
+  .tbl thead th {
+    background: var(--surface-2); color: var(--ink-3);
+    font-size: .6875rem; font-weight: 600; letter-spacing: .04em;
+    text-transform: uppercase; text-align: left;
+    padding: .5rem .75rem; white-space: nowrap;
+  }
+  .tbl tbody td {
+    padding: .625rem .75rem; border-top: 1px solid var(--line);
+    color: var(--ink-2);
+  }
+  .tbl tbody tr:hover td { background: var(--surface-2); }
+
+  /* Wide content scrolls inside its own container — the page never does. */
+  .scroll-x { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+  /* ── Skeleton ─────────────────────────────────────────────────────────── */
+  .skel {
+    background: linear-gradient(90deg, var(--surface-2) 25%, #ebebe7 37%, var(--surface-2) 63%);
+    background-size: 400% 100%;
+    animation: skel 1.4s ease infinite;
+    border-radius: var(--r-sm);
+  }
+  @keyframes skel { 0% { background-position: 100% 50% } 100% { background-position: 0 50% } }
 }

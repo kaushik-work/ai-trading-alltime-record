@@ -1,17 +1,15 @@
 import type { Config } from "tailwindcss";
 
+/** Colors live as CSS custom properties in app/globals.css so light/dark and
+ *  contrast auditing happen in one place. Reference them as
+ *  `text-[var(--ink-2)]` / `bg-[var(--surface)]` rather than adding aliases
+ *  here — two sources of truth is how the old dark palette drifted. */
 const config: Config = {
   content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}"],
   theme: {
     extend: {
-      colors: {
-        bg:      "#0d0d14",
-        surface: "#13131f",
-        border:  "#1e1e30",
-        accent:  "#00d4ff",
-        green:   "#22c55e",
-        red:     "#ef4444",
-        muted:   "#6b7280",
+      screens: {
+        xs: "420px",
       },
     },
   },

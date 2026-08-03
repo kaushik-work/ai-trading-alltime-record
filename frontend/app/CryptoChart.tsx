@@ -1,385 +1,264 @@
 "use client";
 import { useEffect, useRef, useState } from "react";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+import { API, authHeaders, usd } from "./lib/format";
+import { Card, Pill } from "./components/ui";
 
 type Candle = { time: number; open: number; high: number; low: number; close: number };
-type Zone   = { top: number; bottom: number; price: number; strength: number;
-                volume?: number; volume_norm?: number };
-type Level  = { price: number; type: "support" | "resistance"; strength: number };
-type EmaPt  = { time: number; value: number };
+type Zone = { top: number; bottom: number; price: number; strength: number; volume_norm?: number };
 
 type ChartData = {
   candles: Candle[];
-  levels?: Level[];
   supply_zones?: Zone[];
   demand_zones?: Zone[];
   structure?: string;
-  position?: string;
-  current_price?: number;
-  nearest_support?: number | null;
-  nearest_resistance?: number | null;
-  ema20?: EmaPt[];
-  ema50?: EmaPt[];
-  ema200?: EmaPt[];
-  poc?: number | null;
-  vah?: number | null;
-  val?: number | null;
   error?: string;
 };
 
 type SignalSummary = {
   stateLabel: string;
-  stateColor: string;
+  tone: "up" | "down" | "warn" | "brand" | "neutral";
   reason: string;
-  trend: string;
-  volFilterOk?: boolean;
-  vol24h?: number;
 };
 
 type Props = {
-  // Asset → live mark mapping. The chart picks the correct one based on
-  // its internal asset toggle, so the LIVE line and candle extension never
-  // get the WRONG asset's price.
-  livePrices?: { ETH?: number | null };
-  // Current strategy signal state so the chart header matches Signal Radar.
+  livePrice?: number | null;
   signal?: SignalSummary | null;
 };
 
-// Timeframe → (resolution sent to Delta, lookback hours). Tuned to keep
-// the candle count visible without going off the right edge.
 const TIMEFRAMES = {
-  "5m":  { resolution: "5m",  hours:   24, label: "last 24h"   },
-  "15m": { resolution: "15m", hours:   72, label: "last 3d"    },
-  "1h":  { resolution: "1h",  hours:  168, label: "last 7d"    },
-  "4h":  { resolution: "4h",  hours:  720, label: "last 30d"   },
-  "1d":  { resolution: "1d",  hours: 2160, label: "last 90d"   },
+  "5m":  { resolution: "5m",  hours:   24, label: "24h" },
+  "15m": { resolution: "15m", hours:   72, label: "3d"  },
+  "1h":  { resolution: "1h",  hours:  168, label: "7d"  },
+  "4h":  { resolution: "4h",  hours:  720, label: "30d" },
+  "1d":  { resolution: "1d",  hours: 2160, label: "90d" },
 } as const;
 type Timeframe = keyof typeof TIMEFRAMES;
-const DEFAULT_TF: Timeframe = "5m";
 
-const STRUCTURE_COLORS: Record<string, string> = {
-  uptrend:   "#22c55e",
-  downtrend: "#ef4444",
-  ranging:   "#94a3b8",
+const STRUCTURE_TONE: Record<string, SignalSummary["tone"]> = {
+  uptrend: "up", downtrend: "down", ranging: "neutral",
 };
 
-export default function CryptoChart({ livePrices, signal }: Props) {
-  const [asset] = useState<"ETH">("ETH");
-  const [timeframe, setTimeframe] = useState<Timeframe>(DEFAULT_TF);
-  const containerRef   = useRef<HTMLDivElement>(null);
-  const chartRef       = useRef<any>(null);
+// Light-surface chart chrome, matched to the app tokens in globals.css.
+const CHROME = {
+  surface: "#fcfcfb",
+  text:    "#52514e",
+  grid:    "#e1e0d9",
+  border:  "#c3c2b7",
+  up:      "#0ca30c",
+  down:    "#d03b3b",
+  brand:   "#627eea",
+};
+
+export default function CryptoChart({ livePrice, signal }: Props) {
+  const [timeframe, setTimeframe] = useState<Timeframe>("5m");
+  const containerRef = useRef<HTMLDivElement>(null);
+  const chartRef = useRef<any>(null);
   const candleSeriesRef = useRef<any>(null);
   const livePriceLineRef = useRef<any>(null);
+  const zoneLinesRef = useRef<any[]>([]);
   const [data, setData] = useState<ChartData | null>(null);
   const [loading, setLoading] = useState(true);
   const [err, setErr] = useState<string | null>(null);
 
-  // Pick the live price for the asset currently shown — this is the bug that
-  // caused the ETH chart to render with BTC's $63k LIVE line crushing the
-  // ETH candles to invisibility.
-  const livePrice = livePrices?.ETH ?? undefined;
-
-  // Fetch on asset / timeframe change + every 30s
+  /* ── Fetch: initial + 30s refresh. Only the DATA changes on refresh; the
+        chart instance is created once so zoom/pan survive. ───────────────── */
   useEffect(() => {
     let cancelled = false;
     const tf = TIMEFRAMES[timeframe];
     const load = (initial: boolean) => {
       if (initial) { setLoading(true); setErr(null); }
-      const token = localStorage.getItem("aq_token");
-      const headers = { Authorization: `Bearer ${token}` };
-      fetch(`${API_URL}/api/crypto/candles?asset=${asset}&resolution=${tf.resolution}&hours=${tf.hours}`, { headers })
-        .then(r => r.json())
+      fetch(`${API}/api/crypto/candles?asset=ETH&resolution=${tf.resolution}&hours=${tf.hours}`,
+            { headers: authHeaders() })
+        .then((r) => r.json())
         .then((d: ChartData) => {
           if (cancelled) return;
           if (d.error && initial) setErr(d.error);
           setData(d);
           if (initial) setLoading(false);
         })
-        .catch(e => {
-          if (cancelled) return;
-          if (initial) { setErr(e?.message || "Network error"); setLoading(false); }
+        .catch((e) => {
+          if (cancelled || !initial) return;
+          setErr(e?.message || "Could not load chart data");
+          setLoading(false);
         });
     };
     load(true);
     const iv = setInterval(() => load(false), 30_000);
     return () => { cancelled = true; clearInterval(iv); };
-  }, [asset, timeframe]);
+  }, [timeframe]);
 
-  // Build/rebuild chart when data arrives
+  /* ── Create the chart ONCE ─────────────────────────────────────────────── */
   useEffect(() => {
-    if (!data?.candles?.length || !containerRef.current) return;
-
-    let ro: ResizeObserver | null = null;
+    if (!containerRef.current) return;
     let disposed = false;
+    let ro: ResizeObserver | null = null;
 
-    import("lightweight-charts").then(({ createChart, LineStyle, CrosshairMode }) => {
-      if (disposed || !containerRef.current) return;
-      if (chartRef.current) { chartRef.current.remove(); chartRef.current = null; }
+    import("lightweight-charts").then(({ createChart, CrosshairMode }) => {
+      if (disposed || !containerRef.current || chartRef.current) return;
 
-      const chart = createChart(containerRef.current!, {
-        width:  containerRef.current!.clientWidth,
-        height: 520,
-        layout: { background: { color: "#0e0e1a" }, textColor: "#94a3b8" },
-        grid:   { vertLines: { color: "#1e1e30" }, horzLines: { color: "#1e1e30" } },
+      const chart = createChart(containerRef.current, {
+        width: containerRef.current.clientWidth,
+        height: containerRef.current.clientHeight,
+        layout: { background: { color: CHROME.surface }, textColor: CHROME.text, fontSize: 11 },
+        grid: { vertLines: { color: CHROME.grid }, horzLines: { color: CHROME.grid } },
         crosshair: { mode: CrosshairMode.Normal },
-        rightPriceScale: { borderColor: "#1e1e30" },
+        rightPriceScale: { borderColor: CHROME.border },
+        handleScale: { axisPressedMouseMove: { time: true, price: false } },
         timeScale: {
-          borderColor: "#1e1e30",
-          timeVisible: true,
-          secondsVisible: false,
-          // Render in the browser's LOCAL timezone (IST for India). Without
-          // this, lightweight-charts defaults to UTC which is off by 5h30
-          // and made the time labels look "wrong".
+          borderColor: CHROME.border, timeVisible: true, secondsVisible: false,
           tickMarkFormatter: (t: number) => {
             const d = new Date(t * 1000);
-            const hh = d.getHours().toString().padStart(2, "0");
-            const mm = d.getMinutes().toString().padStart(2, "0");
-            return `${hh}:${mm}`;
+            return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
           },
         },
         localization: {
-          timeFormatter: (t: number) => {
-            const d = new Date(t * 1000);
-            return d.toLocaleString(undefined, {
-              day: "2-digit", month: "short",
-              hour: "2-digit", minute: "2-digit", hour12: false,
-            });
-          },
+          timeFormatter: (t: number) =>
+            new Date(t * 1000).toLocaleString(undefined, {
+              day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit", hour12: false,
+            }),
         },
       });
       chartRef.current = chart;
 
-      const candles = data.candles;
-      const tStart = candles[0].time;
-      const tEnd   = candles[candles.length - 1].time;
-
-      // ── Supply zones (red filled rectangles) — volume-weighted opacity ────
-      (data.supply_zones || []).forEach(z => {
-        const op = 0.10 + (z.volume_norm ?? 0) * 0.30;   // 0.10-0.40
-        const color = `rgba(239, 68, 68, ${op})`;
-        const band = chart.addBaselineSeries({
-          baseValue: { type: "price", price: z.bottom },
-          topFillColor1: color, topFillColor2: color,
-          topLineColor: "rgba(0,0,0,0)",
-          bottomFillColor1: "rgba(0,0,0,0)", bottomFillColor2: "rgba(0,0,0,0)",
-          bottomLineColor: "rgba(0,0,0,0)",
-          priceLineVisible: false,
-          lastValueVisible: false,
-          crosshairMarkerVisible: false,
-        });
-        band.setData([
-          { time: tStart as any, value: z.top },
-          { time: tEnd   as any, value: z.top },
-        ]);
+      // Hollow up-candles / filled down-candles. Green vs red alone measures
+      // only ~4 ΔE under deuteranopia, so direction also reads as fill-vs-outline.
+      candleSeriesRef.current = chart.addCandlestickSeries({
+        upColor: "rgba(0,0,0,0)", downColor: CHROME.down,
+        borderUpColor: CHROME.up, borderDownColor: CHROME.down,
+        wickUpColor: CHROME.up, wickDownColor: CHROME.down,
+        borderVisible: true,
       });
 
-      // ── Demand zones (green filled rectangles) ─────────────────────────────
-      (data.demand_zones || []).forEach(z => {
-        const op = 0.10 + (z.volume_norm ?? 0) * 0.30;
-        const color = `rgba(34, 197, 94, ${op})`;
-        const band = chart.addBaselineSeries({
-          baseValue: { type: "price", price: z.bottom },
-          topFillColor1: color, topFillColor2: color,
-          topLineColor: "rgba(0,0,0,0)",
-          bottomFillColor1: "rgba(0,0,0,0)", bottomFillColor2: "rgba(0,0,0,0)",
-          bottomLineColor: "rgba(0,0,0,0)",
-          priceLineVisible: false,
-          lastValueVisible: false,
-          crosshairMarkerVisible: false,
-        });
-        band.setData([
-          { time: tStart as any, value: z.top },
-          { time: tEnd   as any, value: z.top },
-        ]);
-      });
-
-      // ── Candles (drawn after zones so they sit on top) ────────────────────
-      const candleSeries = chart.addCandlestickSeries({
-        upColor:   "#22c55e", downColor: "#ef4444",
-        borderUpColor: "#22c55e", borderDownColor: "#ef4444",
-        wickUpColor:   "#22c55e", wickDownColor:   "#ef4444",
-      });
-      candleSeries.setData(candles.map(c => ({ ...c, time: c.time as any })));
-      candleSeriesRef.current = candleSeries;
-
-      // ── Zone borders (top + bottom thin lines so the band edges are crisp)
-      const lw1 = 1 as 1 | 2 | 3 | 4;
-      (data.supply_zones || []).forEach((z, i) => {
-        candleSeries.createPriceLine({
-          price: z.top, color: "#ef4444aa", lineWidth: lw1,
-          lineStyle: LineStyle.Solid, axisLabelVisible: false,
-          title: i === 0 ? "SUPPLY" : "",
-        });
-        candleSeries.createPriceLine({
-          price: z.bottom, color: "#ef4444aa", lineWidth: lw1,
-          lineStyle: LineStyle.Solid, axisLabelVisible: false, title: "",
-        });
-      });
-      (data.demand_zones || []).forEach((z, i) => {
-        candleSeries.createPriceLine({
-          price: z.top, color: "#22c55eaa", lineWidth: lw1,
-          lineStyle: LineStyle.Solid, axisLabelVisible: false,
-          title: i === 0 ? "DEMAND" : "",
-        });
-        candleSeries.createPriceLine({
-          price: z.bottom, color: "#22c55eaa", lineWidth: lw1,
-          lineStyle: LineStyle.Solid, axisLabelVisible: false, title: "",
-        });
-      });
-
-      // S/R levels, POC/VAH/VAL volume-profile, and EMA20/50/200 ribbons
-      // were intentionally removed — user prefers a minimal chart that
-      // shows ONLY price + supply/demand zones + LIVE price marker.
-      // Data fields (levels, poc, vah, val, ema*) still come from the API
-      // and remain available if we want to bring any back.
-
-      // ── Live price line ───────────────────────────────────────────────────
-      livePriceLineRef.current = candleSeries.createPriceLine({
-        price: livePrice ?? candles[candles.length - 1].close,
-        color: "#627eea",
-        lineWidth: 2 as 1 | 2 | 3 | 4,
-        lineStyle: LineStyle.Solid,
-        axisLabelVisible: true,
-        title: "LIVE",
-      });
-
-      chart.timeScale().fitContent();
       ro = new ResizeObserver(() => {
         if (disposed || !chartRef.current || !containerRef.current) return;
         try {
-          chartRef.current.applyOptions({ width: containerRef.current.clientWidth });
-        } catch {
-          // chart may have been disposed by a parallel cleanup
-        }
+          chartRef.current.applyOptions({
+            width: containerRef.current.clientWidth,
+            height: containerRef.current.clientHeight,
+          });
+        } catch { /* disposed mid-resize */ }
       });
-      ro.observe(containerRef.current!);
+      ro.observe(containerRef.current);
     });
 
     return () => {
       disposed = true;
-      if (ro) ro.disconnect();
-      if (chartRef.current) {
-        chartRef.current.remove();
-        chartRef.current = null;
-      }
+      ro?.disconnect();
+      if (chartRef.current) { chartRef.current.remove(); chartRef.current = null; }
       candleSeriesRef.current = null;
       livePriceLineRef.current = null;
+      zoneLinesRef.current = [];
     };
-  }, [data, asset]);
+  }, []);
 
-  // Live price tick — update last candle in place
+  /* ── Push new data into the existing series ────────────────────────────── */
+  const didFit = useRef(false);
   useEffect(() => {
-    if (!livePrice || !candleSeriesRef.current || !livePriceLineRef.current) return;
+    const series = candleSeriesRef.current;
+    if (!series || !data?.candles?.length) return;
     try {
-      livePriceLineRef.current.applyOptions({ price: livePrice });
-      if (data?.candles?.length) {
-        const last = data.candles[data.candles.length - 1];
-        const hi = Math.max(last.high, livePrice);
-        const lo = Math.min(last.low,  livePrice);
-        candleSeriesRef.current.update({
-          time: last.time as any,
-          open: last.open, high: hi, low: lo, close: livePrice,
+      series.setData(data.candles.map((c) => ({ ...c, time: c.time as any })));
+
+      // Redraw S/R zone edges.
+      zoneLinesRef.current.forEach((l) => { try { series.removePriceLine(l); } catch {} });
+      zoneLinesRef.current = [];
+      const addZone = (z: Zone, color: string, title: string) => {
+        [z.top, z.bottom].forEach((price, i) => {
+          zoneLinesRef.current.push(series.createPriceLine({
+            price, color, lineWidth: 1, lineStyle: 2,
+            axisLabelVisible: false, title: i === 0 ? title : "",
+          }));
+        });
+      };
+      (data.supply_zones || []).slice(0, 3).forEach((z, i) => addZone(z, CHROME.down + "99", i === 0 ? "Supply" : ""));
+      (data.demand_zones || []).slice(0, 3).forEach((z, i) => addZone(z, CHROME.up + "99", i === 0 ? "Demand" : ""));
+
+      if (!didFit.current) { chartRef.current?.timeScale().fitContent(); didFit.current = true; }
+    } catch { /* chart disposed */ }
+  }, [data]);
+
+  // Refit when the timeframe changes (new data range).
+  useEffect(() => { didFit.current = false; }, [timeframe]);
+
+  /* ── Live price line ───────────────────────────────────────────────────── */
+  useEffect(() => {
+    const series = candleSeriesRef.current;
+    if (!series || !livePrice) return;
+    try {
+      if (!livePriceLineRef.current) {
+        livePriceLineRef.current = series.createPriceLine({
+          price: livePrice, color: CHROME.brand, lineWidth: 2,
+          lineStyle: 0, axisLabelVisible: true, title: "LIVE",
+        });
+      } else {
+        livePriceLineRef.current.applyOptions({ price: livePrice });
+      }
+      const last = data?.candles?.[data.candles.length - 1];
+      if (last) {
+        series.update({
+          time: last.time as any, open: last.open,
+          high: Math.max(last.high, livePrice), low: Math.min(last.low, livePrice),
+          close: livePrice,
         });
       }
-    } catch {
-      // series/chart was disposed (e.g. during asset/timeframe switch); ignore
-    }
-  }, [livePrice]);
+    } catch { /* chart disposed */ }
+  }, [livePrice, data]);
 
-  const struct = data?.structure ? STRUCTURE_COLORS[data.structure] ?? "#94a3b8" : "#94a3b8";
-  const nSupplyZones = data?.supply_zones?.length ?? 0;
-  const nDemandZones = data?.demand_zones?.length ?? 0;
+  const structureTone = data?.structure ? STRUCTURE_TONE[data.structure] ?? "neutral" : null;
 
   return (
-    <div className="border border-[#1e1e30] rounded-2xl overflow-hidden bg-[#0e0e1a]">
-      <div className="flex items-center justify-between px-4 py-3 border-b border-[#1e1e30]">
-        <div className="flex items-center gap-3 flex-wrap">
-          <h3 className="text-sm font-semibold">
-            <span className="text-[#627eea]">
-              ETHUSD
-            </span>
-            <span className="text-gray-500 font-normal ml-2 text-xs">
-              {timeframe} · {TIMEFRAMES[timeframe].label}
-            </span>
-          </h3>
-          {livePrice && (
-            <span className="text-xs text-gray-400 font-mono">
-              ${livePrice.toLocaleString(undefined, { maximumFractionDigits: 2 })}
-            </span>
+    <Card className="overflow-hidden">
+      <div className="flex items-center justify-between gap-3 px-3 sm:px-4 py-3 border-b border-[var(--line)] flex-wrap">
+        <div className="flex items-center gap-2 flex-wrap min-w-0">
+          <h2 className="card-title">ETHUSD</h2>
+          {livePrice != null && (
+            <span className="text-sm font-semibold tnum text-[var(--ink)]">{usd(livePrice)}</span>
           )}
-          {data?.structure && (
-            <span className="text-xs font-medium px-2 py-0.5 rounded-full"
-                  style={{ background: struct + "22", color: struct }}>
-              {data.structure.toUpperCase()}
-            </span>
+          {structureTone && data?.structure && (
+            <Pill tone={structureTone}>{data.structure}</Pill>
           )}
-          {signal && (
-            <span className="text-xs font-medium px-2 py-0.5 rounded-full cursor-help"
-                  style={{ background: signal.stateColor + "22", color: signal.stateColor }}
-                  title={signal.reason}>
-              {signal.stateLabel}
-              {signal.volFilterOk === false && (
-                <span className="ml-1 text-[10px] opacity-80">
-                  · vol {(signal.vol24h ?? 0).toFixed(1)}%
-                </span>
-              )}
-            </span>
-          )}
+          {signal && <Pill tone={signal.tone} title={signal.reason}>{signal.stateLabel}</Pill>}
         </div>
-        <div className="flex items-center gap-3">
-          {/* Timeframe selector */}
-          <div className="flex gap-0.5 bg-[#1e1e30]/40 rounded px-0.5 py-0.5">
-            {(Object.keys(TIMEFRAMES) as Timeframe[]).map(tf => (
-              <button
-                key={tf}
-                onClick={() => setTimeframe(tf)}
-                className={`px-2 py-0.5 text-[10px] rounded font-medium transition-colors ${
-                  timeframe === tf
-                    ? "bg-white/10 text-white"
-                    : "text-gray-500 hover:text-gray-300"
-                }`}
-              >
-                {tf}
-              </button>
-            ))}
-          </div>
-          {/* Asset toggle */}
-          <div className="flex gap-1">
-            <span className="px-3 py-1 text-xs rounded bg-[#627eea]/20 text-[#627eea]">
-              ETH
-            </span>
-          </div>
+
+        <div className="flex items-center gap-0.5 p-0.5 rounded-[var(--r-sm)] bg-[var(--surface-2)] border border-[var(--line)]"
+             role="group" aria-label="Timeframe">
+          {(Object.keys(TIMEFRAMES) as Timeframe[]).map((tf) => (
+            <button key={tf} onClick={() => setTimeframe(tf)}
+                    aria-pressed={timeframe === tf}
+                    className={`px-2 sm:px-2.5 py-1 text-[11px] font-semibold rounded-[6px] transition-colors ${
+                      timeframe === tf
+                        ? "bg-[var(--surface)] text-[var(--ink)] shadow-[var(--shadow-sm)]"
+                        : "text-[var(--ink-3)] hover:text-[var(--ink-2)]"
+                    }`}>
+              {tf}
+            </button>
+          ))}
         </div>
       </div>
 
-      {loading && (
-        <div className="h-[520px] flex items-center justify-center text-gray-500 text-sm">
-          Loading {asset} {timeframe} chart…
-        </div>
-      )}
-      {err && !loading && (
-        <div className="h-[520px] flex items-center justify-center text-red-400 text-sm">
-          {err}
-        </div>
-      )}
-      <div ref={containerRef} className={loading || err ? "hidden" : ""} />
+      <div className="relative">
+        {/* Responsive height: shorter on phones, taller on desktop. */}
+        <div ref={containerRef} className="w-full h-[260px] sm:h-[380px] lg:h-[440px]" />
+        {(loading || err) && (
+          <div className="absolute inset-0 grid place-items-center bg-[var(--surface)]">
+            {loading
+              ? <div className="text-center"><div className="skel h-4 w-32 mx-auto mb-2" /><p className="text-xs text-[var(--ink-3)]">Loading chart…</p></div>
+              : <p className="text-sm text-[var(--down-ink)] px-4 text-center">{err}</p>}
+          </div>
+        )}
+      </div>
 
-      {!loading && !err && data && (
-        <div className="flex gap-4 px-4 py-2 border-t border-[#1e1e30] text-[10px] text-gray-500 flex-wrap">
-          <span className="flex items-center gap-1.5">
-            <span className="inline-block w-3 h-3 bg-red-500/30 border border-red-500/60" />
-            Supply zone × {nSupplyZones}
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="inline-block w-3 h-3 bg-green-500/30 border border-green-500/60" />
-            Demand zone × {nDemandZones}
-          </span>
-          <span className="ml-auto text-gray-600">
-            zone band opacity ∝ volume traded
-          </span>
-        </div>
-      )}
-    </div>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-3 sm:px-4 py-2 border-t border-[var(--line)] text-[11px] text-[var(--ink-3)]">
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block w-3 h-3 border-[1.5px] rounded-[2px]" style={{ borderColor: CHROME.up }} aria-hidden="true" />
+          Up candle (hollow)
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block w-3 h-3 rounded-[2px]" style={{ background: CHROME.down }} aria-hidden="true" />
+          Down candle (filled)
+        </span>
+        <span className="hidden sm:inline">Dashed lines mark 4h supply / demand zones</span>
+      </div>
+    </Card>
   );
 }
