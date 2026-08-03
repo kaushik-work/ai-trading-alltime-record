@@ -297,6 +297,7 @@ def prepare(df: pd.DataFrame, use_trend: bool = True,
 
 def run_asset(subdir: str, sym: str, sl_pct: float, rr: float,
               use_trend: bool = True, trail_be: bool = True,
+              apply_fees: bool = True, exit_slippage: bool = True,
               date_start: pd.Timestamp | None = None,
               date_end: pd.Timestamp | None = None,
               retest_mode: str = "zone",
@@ -347,6 +348,11 @@ def run_asset(subdir: str, sym: str, sl_pct: float, rr: float,
     long_sig, short_sig = s["retest_long"], s["retest_short"]
 
     equity = START_USD
+    # PERP_FEE_BPS was defined but never applied, so every published number
+    # from this file was gross of fees. Fees are ON by default now; pass
+    # apply_fees=False only when you explicitly want the gross figure.
+    fee_drag = (2 * PERP_FEE_BPS / 10_000.0) if apply_fees else 0.0
+    exit_slip = (SLIPPAGE_BPS / 10_000.0) if exit_slippage else 0.0
     trades = []
     pos = None
     cooldown = -1
@@ -364,8 +370,9 @@ def run_asset(subdir: str, sym: str, sl_pct: float, rr: float,
             hi, lo = h[i], l[i]
 
             if (sign > 0 and hi >= pos["tp"]) or (sign < 0 and lo <= pos["tp"]):
-                pnl = sign * (pos["tp"] - pos["entry"]) / pos["entry"]
-                trades.append({**pos, "exit": pos["tp"], "exit_time": t, "pnl": pnl, "reason": "tp"})
+                fill = pos["tp"] * (1 - sign * exit_slip)
+                pnl = sign * (fill - pos["entry"]) / pos["entry"] - fee_drag
+                trades.append({**pos, "exit": fill, "exit_time": t, "pnl": pnl, "reason": "tp"})
                 equity *= (1 + pnl * LEVERAGE * CAPITAL_USE_PCT)
                 pos = None
                 cooldown = i + cooldown_candles
@@ -377,8 +384,9 @@ def run_asset(subdir: str, sym: str, sl_pct: float, rr: float,
 
             stop = pos["be_sl"] if pos.get("trail_be", False) else pos["sl"]
             if (sign > 0 and lo <= stop) or (sign < 0 and hi >= stop):
-                pnl = sign * (stop - pos["entry"]) / pos["entry"]
-                trades.append({**pos, "exit": stop, "exit_time": t, "pnl": pnl, "reason": "sl"})
+                fill = stop * (1 - sign * exit_slip)
+                pnl = sign * (fill - pos["entry"]) / pos["entry"] - fee_drag
+                trades.append({**pos, "exit": fill, "exit_time": t, "pnl": pnl, "reason": "sl"})
                 equity *= (1 + pnl * LEVERAGE * CAPITAL_USE_PCT)
                 pos = None
                 cooldown = i + cooldown_candles
@@ -389,8 +397,9 @@ def run_asset(subdir: str, sym: str, sl_pct: float, rr: float,
                 continue
 
             if i - pos["entry_idx"] >= MAX_HOLD_CANDLES:
-                pnl = sign * (ci - pos["entry"]) / pos["entry"]
-                trades.append({**pos, "exit": ci, "exit_time": t, "pnl": pnl, "reason": "hold"})
+                fill = ci * (1 - sign * exit_slip)
+                pnl = sign * (fill - pos["entry"]) / pos["entry"] - fee_drag
+                trades.append({**pos, "exit": fill, "exit_time": t, "pnl": pnl, "reason": "hold"})
                 equity *= (1 + pnl * LEVERAGE * CAPITAL_USE_PCT)
                 pos = None
                 cooldown = i + cooldown_candles
@@ -443,7 +452,7 @@ def run_asset(subdir: str, sym: str, sl_pct: float, rr: float,
 
     if pos:
         sign = 1 if pos["side"] == "long" else -1
-        pnl = sign * (c[-1] - pos["entry"]) / pos["entry"]
+        pnl = sign * (c[-1] - pos["entry"]) / pos["entry"] - fee_drag
         trades.append({**pos, "exit": c[-1], "exit_time": ts[-1], "pnl": pnl, "reason": "eof"})
         equity *= (1 + pnl * LEVERAGE * CAPITAL_USE_PCT)
         equity_curve.append(equity)

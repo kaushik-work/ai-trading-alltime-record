@@ -7,6 +7,23 @@
 > the live runner after corrected entry-time-ATM backtests showed it is
 > unprofitable.
 
+
+> **⚠️ Performance claims below are superseded (measured 2026-08-04).**
+> The +17.28% BTC / +18.10% ETH figures came from
+> `delta_exchange/backtest_price_action_sweep.py` while it silently omitted
+> fees (`PERP_FEE_BPS` was defined but never applied) and while it ran a
+> breakeven trail that the live `pure_sltp` regime does not execute.
+>
+> On 6 months of Delta 1m data (2026-01-29 → 08-03), with fees and exit
+> slippage applied and the live exit regime, the deployed config is
+> **net-negative on all three assets**: BTC −₹4,011, ETH −₹1,038,
+> XAUT −₹8,539. The 1:7 target hit once in 515 trades, because a 4.2–4.9%
+> move inside the 4h max-hold occurs in under 1.3% of windows.
+>
+> Re-run `delta_exchange/backtest_live_config.py` (imports the production
+> dials) and `delta_exchange/diag_signal_edge.py` before trusting any number
+> in this document.
+
 This guide is written for AI coding agents who need to understand, modify, or
 extend the project. Read this file, `README.md`, and `core/risk_management.py`
 first — together they form the project contract.

@@ -25,12 +25,38 @@ from strategies.crypto_base import CryptoStrategy, CryptoSignalDecision
 
 logger = logging.getLogger(__name__)
 
-# Production dials — see delta_exchange/backtest_price_action_sweep.py.
-# 3-month backtest (Apr–Jun 2026) selected config:
-#   BTC: SL 0.6% / 1:7   (124 trades, WR 57.3%, PF 1.79, +17.28%, MaxDD 2.52%, MaxCL 5)
-#   ETH: SL 0.7% / 1:7   ( 83 trades, WR 56.6%, PF 2.01, +18.10%, MaxDD 2.33%, MaxCL 3)
-# Wider stops vs the earlier 0.4%/0.5% baseline raise win-rate by letting the
-# S/R retest breathe, while the 1:7 target keeps the R:R attractive.
+# Production dials.
+#
+# WARNING — measured 2026-08-04 on 6 months of Delta 1m data (Jan 29 – Aug 3),
+# via delta_exchange/backtest_live_config.py, which imports these dials rather
+# than restating them. This config is NOT currently profitable:
+#
+#   BTCUSD  247 trades  WR 49.8%  gross +Rs 8,339  fees Rs 12,350  NET -Rs 4,011
+#   ETHUSD   30 trades  WR 40.0%  gross +Rs   462  fees Rs  1,500  NET -Rs 1,038
+#   XAUTUSD 238 trades  WR 42.0%  gross +Rs 3,361  fees Rs 11,900  NET -Rs 8,539
+#
+# The older figures quoted here (BTC +17.28%, ETH +18.10%) came from
+# backtest_price_action_sweep.py while it silently omitted fees — PERP_FEE_BPS
+# was defined and never applied — and while it ran a breakeven trail that the
+# live pure_sltp regime does not execute. With fees and exit slippage applied,
+# that same sweep returns -8.21% BTC / -3.58% ETH on this data.
+#
+# Root cause, and it is structural rather than a tuning problem:
+#   RR_RATIO 7 and MAX_HOLD_MINUTES 240 are incompatible. A 4.2% (BTC) or 4.9%
+#   (ETH) move inside four hours occurs in 0.5-1.3% of all 4h windows; for XAUT
+#   a 3.5% move occurs in 0.00%. The target was hit ONCE in 515 trades. What
+#   actually happens is: stop, or max-hold exit at whatever price. The stated
+#   1:7 R:R does not exist in practice.
+#
+# Entry-signal edge measured against a matched random baseline (costs ~14bps):
+#   BTC   9-12bps at every vol-filter setting — real (p<0.01) but BELOW costs
+#   ETH   30-55bps at vol_filter 0.34 — beats costs in-sample, but the 240m
+#         edge vanishes out-of-sample (p=0.92) and the 480m variant's entire
+#         profit is 2 trades in February
+#   XAUT  1-3bps — no edge at any setting
+#
+# Do not re-enable BTC or XAUT on these dials, and do not treat ETH as
+# validated. See delta_exchange/diag_signal_edge.py to re-run the test.
 LOOKBACK_CANDLES = 240            # 4h S/R range
 TREND_CANDLES    = 1440           # 24h trend
 RANGE_PCT_MAX    = 0.015          # max 1.5% range width
