@@ -58,7 +58,9 @@ export function Stat({ label, value, delta, deltaUnit = "%", footnote, emphasis 
           {value}
         </p>
       )}
-      {delta != null && !loading && (
+      {/* A zero delta says nothing and, when the tile's value IS the delta,
+          rendering it twice just adds noise. */}
+      {delta != null && delta !== 0 && !loading && (
         <p className={`mt-1 text-xs font-semibold tnum ${deltaColor}`}>
           <span aria-hidden="true">{arrow(delta)}</span> {signed(delta, 2, deltaUnit)}
         </p>

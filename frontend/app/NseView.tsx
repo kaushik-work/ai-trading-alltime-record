@@ -82,7 +82,7 @@ export default function NseView() {
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <Stat label="Runner" value={state ? (state.enabled ? "On" : "Off") : "—"} loading={!state} />
-        <Stat label="Day P&L" value={state ? inr(state.day_pnl) : "—"} delta={state?.day_pnl} deltaUnit="" loading={!state} />
+        <Stat label="Day P&L" value={state ? inr(state.day_pnl) : "—"} loading={!state} />
         <Stat label="Unrealized" value={state ? inr(state.unrealized_pnl || 0) : "—"} loading={!state} />
         <Stat label="Total P&L" emphasis value={state ? inr(total) : "—"} loading={!state} />
       </div>

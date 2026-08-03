@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import Header from "../components/Header";
 import { Banner, Card, CardHead, Empty, Pill, Toggle } from "../components/ui";
+import TestOrderCard from "../components/TestOrderCard";
 import { API, authHeaders, clearToken, getToken, isTokenValid, usd } from "../lib/format";
 
 type Instrument = { name: string; enabled: boolean };
@@ -25,9 +26,6 @@ export default function ControlsPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<Record<string, boolean>>({});
 
-  const [testBusy, setTestBusy] = useState(false);
-  const [testResult, setTestResult] = useState<any>(null);
-  const [testConfirm, setTestConfirm] = useState(false);
 
   function logoutAndLogin() {
     clearToken();
@@ -65,21 +63,6 @@ export default function ControlsPage() {
     }
   }
 
-  async function placeTestOrder() {
-    setTestConfirm(false);
-    setTestBusy(true);
-    setTestResult(null);
-    try {
-      const r = await fetch(`${API}/api/crypto/test_buy_btc`, { method: "POST", headers: authHeaders() });
-      const data = await r.json();
-      if (!r.ok) throw new Error(data.detail || `Server returned ${r.status}`);
-      setTestResult({ ok: true, ...data });
-    } catch (e: any) {
-      setTestResult({ ok: false, error: e?.message || "Test order failed" });
-    } finally {
-      setTestBusy(false);
-    }
-  }
 
   useEffect(() => {
     if (!isTokenValid(getToken())) logoutAndLogin();
@@ -152,50 +135,46 @@ export default function ControlsPage() {
           })
         )}
 
-        {/* ── Danger zone ──────────────────────────────────────────────────
-            This places a REAL leveraged order. It used to sit on the main
-            dashboard beside the kill switch, one misclick apart. ────────── */}
-        <Card className="!border-[rgba(208,59,59,.3)]">
-          <CardHead title="Danger zone" right={<Pill tone="down">Real money</Pill>} />
-          <div className="card-pad space-y-3">
-            <div>
-              <p className="text-sm font-semibold text-[var(--ink)]">Place a test BTC order</p>
-              <p className="text-[13px] text-[var(--ink-2)] mt-1 leading-relaxed">
-                Submits a live market buy for 1 BTCUSD contract at 200× leverage to
-                verify exchange connectivity and API permissions. This spends real
-                funds and opens a real position you must close yourself.
-              </p>
-            </div>
+        {/* ── Danger zone — real orders on both venues ─────────────────────
+            These used to sit on the dashboards, one misclick from the kill
+            switch. Two-step confirm, and the exchange's own error is shown
+            verbatim: seeing WHY it was rejected is the point. ───────────── */}
+        <div>
+          <h2 className="text-base font-semibold text-[var(--ink)] mb-1">Danger zone</h2>
+          <p className="text-[13px] text-[var(--ink-2)] mb-3">
+            Connectivity checks that place genuine orders. Each opens a real
+            position you must close yourself.
+          </p>
+        </div>
 
-            {testResult && (
-              <Banner tone={testResult.ok ? "up" : "down"}
-                      title={testResult.ok ? "Order submitted" : "Order failed"}
-                      body={testResult.ok
-                        ? `${testResult.symbol} ${String(testResult.side || "").toUpperCase()} · size ${testResult.size} · ${testResult.leverage}× · mark ${usd(testResult.mark_price)}`
-                        : testResult.error}
-                      onDismiss={() => setTestResult(null)} />
-            )}
+        <TestOrderCard
+          title="Test order · Delta (crypto)"
+          endpoint="/api/crypto/test_buy_btc"
+          description="Live market buy for 1 BTCUSD contract at 200× leverage, to verify Delta REST auth, IP whitelisting and trade permissions. Needs only ~$0.32 of margin, but it will fail if the wallet is empty."
+          confirmLabel="Confirm: place a real 200× leveraged BTCUSD buy?"
+          renderSuccess={(d) => (
+            <>
+              <p>{d.symbol} {String(d.side || "").toUpperCase()} · size {d.size} · {d.leverage}×</p>
+              <p>Mark {usd(d.mark_price)}</p>
+            </>
+          )}
+        />
 
-            {testConfirm ? (
-              <div className="rounded-[var(--r-sm)] bg-[var(--down-wash)] border border-[rgba(208,59,59,.25)] p-3">
-                <p className="text-[13px] font-semibold text-[var(--down-ink)]">
-                  Confirm: place a real 200× leveraged buy order?
-                </p>
-                <div className="flex gap-2 mt-3">
-                  <button onClick={() => setTestConfirm(false)} className="btn btn-ghost flex-1">Cancel</button>
-                  <button onClick={placeTestOrder} disabled={testBusy} className="btn btn-danger flex-1">
-                    {testBusy ? "Placing…" : "Place order"}
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <button onClick={() => setTestConfirm(true)} disabled={testBusy}
-                      className="btn btn-danger-quiet w-full sm:w-auto">
-                {testBusy ? "Placing…" : "Place test order"}
-              </button>
-            )}
-          </div>
-        </Card>
+        <TestOrderCard
+          title="Test order · Angel One (NSE)"
+          endpoint="/api/nse/test_buy_ce"
+          description="Live LIMIT buy for 1 lot of the nearest NIFTY CE at the current ask, with a protective OCO GTT attached. Verifies Angel session, instrument lookup and order permissions."
+          confirmLabel="Confirm: place a real NIFTY CE buy for 1 lot?"
+          renderSuccess={(d) => (
+            <>
+              <p>{d.tradingsymbol} · qty {d.quantity}</p>
+              <p>Spot {d.spot} · strike {d.strike}</p>
+              {d.available_cash != null && (
+                <p>Available cash ₹{Number(d.available_cash).toLocaleString("en-IN")}</p>
+              )}
+            </>
+          )}
+        />
       </main>
     </div>
   );

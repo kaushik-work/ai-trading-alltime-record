@@ -70,7 +70,8 @@ function stateOf(s: SignalRow): { label: string; tone: "up" | "down" | "warn" | 
   if (s.in_cooldown) return { label: "Cooldown", tone: "neutral" };
   const g = gates(s);
   const blocker = g.find((x) => !x.pass);
-  return { label: blocker ? `Waiting: ${blocker.label.toLowerCase()}` : "Armed", tone: blocker ? "neutral" : "brand" };
+  // Don't lowercase — it mangles "S/R" into "s/r".
+  return { label: blocker ? `Waiting: ${blocker.label}` : "Armed", tone: blocker ? "neutral" : "brand" };
 }
 
 export default function SignalRadar({ signals, loading }: { signals: SignalRow[]; loading?: boolean }) {
