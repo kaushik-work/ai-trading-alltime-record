@@ -136,9 +136,15 @@ export function Toggle({ checked, onChange, disabled, ariaLabel, size = "md" }: 
   checked: boolean; onChange: (v: boolean) => void;
   disabled?: boolean; ariaLabel: string; size?: "sm" | "md";
 }) {
-  const box = size === "sm" ? "h-5 w-9" : "h-6 w-11";
-  const knob = size === "sm" ? "h-3.5 w-3.5" : "h-4.5 w-4.5";
-  const shift = checked ? (size === "sm" ? "translate-x-[18px]" : "translate-x-[22px]") : "translate-x-[3px]";
+  // Explicit pixel values, not scale steps: `h-4.5` is not in Tailwind's
+  // default scale, so it silently produced a zero-size knob and the switch
+  // rendered as a solid green pill.
+  const sm = size === "sm";
+  const box = sm ? "h-5 w-9" : "h-6 w-11";
+  const knob = sm ? "h-[14px] w-[14px]" : "h-4 w-4";
+  const shift = checked
+    ? (sm ? "translate-x-[19px]" : "translate-x-[24px]")
+    : (sm ? "translate-x-[3px]" : "translate-x-[4px]");
   return (
     <button
       type="button" role="switch" aria-checked={checked} aria-label={ariaLabel}

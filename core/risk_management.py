@@ -64,12 +64,20 @@ FIXED_CAPITAL_INR: float = 50000.0
 
 
 # ── Risk limits ──────────────────────────────────────────────────────────────
-# Leverage applied per order. This dial is intentionally hardcoded (not in
-# .env) because we expect to change it often and want every change tracked in
-# git. Current live config: ETH-only, fixed Rs 50k notional per trade, 15×
-# leverage (margin = Rs 50k / 15). Note: the fixed-capital backtest used
-# Rs 25k notional per trade; live deploys Rs 50k, so P&L / drawdown scale 2×.
-LEVERAGE: int = 15
+# Leverage applied per order. Hardcoded (not in .env) so every change is
+# tracked in git. Live config: fixed Rs 50k notional per trade, so margin is
+# Rs 50k / LEVERAGE = Rs 2,500 at 20x.
+#
+# Ceiling on this dial is set by liquidation, not by appetite. Delta's BTC/ETH
+# perps carry 0.5% initial and 0.25% maintenance margin, so an isolated
+# position liquidates at roughly (1/LEVERAGE - 0.0025) of adverse movement:
+#     20x  -> 4.75%   vs a 0.70% stop = 6.8x room
+#     50x  -> 1.75%   vs a 0.70% stop = 2.5x room
+#    100x  -> 0.75%   vs a 0.70% stop = 1.07x — effectively no room
+#    200x  -> 0.25%   liquidated BEFORE the stop can ever fire
+# Above ~75x the stop stops being reachable and the only exit is liquidation,
+# so the strategy's whole risk model stops applying. Keep this below that.
+LEVERAGE: int = 20
 
 # Halt new entries when day P&L drops below this fraction of base equity.
 DAILY_LOSS_KILL_PCT: float = _env_float("CRYPTO_DAILY_LOSS_KILL_PCT", 0.05)

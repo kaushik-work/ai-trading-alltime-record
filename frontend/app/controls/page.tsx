@@ -76,6 +76,11 @@ export default function ControlsPage() {
       <Header />
       <main className="max-w-3xl mx-auto px-3 sm:px-6 py-4 sm:py-6 space-y-4 sm:space-y-6">
         <div>
+          {/* The logo was the only way back, which is not discoverable. */}
+          <button onClick={() => router.push("/")}
+                  className="inline-flex items-center gap-1.5 text-[13px] font-semibold text-[var(--brand-ink)] hover:underline mb-3">
+            <span aria-hidden="true">←</span> Back to dashboard
+          </button>
           <h1 className="text-xl sm:text-2xl font-semibold text-[var(--ink)]">Controls</h1>
           <p className="text-sm text-[var(--ink-2)] mt-1 leading-relaxed">
             Turn strategies and instruments on or off. Disabling stops new entries —
