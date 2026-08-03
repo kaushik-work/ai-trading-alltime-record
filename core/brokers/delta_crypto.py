@@ -27,6 +27,14 @@ import time
 from typing import Any, Optional
 import requests
 
+# risk_management imports nothing from this module, so a top-level import is
+# safe and keeps the production dials in one place.
+from core.risk_management import (
+    BRACKET_LIMIT_SLIPPAGE_BPS,
+    BRACKET_STOP_TRIGGER_METHOD,
+    CRYPTO_TRADING_MODE,
+)
+
 logger = logging.getLogger(__name__)
 
 _BROKER_INSTANCE = None
@@ -57,7 +65,6 @@ class DeltaCryptoBroker:
         if mode:
             self.mode = mode
         else:
-            from core.risk_management import CRYPTO_TRADING_MODE
             self.mode = CRYPTO_TRADING_MODE
         self._perp_cache: dict[str, dict] = {}
         self._pos_cache: dict[str, dict] = {"data": None, "ts": 0.0}
@@ -86,6 +93,34 @@ class DeltaCryptoBroker:
             "User-Agent": "tgc-bot-python/1.0",
         }
 
+    def _diagnose_auth_error(self, text: str, resp, path: str = "") -> None:
+        """Turn Delta's auth errors into an actionable log line.
+
+        These three account for nearly every 'the bot stopped trading' report
+        and are indistinguishable from a generic 401 without this hint.
+        """
+        low = (text or "").lower()
+        if "signature" in low and "expired" in low:
+            # Delta allows a 5s window; a drifted container clock fails 100%
+            # of authenticated calls while public reads keep working.
+            try:
+                from email.utils import parsedate_to_datetime
+                server = parsedate_to_datetime(resp.headers["Date"]).timestamp()
+                logger.error(
+                    "delta SignatureExpired — container clock is %.1fs from "
+                    "Delta's. Window is 5s. Fix host NTP (timedatectl).",
+                    time.time() - server,
+                )
+            except Exception:
+                logger.error("delta SignatureExpired — check container clock (NTP); "
+                             "Delta allows a 5s signature window")
+        elif "ip_not_whitelisted" in low:
+            logger.error("delta rejected the API key for this IP — add the droplet's "
+                         "current public IP to the key's whitelist on Delta")
+        elif "unauthorized" in low or "invalidapikey" in low:
+            logger.error("delta API key invalid or lacks scope for %s — key needs "
+                         "Read + Trade", path)
+
     def _request(self, method: str, path: str, *, params: dict | None = None,
                  body: dict | None = None, authed: bool = False) -> dict:
         url = self.base_url + path
@@ -95,14 +130,19 @@ class DeltaCryptoBroker:
             import json
             body_str = json.dumps(body, separators=(",", ":"))
             headers["Content-Type"] = "application/json"
-        if authed:
-            if not self._has_auth:
-                raise RuntimeError("authed request needs DELTA_API_KEY/SECRET")
-            ts = str(int(time.time()))
-            query = "?" + requests.compat.urlencode(params) if params else ""
-            headers.update(self._sign(method, path, query, body_str, ts))
+        if authed and not self._has_auth:
+            raise RuntimeError("authed request needs DELTA_API_KEY/SECRET")
+        query = "?" + requests.compat.urlencode(params) if params else ""
         for attempt in range(3):
             try:
+                # Delta only accepts a signature for 5 seconds after it is
+                # generated. Re-sign on EVERY attempt — a signature minted
+                # before the first try is already expired by the time a retry
+                # goes out (15s timeout + backoff sleep), which turned any
+                # transient blip into a permanent SignatureExpired.
+                if authed:
+                    ts = str(int(time.time()))
+                    headers.update(self._sign(method, path, query, body_str, ts))
                 r = requests.request(
                     method, url, params=params,
                     data=body_str if body_str else None,
@@ -117,6 +157,7 @@ class DeltaCryptoBroker:
                 if r.status_code >= 400:
                     text = r.text
                     logger.warning("delta %s %s -> %s: %s", method, path, r.status_code, text)
+                    self._diagnose_auth_error(text, r, path)
                     raise requests.HTTPError(
                         f"{r.status_code} {r.reason} for url: {r.url} | body: {text}",
                         response=r,
@@ -228,8 +269,16 @@ class DeltaCryptoBroker:
         return []
 
     # ── Authenticated / live trading ────────────────────────────────────────
-    def get_positions(self) -> list[dict]:
-        """Current open positions (account-wide). Empty list in paper mode."""
+    def get_positions(self) -> Optional[list[dict]]:
+        """Current open positions (account-wide).
+
+        Returns None if the exchange could NOT be reached, and [] only when the
+        account is genuinely flat. Reconciliation depends on that distinction:
+        collapsing an API failure into "no positions" would make a transient
+        error look like every position had been closed.
+
+        Paper mode returns [] — there is nothing at an exchange to reconcile.
+        """
         if self.mode == "paper":
             return []
         cached = self._pos_cache
@@ -237,12 +286,15 @@ class DeltaCryptoBroker:
             return cached["data"]
         try:
             data = self._request("GET", "/v2/positions/margined", authed=True)
-            positions = data.get("result", [])
+            if not data.get("success", True):
+                logger.error("get_positions rejected: %s", data)
+                return None
+            positions = data.get("result") or []
             self._pos_cache = {"data": positions, "ts": time.time()}
             return positions
         except Exception as e:
             logger.error("get_positions: %s", e)
-        return []
+        return None
 
     def get_balance(self) -> Optional[float]:
         """Total tradeable balance in USD-equivalents, cached 15s.
@@ -371,8 +423,9 @@ class DeltaCryptoBroker:
             logger.warning("set_leverage: product_id not found for %s", symbol)
             return False
         try:
+            # Delta's docs specify leverage as a string ({"leverage": "10"}).
             resp = self._request("POST", f"/v2/products/{pid}/orders/leverage",
-                                 body={"leverage": leverage},
+                                 body={"leverage": str(leverage)},
                                  authed=True)
             logger.info("leverage set: %s (id=%s) → %d×", symbol, pid, leverage)
             return resp.get("success", False)
@@ -406,8 +459,13 @@ class DeltaCryptoBroker:
         if pid is None:
             return {"ok": False, "error": f"product_id not found for {symbol}"}
         logger.info("place_order resolved %s -> product_id=%s", symbol, pid)
-        if leverage is not None:
-            self.set_leverage(symbol, leverage)
+        if leverage is not None and not self.set_leverage(symbol, leverage):
+            # Never fall through to whatever leverage the account happens to
+            # carry — that could be a much riskier value left over from an
+            # earlier manual or test order.
+            return {"ok": False,
+                    "error": f"could not set leverage to {leverage}x on {symbol}; "
+                             f"refusing to order at the account's existing leverage"}
         body = {
             "product_id": pid,
             "size": int(size),
@@ -473,6 +531,105 @@ class DeltaCryptoBroker:
         if symbol.endswith("USD"):
             return self.get_perp_mark(symbol)
         return None
+
+    def place_bracket(self, symbol: str, side: str, stop_price: float,
+                      take_profit_price: float) -> dict:
+        """Attach an exchange-side stop + target to the OPEN position.
+
+        Delta closes the whole position from a bracket, so no size is sent.
+        Only ONE bracket may exist per open position, so cancel_bracket()
+        first if you are replacing one.
+
+        Both legs are limit orders (Delta does not accept market legs inside a
+        bracket), and each limit is placed BRACKET_LIMIT_SLIPPAGE_BPS through
+        its trigger so it actually crosses in the move that fired it.
+
+        `side` is the side of the position being protected ("buy" = long).
+        """
+        if self.mode == "paper":
+            return {"ok": True, "paper": True, "symbol": symbol,
+                    "stop_price": stop_price, "take_profit_price": take_profit_price}
+        pid = self.get_product_id(symbol)
+        if pid is None:
+            return {"ok": False, "error": f"product_id not found for {symbol}"}
+
+        buf = BRACKET_LIMIT_SLIPPAGE_BPS / 10_000.0
+        is_long = side == "buy"
+        # Exit of a long is a SELL, so its limits sit BELOW the trigger; the
+        # mirror applies to a short.
+        if is_long:
+            sl_limit = stop_price * (1 - buf)
+            tp_limit = take_profit_price * (1 - buf)
+        else:
+            sl_limit = stop_price * (1 + buf)
+            tp_limit = take_profit_price * (1 + buf)
+
+        def _px(v: float) -> str:
+            return f"{v:.8f}".rstrip("0").rstrip(".")
+
+        body = {
+            "product_id": pid,
+            "product_symbol": symbol,
+            "stop_loss_order": {
+                "order_type": "limit_order",
+                "stop_price": _px(stop_price),
+                "limit_price": _px(sl_limit),
+            },
+            "take_profit_order": {
+                "order_type": "limit_order",
+                "stop_price": _px(take_profit_price),
+                "limit_price": _px(tp_limit),
+            },
+            "bracket_stop_trigger_method": BRACKET_STOP_TRIGGER_METHOD,
+        }
+        try:
+            resp = self._request("POST", "/v2/orders/bracket", body=body, authed=True)
+            if not resp.get("success"):
+                return {"ok": False,
+                        "error": resp.get("message") or resp.get("error") or "bracket rejected",
+                        "response": resp}
+            logger.info("bracket attached %s %s | stop %s (limit %s) target %s (limit %s) trigger=%s",
+                        symbol, side, _px(stop_price), _px(sl_limit),
+                        _px(take_profit_price), _px(tp_limit),
+                        BRACKET_STOP_TRIGGER_METHOD)
+            return {"ok": True, "response": resp,
+                    "stop_price": stop_price, "stop_limit": sl_limit,
+                    "take_profit_price": take_profit_price, "take_profit_limit": tp_limit}
+        except Exception as e:
+            logger.error("place_bracket %s failed: %s", symbol, e)
+            return {"ok": False, "error": str(e)}
+
+    def cancel_bracket(self, symbol: str) -> bool:
+        """Cancel the stop orders for this product.
+
+        Delta has no dedicated bracket-delete: a bracket is a pair of stop
+        orders, cancelled via DELETE /v2/orders/all scoped to the product.
+        Must run before any software-side exit, otherwise the bracket is left
+        armed against a position that no longer exists and can re-open one.
+        """
+        if self.mode == "paper":
+            return True
+        pid = self.get_product_id(symbol)
+        if pid is None:
+            logger.warning("cancel_bracket: product_id not found for %s", symbol)
+            return False
+        body = {
+            "product_id": pid,
+            "cancel_limit_orders": False,
+            "cancel_stop_orders": True,
+            "cancel_reduce_only_orders": True,
+        }
+        try:
+            resp = self._request("DELETE", "/v2/orders/all", body=body, authed=True)
+            ok = bool(resp.get("success", True))
+            if ok:
+                logger.info("bracket cancelled for %s", symbol)
+            else:
+                logger.error("cancel_bracket %s rejected: %s", symbol, resp)
+            return ok
+        except Exception as e:
+            logger.error("cancel_bracket %s failed: %s", symbol, e)
+            return False
 
     def cancel_order(self, order_id: str, symbol: str) -> bool:
         if self.mode == "paper": return True

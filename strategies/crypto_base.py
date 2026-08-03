@@ -73,8 +73,9 @@ class CryptoStrategy:
     def __init__(self, broker=None):
         from core.brokers.delta_crypto import get_broker
         self.broker = broker or get_broker()
-        # _sig_history holds the EVERY-TICK pred trace used by the persistence
-        # gate. Backtest matches: appends every raw pred regardless of gate.
+        # _sig_history mirrors firing preds to Mongo as a research trail. No
+        # live strategy gates on it — the persistence gate it was built for
+        # belonged to the removed options strategy.
         self._sig_history: list[tuple[float, float]] = []
         self._pred_trace: list[tuple[float, float]] = []    # mirror for chart
         self._last_tick: float = 0.0
@@ -148,31 +149,15 @@ class CryptoStrategy:
             return None
 
     def signal_now(self) -> Optional[CryptoSignalDecision]:
-        """Run _compute_signal once. The history side-effects (pred trace +
-        persistence history) happen inside _compute_signal itself, so this is
-        functionally the same as on_tick — both are kept for clarity at the
-        scheduler layer (on_tick = top-of-hour, signal_now = 5-min sample)."""
+        """Evaluate the signal without implying intent to trade.
+
+        Identical to on_tick() today; kept as the read-only-sounding name used
+        by warm-up and dashboard paths. Strategies must not arm cooldowns from
+        inside _compute_signal — the runner calls notify_entry_taken() once an
+        entry actually becomes a position.
+        """
         try:
             return self._compute_signal()
         except Exception as e:
             logger.error("%s signal_now error: %s", self.name, e)
             return None
-
-    def signal_persistence_hours(self, lookback_hours: float = 2.0) -> int:
-        """Approximate number of hourly observations with same sign as latest.
-
-        Tick-rate independent: span_hours+1 yields the same answer whether
-        the strategy is ticking at 60min or 5s. Backtest semantic (60min bars,
-        N consecutive same-sign bars = 2) maps to (span 1h => returns 2),
-        so the existing PERSIST_HOURS=2 gate continues to require ~1h of
-        real-time signal persistence regardless of tick rate.
-        """
-        if not self._sig_history: return 0
-        latest_t, latest_pred = self._sig_history[-1]
-        latest_sign = 1 if latest_pred > 0 else -1
-        cutoff = latest_t - lookback_hours * 3600
-        same_ts = [t for t, p in self._sig_history
-                   if t >= cutoff and (1 if p > 0 else -1) == latest_sign]
-        if not same_ts: return 0
-        span_h = (max(same_ts) - min(same_ts)) / 3600
-        return int(span_h) + 1

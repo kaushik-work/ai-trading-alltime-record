@@ -112,12 +112,63 @@ def _build_crypto_snapshot() -> dict:
         "perp_marks":    perp_marks,
         "signals":       signals,
         "portfolio":     portfolio,
+        "positions":     _positions_for_dashboard(perp_marks),
         "futures_stats": futures_stats,
         "shadow_trades":  shadow_trades,
         "shadow_summary": shadow_summary,
         "missed_signals": missed_signals,
         "stream":         stream,
     }
+
+
+def _positions_for_dashboard(perp_marks: dict) -> list:
+    """Open positions with live P&L and bracket distances.
+
+    The portfolio block only carries a position COUNT, which is not enough to
+    judge an open trade at a glance. This returns the detail the runner already
+    tracks, marked to the current price.
+    """
+    try:
+        from core.execution.crypto_runner import get_state
+        raw = get_state().get("open_positions", {}) or {}
+    except Exception:
+        return []
+    out = []
+    for name, p in raw.items():
+        entry = float(p.get("entry_price") or 0)
+        mark = float(perp_marks.get(p.get("symbol")) or 0)
+        if entry <= 0:
+            continue
+        sign = 1 if p.get("side") == "buy" else -1
+        sl_pct = float(p.get("stop_loss_pct") or 0)
+        tp_pct = float(p.get("target_pct") or 0)
+        unreal_pct = (sign * (mark - entry) / entry) if mark > 0 else 0.0
+        stop_price = entry * (1 - sign * sl_pct)
+        target_price = entry * (1 + sign * tp_pct)
+        held_min = float(p.get("held_hours") or 0) * 60
+        max_hold = float(p.get("max_hold_minutes") or 0)
+        out.append({
+            "strategy":       name,
+            "symbol":         p.get("symbol"),
+            "side":           p.get("side"),
+            "entry_price":    entry,
+            "mark_price":     mark or None,
+            "contracts":      p.get("contracts"),
+            "notional_usd":   p.get("notional_usd"),
+            "unrealized_pct": unreal_pct * 100,
+            "unrealized_usd": unreal_pct * float(p.get("notional_usd") or 0),
+            "stop_price":     stop_price,
+            "target_price":   target_price,
+            "stop_pct":       sl_pct * 100,
+            "target_pct":     tp_pct * 100,
+            # How far price must move from here to hit each bracket leg.
+            "to_stop_pct":    ((sign * (mark - stop_price) / mark) * 100) if mark > 0 else None,
+            "to_target_pct":  ((sign * (target_price - mark) / mark) * 100) if mark > 0 else None,
+            "held_minutes":   held_min,
+            "max_hold_minutes": max_hold,
+            "peak_pct":       float(p.get("peak_pct") or 0) * 100,
+        })
+    return out
 
 
 def _futures_stats_for_dashboard() -> dict:

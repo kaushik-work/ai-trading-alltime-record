@@ -74,15 +74,28 @@ LEVERAGE: int = 15
 # Halt new entries when day P&L drops below this fraction of base equity.
 DAILY_LOSS_KILL_PCT: float = _env_float("CRYPTO_DAILY_LOSS_KILL_PCT", 0.05)
 
-# Hard cap on contracts per single order — extra protection against a
-# sizing bug producing a giant order.  Per-asset overrides allow ETH to
-# deploy a fixed Rs 50k notional even at lower per-contract notional.
+# Hard cap on contracts per single order — protection against a sizing bug
+# producing a giant order. With the corrected ETH contract size a Rs 50k
+# order is ~31 contracts at $1,870, so 150 leaves headroom for a much lower
+# ETH price while still catching an order-of-magnitude error. The old value
+# of 300 existed only to accommodate the 10x contract-size bug.
 MAX_LIVE_CONTRACTS: int = 50
 MAX_LIVE_CONTRACTS_BY_ASSET: dict[str, int] = {
     "BTCUSD": 50,
-    "ETHUSD": 300,
-    "XAUTUSD": 50,
+    "ETHUSD": 150,
+    # XAUT is ~$4k with contract_value 0.001, so one contract is only ~$4 —
+    # a Rs 50k order needs ~145. The old cap of 50 silently capped XAUT at
+    # ~35% of the intended budget.
+    "XAUTUSD": 250,
 }
+
+# Ceiling on realized order notional as a multiple of the requested budget.
+# A contract cap alone did NOT catch the ETH contract-size bug: it clipped
+# 311 -> 300 contracts, which was still 10x the intended Rs 50k, because a
+# contract count is meaningless without the right contract_value. This guard
+# is denominated in the same units as the sizing input, so an order-of-
+# magnitude error cannot get through regardless of contract metadata.
+MAX_ORDER_NOTIONAL_MULT: float = 1.5
 
 
 # ── Exit regime ──────────────────────────────────────────────────────────────
@@ -98,14 +111,41 @@ MAX_LIVE_CONTRACTS_BY_ASSET: dict[str, int] = {
 EXIT_REGIME: str = os.environ.get("CRYPTO_EXIT_REGIME", "pure_sltp")
 
 
-# ── Position management ──────────────────────────────────────────────────────
-MAX_HOLD_HOURS: int = 72
+# ── Exchange-side protective bracket ─────────────────────────────────────────
+# After every entry fills we attach a bracket at Delta (POST /v2/orders/bracket)
+# so the stop and target live at the exchange, not only in this process. The 2s
+# management tick remains as a backstop and still owns max-hold, which the
+# exchange cannot express — but a container OOM, a network partition or a
+# stalled WS no longer leaves a leveraged position completely unprotected.
+EXCHANGE_BRACKET_ENABLED: bool = True
 
-# Delta India BTC/ETH perp contract size = 0.001 underlying. Used by the
-# sizing formula to convert USD notional → integer contract count.
+# Delta's bracket legs are LIMIT-only. A stop-limit priced exactly AT the
+# trigger frequently does not fill in the fast move that triggered it, so the
+# limit is placed this far THROUGH the trigger to cross the book. This is a
+# fill guarantee, not a price improvement — on a 15x position a stop that
+# fails to fill is far worse than a few bps of slippage.
+BRACKET_LIMIT_SLIPPAGE_BPS: float = 15.0
+
+# Trigger off mark price: it matches what the strategy and the backtest read,
+# and it avoids a thin last-traded print wicking the stop out.
+BRACKET_STOP_TRIGGER_METHOD: str = "mark_price"
+
+
+# ── Position management ──────────────────────────────────────────────────────
+# Max hold is owned by the strategy (price_action_sr.MAX_HOLD_MINUTES = 240).
+# Do not reintroduce a second dial here — the runner imports the strategy's.
+
+# Delta perp contract size, verified against GET /v2/products on 2026-08-04:
+#   BTCUSD  id 27      contract_value 0.001
+#   ETHUSD  id 3136    contract_value 0.01     <- NOT 0.001
+#   XAUTUSD id 131253  contract_value 0.001
+# ETH was previously listed here as 0.001, which made every ETH order 10x the
+# intended notional and understated realized P&L (and therefore the daily-loss
+# kill switch) by the same factor. Re-verify against /v2/products before
+# adding a symbol.
 CONTRACT_SIZE_BY_ASSET: dict[str, float] = {
     "BTCUSD": 0.001,
-    "ETHUSD": 0.001,
+    "ETHUSD": 0.01,
     "XAUTUSD": 0.001,
 }
 

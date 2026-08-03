@@ -46,12 +46,13 @@ from core.risk_management import (
     TICK_INTERVAL_SECONDS, BASE_EQUITY_USD,
     CAPITAL_USE_PCT, BTC_CAPITAL_PCT, ETH_CAPITAL_PCT, capital_pct_for,
     DAILY_LOSS_KILL_PCT, MAX_LIVE_CONTRACTS, MAX_LIVE_CONTRACTS_BY_ASSET,
+    MAX_ORDER_NOTIONAL_MULT,
     LEVERAGE, CONTRACT_SIZE_BY_ASSET,
-    ENABLE_CRYPTO_RUNNER, EXIT_REGIME,
+    ENABLE_CRYPTO_RUNNER, EXIT_REGIME, EXCHANGE_BRACKET_ENABLED,
     FIXED_CAPITAL_MODE, FIXED_CAPITAL_INR, USD_INR_RATE,
 )
 from strategies.price_action_sr import (
-    ETHPriceActionSRSignal, MAX_HOLD_MINUTES,
+    ETHPriceActionSRSignal, MAX_HOLD_MINUTES, ASSET_DIALS, SL_PCT, RR_RATIO,
 )
 
 from strategies.crypto_base import CryptoSignalDecision
@@ -100,12 +101,28 @@ def _get_strategies():
 
 # ── sizing ────────────────────────────────────────────────────────────────────
 def _contracts_for_notional(symbol: str, notional_usd: float, mark: float) -> int:
-    """Convert USD notional → integer contract count using Delta's contract size."""
+    """Convert USD notional → integer contract count using Delta's contract size.
+
+    Two independent ceilings apply: a per-asset contract cap, and a notional
+    ceiling that holds even if CONTRACT_SIZE_BY_ASSET is wrong for a symbol.
+    """
     cs = CONTRACT_SIZE_BY_ASSET.get(symbol, 0.001)
-    if mark <= 0: return 0
+    if mark <= 0 or cs <= 0: return 0
     n = int(notional_usd / (cs * mark))
     cap = MAX_LIVE_CONTRACTS_BY_ASSET.get(symbol, MAX_LIVE_CONTRACTS)
-    return max(0, min(cap, n))
+    n = max(0, min(cap, n))
+    # Notional ceiling — catches a wrong contract_value that the contract cap
+    # would happily pass through.
+    max_notional = notional_usd * MAX_ORDER_NOTIONAL_MULT
+    if n * cs * mark > max_notional:
+        clamped = int(max_notional / (cs * mark))
+        logger.error("%s: sizing %d contracts = $%.2f exceeds %.1fx budget "
+                     "$%.2f — clamping to %d. Verify contract_value=%s "
+                     "against Delta /v2/products.",
+                     symbol, n, n * cs * mark, MAX_ORDER_NOTIONAL_MULT,
+                     notional_usd, clamped, cs)
+        n = max(0, clamped)
+    return n
 
 
 # ── daily P&L tracking + kill switch ──────────────────────────────────────────
@@ -256,6 +273,14 @@ def _manage_open_position(strategy_name: str, broker, pos: dict) -> bool:
 
     # ── execute the full exit (shared by both regimes) ──
     if pos["contracts"] <= 0: return True
+    # Drop the exchange bracket BEFORE closing. If the close ran first, the
+    # bracket would still be armed against a position that no longer exists and
+    # could re-open one on the next trigger.
+    if EXCHANGE_BRACKET_ENABLED and pos.get("bracket", {}).get("ok"):
+        if not broker.cancel_bracket(symbol):
+            logger.error("%s: could not cancel exchange bracket before exit — "
+                         "check open stop orders on %s manually",
+                         strategy_name, symbol)
     order = broker.place_order(symbol, "sell" if side == "buy" else "buy",
                                size=pos["contracts"], order_type="market_order",
                                reduce_only=True, tag=f"{strategy_name}_{exit_reason}")
@@ -282,6 +307,191 @@ def _manage_open_position(strategy_name: str, broker, pos: dict) -> bool:
     except Exception:
         pass
     return True
+
+
+# ── position reconciliation ───────────────────────────────────────────────────
+# _OPEN_POSITIONS is in-memory. Three things can put it out of step with the
+# exchange, and every one of them used to go unnoticed:
+#   1. the exchange bracket fills   → we keep managing a position that is gone
+#   2. the container restarts       → a live position nobody is managing, and
+#                                     the runner will happily open another
+#   3. a partial fill or partial close → wrong size on every subsequent order
+# This engine is the only thing that closes that loop.
+
+def _position_side_and_size(row: dict) -> tuple[Optional[str], int]:
+    """Delta position size is signed: >0 long, <0 short, 0 flat."""
+    raw = row.get("size")
+    try:
+        size = int(float(raw))
+    except (TypeError, ValueError):
+        return None, 0
+    if size == 0:
+        return None, 0
+    return ("buy" if size > 0 else "sell"), abs(size)
+
+
+def _exchange_positions(broker) -> Optional[dict[str, dict]]:
+    """{symbol: {side, contracts, entry_price}} from the exchange.
+
+    Returns None when the exchange could not be read — callers must skip
+    reconciliation entirely rather than assume flat.
+    """
+    rows = broker.get_positions()
+    if rows is None:
+        return None
+    out: dict[str, dict] = {}
+    for row in rows:
+        symbol = row.get("product_symbol") or (row.get("product") or {}).get("symbol")
+        if not symbol:
+            pid = row.get("product_id")
+            symbol = next((s for s in CONTRACT_SIZE_BY_ASSET
+                           if broker.get_product_id(s) == pid), None)
+        if not symbol:
+            logger.warning("reconcile: could not resolve symbol for position row %s", row)
+            continue
+        side, contracts = _position_side_and_size(row)
+        if side is None:
+            continue
+        try:
+            entry = float(row.get("entry_price") or 0)
+        except (TypeError, ValueError):
+            entry = 0.0
+        out[symbol] = {"side": side, "contracts": contracts, "entry_price": entry}
+    return out
+
+
+def _synth_decision(symbol: str, side: str) -> CryptoSignalDecision:
+    """Bracket dials for a position we adopted rather than opened.
+
+    Uses the strategy's own per-asset SL/RR so an adopted position is managed
+    on exactly the same terms as one this runner entered.
+    """
+    underlying = symbol.replace("USD", "")
+    dials = ASSET_DIALS.get(underlying, {"sl_pct": SL_PCT, "rr_ratio": RR_RATIO})
+    sl = float(dials["sl_pct"])
+    return CryptoSignalDecision(
+        name="reconciled", symbol=symbol, side=side, pred_pct=0.0, n_strikes=0,
+        stop_loss_pct=sl, partial_tp_pct=sl * float(dials["rr_ratio"]),
+        trail_peak_pct=sl, trail_giveback=sl * 0.25,
+        metadata={"adopted": True},
+    )
+
+
+def _strategy_for_symbol(symbol: str) -> Optional[str]:
+    for name, strat in _get_strategies().items():
+        if getattr(strat, "symbol", None) == symbol:
+            return name
+    return None
+
+
+def reconcile_positions() -> dict:
+    """Make _OPEN_POSITIONS agree with the exchange. Safe to call repeatedly."""
+    broker = get_crypto_broker()
+    if broker.mode != "live":
+        return {"skipped": "paper mode"}
+
+    exch = _exchange_positions(broker)
+    if exch is None:
+        logger.warning("reconcile: exchange unreachable — leaving local state untouched")
+        return {"skipped": "exchange unreachable"}
+
+    report = {"closed": [], "adopted": [], "resized": []}
+
+    # 1. Tracked locally but flat (or gone) at the exchange.
+    for name, pos in list(_OPEN_POSITIONS.items()):
+        symbol = pos["symbol"]
+        live = exch.get(symbol)
+        if live and live["side"] == pos["side"]:
+            continue
+        mark = broker.get_perp_mark(symbol)
+        entry = float(pos["entry_price"])
+        sign = 1 if pos["side"] == "buy" else -1
+        unreal_pct = (sign * (mark - entry) / entry) if (mark and entry) else 0.0
+        pnl = (unreal_pct * float(pos.get("notional_usd") or 0))
+        global _DAY_PNL_USD
+        _DAY_PNL_USD += pnl
+        _write_trade_event({
+            "ts": datetime.now(timezone.utc), "venue": "delta_india",
+            "mode": broker.mode, "strategy": name, "symbol": symbol,
+            "side": pos["side"], "event": "reconciled_close",
+            "exit_price": mark, "contracts_closed": pos["contracts"],
+            "pnl_usd": pnl, "unrealized_pct": unreal_pct,
+            # The real fill happened at the exchange; we only see the mark now.
+            "approximate_pnl": True,
+        })
+        logger.warning("reconcile: %s %s closed at the exchange (bracket or manual). "
+                       "Booking approx pnl %.2f at mark %s", name, symbol, pnl, mark)
+        broker.cancel_bracket(symbol)
+        try:
+            strat = _get_strategies().get(name)
+            if strat and hasattr(strat, "notify_trade_closed"):
+                strat.notify_trade_closed(pos["side"], unreal_pct)
+        except Exception:
+            pass
+        del _OPEN_POSITIONS[name]
+        report["closed"].append(symbol)
+
+    # 2. Live at the exchange but untracked — adopt it, then protect it.
+    for symbol, live in exch.items():
+        if any(p["symbol"] == symbol for p in _OPEN_POSITIONS.values()):
+            continue
+        name = _strategy_for_symbol(symbol)
+        if name is None:
+            logger.error("reconcile: ORPHAN position %s %s x%d at the exchange with no "
+                         "matching strategy — this runner will not manage it. Close it "
+                         "manually or add the strategy.",
+                         symbol, live["side"], live["contracts"])
+            continue
+        mark = broker.get_perp_mark(symbol)
+        entry = live["entry_price"] or mark or 0.0
+        decision = _synth_decision(symbol, live["side"])
+        _OPEN_POSITIONS[name] = {
+            "symbol": symbol, "side": live["side"], "entry_price": entry,
+            # Unknown open time — restart the max-hold clock rather than
+            # force-closing something we cannot date.
+            "entry_ts": time.time(),
+            "contracts": live["contracts"],
+            "notional_usd": live["contracts"] * CONTRACT_SIZE_BY_ASSET.get(symbol, 0.001) * (mark or entry),
+            "decision": decision, "peak_pct": 0.0,
+        }
+        logger.warning("reconcile: ADOPTED untracked %s %s x%d @ %s — re-arming bracket",
+                       symbol, live["side"], live["contracts"], entry)
+        if EXCHANGE_BRACKET_ENABLED:
+            # Clear whatever stops may be there and attach exactly one correct
+            # bracket; Delta permits only one per open position anyway.
+            broker.cancel_bracket(symbol)
+            sign = 1 if live["side"] == "buy" else -1
+            br = broker.place_bracket(
+                symbol, live["side"],
+                stop_price=entry * (1 - sign * decision.stop_loss_pct),
+                take_profit_price=entry * (1 + sign * decision.partial_tp_pct),
+            )
+            _OPEN_POSITIONS[name]["bracket"] = br
+            if not br.get("ok"):
+                logger.error("reconcile: could not bracket adopted %s: %s",
+                             symbol, br.get("error"))
+        report["adopted"].append(symbol)
+
+    # 3. Same side, different size — trust the exchange.
+    for name, pos in _OPEN_POSITIONS.items():
+        live = exch.get(pos["symbol"])
+        if live and live["side"] == pos["side"] and live["contracts"] != pos["contracts"]:
+            logger.warning("reconcile: %s size drift local=%d exchange=%d — taking exchange",
+                           name, pos["contracts"], live["contracts"])
+            pos["contracts"] = live["contracts"]
+            report["resized"].append(pos["symbol"])
+
+    if any(report.values()):
+        logger.warning("reconcile summary: %s", report)
+    return report
+
+
+def tick_reconcile() -> None:
+    """Scheduled reconciliation. Errors here must never kill the job."""
+    try:
+        reconcile_positions()
+    except Exception as e:
+        logger.error("reconcile tick failed: %s", e, exc_info=True)
 
 
 def _manage_shadow_positions(broker) -> None:
@@ -369,22 +579,6 @@ def tick_position_management() -> None:
             logger.error("%s position mgmt error: %s", name, e, exc_info=True)
     for name in to_remove:
         del _OPEN_POSITIONS[name]
-
-
-def tick_signal_sample() -> None:
-    """Runs every 5 minutes — samples raw pred into history WITHOUT placing
-    orders. Lets the persistence gate warm up between hourly entry decisions
-    so an hourly entry tick has ~12 prior samples of same-sign context in the
-    1h window, matching how backtest builds sig_history continuously."""
-    strategies = _get_strategies()
-    for name, strat in strategies.items():
-        try:
-            # signal_now() runs _compute_signal once, which records pred to
-            # both _pred_trace (charting) and _sig_history (persistence) via
-            # the base-class helpers. Returns None at the gate — we discard it.
-            strat.signal_now()
-        except Exception as e:
-            logger.error("%s signal sample error: %s", name, e)
 
 
 def tick_entry_decisions() -> None:
@@ -478,6 +672,8 @@ def tick_entry_decisions() -> None:
             for k in list(_SHADOW_POSITIONS):
                 if not any(t["id"] == k for t in _SHADOW_TRADES):
                     _SHADOW_POSITIONS.pop(k, None)
+            if hasattr(strat, "notify_entry_taken"):
+                strat.notify_entry_taken()
             continue
 
         notional = effective_equity * decision.size_mult
@@ -509,6 +705,24 @@ def tick_entry_decisions() -> None:
             "decision": decision,
             "peak_pct": 0.0,
         }
+        if hasattr(strat, "notify_entry_taken"):
+            strat.notify_entry_taken()
+
+        # Park the stop and target at the exchange. The 2s tick still manages
+        # this position (and owns max-hold, which a bracket cannot express),
+        # but the position is no longer defenceless if this process dies.
+        if EXCHANGE_BRACKET_ENABLED:
+            entry_px = order.get("fill_price", mark)
+            sign = 1 if decision.side == "buy" else -1
+            stop_px = entry_px * (1 - sign * decision.stop_loss_pct)
+            target_px = entry_px * (1 + sign * decision.partial_tp_pct)
+            br = broker.place_bracket(decision.symbol, decision.side,
+                                      stop_price=stop_px, take_profit_price=target_px)
+            _OPEN_POSITIONS[name]["bracket"] = br
+            if not br.get("ok"):
+                logger.error("%s: EXCHANGE BRACKET FAILED (%s) — position is only "
+                             "protected while this runner is alive",
+                             name, br.get("error"))
         _write_trade_event({
             "ts": datetime.now(timezone.utc), "venue": "delta_india",
             "mode": broker.mode, "strategy": name,
@@ -530,7 +744,7 @@ def init_crypto_runner(scheduler) -> None:
     broker = get_crypto_broker()
     mode = broker.mode
     logger.info("crypto runner enabled — mode=%s regime=%s mgmt_tick=%ds "
-                "sample=5m entry=1min@*:05 UTC equity=$%.0f kill=-%.1f%% "
+                "entry=1min@*:05 UTC equity=$%.0f kill=-%.1f%% "
                 "max_contracts=%d",
                 mode, EXIT_REGIME, TICK_INTERVAL_SECONDS, BASE_EQUITY_USD,
                 DAILY_LOSS_KILL_PCT * 100, MAX_LIVE_CONTRACTS)
@@ -550,6 +764,14 @@ def init_crypto_runner(scheduler) -> None:
     except Exception as e:
         logger.warning("crypto runner history backfill failed: %s", e)
 
+    # Adopt or clear anything already at the exchange BEFORE the entry job can
+    # run. Without this a restart with a live position would leave it
+    # unmanaged and immediately open a second one on the next signal.
+    try:
+        logger.info("crypto runner: startup reconciliation — %s", reconcile_positions())
+    except Exception as e:
+        logger.error("crypto runner: startup reconciliation failed: %s", e, exc_info=True)
+
     try:
         # 1) Position-management tick — every 2s. Cheap mark reads + stop/trail.
         scheduler.add_job(
@@ -559,16 +781,7 @@ def init_crypto_runner(scheduler) -> None:
             next_run_time=datetime.now(timezone.utc),
             max_instances=1, coalesce=True,
         )
-        # 2) Signal-history warm-up — every 5 min. Records raw pred to
-        #    _sig_history so the hourly entry tick has prior samples to gate on.
-        scheduler.add_job(
-            tick_signal_sample, "interval",
-            minutes=5,
-            id="crypto_signal_sample_tick", replace_existing=True,
-            next_run_time=datetime.now(timezone.utc),
-            max_instances=1, coalesce=True,
-        )
-        # 3) 1-minute entry decision — the price-action S/R strategy is
+        # 2) 1-minute entry decision — the price-action S/R strategy is
         #    intrinsically 1m-candle based. A 15-minute grid was inherited from
         #    the old options strategy and was shown to miss ~88% of valid setups
         #    in the corrected backtest. Evaluate every minute at :05s so the
@@ -577,6 +790,15 @@ def init_crypto_runner(scheduler) -> None:
             tick_entry_decisions, "cron",
             minute="*", second=5, timezone="UTC",
             id="crypto_1min_entry_tick", replace_existing=True,
+            max_instances=1, coalesce=True,
+        )
+        # 3) Position reconciliation — every 30s. The exchange bracket can
+        #    close a position without telling us, and a restart can leave one
+        #    untracked; this is the only job that resolves either.
+        scheduler.add_job(
+            tick_reconcile, "interval",
+            seconds=30,
+            id="crypto_reconcile_tick", replace_existing=True,
             max_instances=1, coalesce=True,
         )
         # 4) Wallet heartbeat — every 5 min, log Delta wallet breakdown.
@@ -612,6 +834,11 @@ def get_state() -> dict:
                 "held_hours": (time.time() - pos["entry_ts"]) / 3600,
                 "peak_pct": pos.get("peak_pct", 0.0),
                 "tp_taken": pos.get("tp_taken", False),
+                # Bracket levels so the dashboard can show distance-to-stop
+                # and distance-to-target rather than just a position count.
+                "stop_loss_pct": pos["decision"].stop_loss_pct,
+                "target_pct": pos["decision"].partial_tp_pct,
+                "max_hold_minutes": MAX_HOLD_MINUTES,
             } for name, pos in _OPEN_POSITIONS.items()
         },
         "shadow_trades":   list(_SHADOW_TRADES[-_MAX_SHADOW_TRADES:]),
@@ -686,6 +913,8 @@ def manual_kill():
     broker = get_crypto_broker()
     for name, pos in list(_OPEN_POSITIONS.items()):
         try:
+            if EXCHANGE_BRACKET_ENABLED and pos.get("bracket", {}).get("ok"):
+                broker.cancel_bracket(pos["symbol"])
             order = broker.place_order(pos["symbol"],
                                        "sell" if pos["side"] == "buy" else "buy",
                                        size=pos["contracts"], order_type="market_order",

@@ -274,6 +274,16 @@ class PriceActionSRSignal(CryptoStrategy):
             return 0.0
         return float(returns.std() * np.sqrt(365 * 24 * 60))
 
+    def notify_entry_taken(self) -> None:
+        """Runner calls this once an entry actually becomes a position.
+
+        Arming the cooldown here rather than inside _signal() matters: _signal()
+        is also run for observation (startup warm-up, dashboard state), and
+        arming on evaluation meant an observed setup silently consumed the
+        60-minute cooldown without any trade being placed.
+        """
+        self._last_signal_minute = int(time.time() // 60)
+
     def notify_trade_closed(self, side: str, pnl_pct: float) -> None:
         """Runner calls this when a strategy trade closes. Used for block-after-loss."""
         if pnl_pct <= 0:
@@ -396,17 +406,22 @@ class PriceActionSRSignal(CryptoStrategy):
         if REQUIRE_ENGULFING or PIN_BAR_WICK_RATIO > 0:
             pattern_long_ok = pattern_short_ok = False
             if idx >= 1:
+                # NOTE: `o`/`c` here used to reference the comprehension
+                # variables from the avg_body calculation above, which do not
+                # leak out of a comprehension in Python 3 — enabling either
+                # pattern filter raised NameError on every entry tick.
+                cur_o, cur_c = opens[idx], closes[idx]
                 prev_o, prev_c = opens[idx-1], closes[idx-1]
                 prev_green, prev_red = prev_c > prev_o, prev_c < prev_o
                 if REQUIRE_ENGULFING:
                     # current green body engulfs previous red body
-                    if green and prev_red and o <= prev_c and c >= prev_o:
+                    if green and prev_red and cur_o <= prev_c and cur_c >= prev_o:
                         pattern_long_ok = True
                     # current red body engulfs previous green body
-                    if red and prev_green and o >= prev_c and c <= prev_o:
+                    if red and prev_green and cur_o >= prev_c and cur_c <= prev_o:
                         pattern_short_ok = True
-                if PIN_BAR_WICK_RATIO > 0:
-                    body_ratio = body / rng if rng > 0 else 1
+                if PIN_BAR_WICK_RATIO > 0 and rng > 0:
+                    body_ratio = body / rng
                     if green and (lower_wick / rng >= PIN_BAR_WICK_RATIO) and body_ratio <= 0.35:
                         pattern_long_ok = True
                     if red and (upper_wick / rng >= PIN_BAR_WICK_RATIO) and body_ratio <= 0.35:
@@ -507,7 +522,6 @@ class PriceActionSRSignal(CryptoStrategy):
             self._last_decision = None
             return None
 
-        self._last_signal_minute = current_minute
         self._record_pred_trace((1 if side == "buy" else -1) * width_pct * 100)
         self._record_sig_history((1 if side == "buy" else -1) * width_pct * 100)
 
