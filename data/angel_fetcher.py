@@ -791,11 +791,43 @@ class AngelFetcher:
             logger.warning("get_option_quote %s: %s", tradingsymbol, e)
             return None
 
+    @staticmethod
+    def _gtt_rule_id(resp) -> Optional[str]:
+        """Angel returns the new rule id in a few shapes; normalize to str."""
+        if resp is None:
+            return None
+        if isinstance(resp, (str, int)):
+            return str(resp).strip() or None
+        if isinstance(resp, dict):
+            data = resp.get("data")
+            if isinstance(data, dict):
+                rid = data.get("id") or data.get("ruleid") or data.get("ruleId")
+                if rid is not None:
+                    return str(rid)
+            if isinstance(data, (str, int)):
+                return str(data)
+            rid = resp.get("id") or resp.get("ruleid")
+            if rid is not None:
+                return str(rid)
+        return None
+
     def gtt_create_rule(self, tradingsymbol: str, token: str, exchange: str,
                         transactiontype: str, producttype: str, qty: int,
                         triggerprice: float, price: float,
-                        disclosedqty: int = 0, timeperiod: int = 365) -> Optional[dict]:
-        """Create a GTT rule (SL / target). Returns API response dict or None."""
+                        stoploss_trigger: Optional[float] = None,
+                        stoploss_price: Optional[float] = None,
+                        disclosedqty: int = 0,
+                        timeperiod: int = 365) -> Optional[str]:
+        """Create a GTT rule and return its rule id (or None).
+
+        When stoploss_trigger/stoploss_price are supplied the rule is created
+        as gttType=OCO, so the target and the stop are ONE rule and the
+        exchange cancels the other side once either fires. Without OCO the two
+        legs would be independent rules and the survivor would stay armed after
+        the first triggered — later opening an unwanted position.
+
+        Returns the rule id (needed to cancel it later), not the raw response.
+        """
         if not self._ensure_logged_in():
             return None
         try:
@@ -811,14 +843,70 @@ class AngelFetcher:
                 "triggerprice": str(triggerprice),
                 "timeperiod": str(timeperiod),
             }
+            if stoploss_trigger is not None and stoploss_price is not None:
+                payload["gttType"] = "OCO"
+                payload["stoplosstriggerprice"] = str(stoploss_trigger)
+                payload["stoplossprice"] = str(stoploss_price)
             resp = self._api._request("api.gtt.create", "POST", payload)
             if self._is_auth_failure(resp):
                 if self._ensure_logged_in():
                     resp = self._api._request("api.gtt.create", "POST", payload)
-            return resp
+            rule_id = self._gtt_rule_id(resp)
+            if rule_id is None:
+                logger.error("gtt_create_rule: no rule id in response: %r", resp)
+            return rule_id
         except Exception as e:
             logger.error("gtt_create_rule failed: %s", e)
             return None
+
+    def gtt_cancel_rule(self, rule_id: str, tradingsymbol: str,
+                        token: str, exchange: str) -> bool:
+        """Cancel a GTT rule. Returns True if the exchange accepted it.
+
+        Every exit path must call this. A rule left armed after the position is
+        closed will eventually trigger and open a fresh unintended position.
+        """
+        if not rule_id or not self._ensure_logged_in():
+            return False
+        try:
+            payload = {
+                "id": str(rule_id),
+                "symboltoken": token,
+                "exchange": exchange,
+            }
+            resp = self._api._request("api.gtt.cancel", "POST", payload)
+            if self._is_auth_failure(resp):
+                if self._ensure_logged_in():
+                    resp = self._api._request("api.gtt.cancel", "POST", payload)
+            ok = bool(resp and resp.get("status"))
+            if not ok:
+                logger.error("gtt_cancel_rule %s (%s) failed: %r",
+                             rule_id, tradingsymbol, resp)
+            return ok
+        except Exception as e:
+            logger.error("gtt_cancel_rule %s failed: %s", rule_id, e)
+            return False
+
+    def gtt_list_rules(self, statuses: Optional[list[str]] = None,
+                       page: int = 1, count: int = 50) -> list[dict]:
+        """List GTT rules, default the live ones. Used to find orphans."""
+        if not self._ensure_logged_in():
+            return []
+        try:
+            payload = {
+                "status": statuses or ["NEW", "PENDING"],
+                "page": page,
+                "count": count,
+            }
+            resp = self._api._request("api.gtt.list", "POST", payload)
+            if self._is_auth_failure(resp):
+                if self._ensure_logged_in():
+                    resp = self._api._request("api.gtt.list", "POST", payload)
+            data = (resp or {}).get("data")
+            return data if isinstance(data, list) else []
+        except Exception as e:
+            logger.error("gtt_list_rules failed: %s", e)
+            return []
 
     def get_option_ltps_bulk(self, symbol: str, strikes: list[int],
                              option_type: str, expiry: date) -> dict[int, tuple[str, float]]:

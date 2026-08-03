@@ -47,6 +47,12 @@ class ComboLeg:
     entry_px: float = 0.0
     filled_px: Optional[float] = None
     order_id: Optional[str] = None
+    # Id of this leg's protective OCO GTT rule. Must be cancelled on every
+    # exit path, otherwise the rule stays armed at the exchange and later
+    # opens a position we no longer want.
+    gtt_rule_id: Optional[str] = None
+    gtt_stop_px: Optional[float] = None
+    gtt_target_px: Optional[float] = None
 
 
 @dataclass

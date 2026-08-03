@@ -23,6 +23,7 @@ from nse.broker.angel_broker import AngelBroker
 from nse.config import (
     MARKET_CLOSE,
     MARKET_OPEN,
+    market_close_for,
     MAX_HOLD_HOURS,
     STEP_SIZES,
     STOP_LOSS_PCT,
@@ -57,7 +58,14 @@ def _margin_available() -> float:
     return TOTAL_CAPITAL_INR - _MARGIN_USED_INR
 
 
-def _is_market_open(now: Optional[datetime] = None) -> bool:
+def _is_market_open(now: Optional[datetime] = None,
+                    symbol: Optional[str] = None) -> bool:
+    """Is the market open right now?
+
+    With no symbol this uses the widest close across exchanges, so the tick
+    keeps running while any venue is live. Pass a symbol to get that
+    instrument's own exchange close (NFO 15:40 vs BFO 15:30).
+    """
     if now is None:
         now = now_ist()
     if now.weekday() >= 5:
@@ -65,7 +73,8 @@ def _is_market_open(now: Optional[datetime] = None) -> bool:
     is_hol, _ = is_market_holiday(now.date().isoformat())
     if is_hol:
         return False
-    return MARKET_OPEN <= now.time() <= MARKET_CLOSE
+    close = market_close_for(symbol) if symbol else MARKET_CLOSE
+    return MARKET_OPEN <= now.time() <= close
 
 
 def _entry_tick():
@@ -86,6 +95,9 @@ def _entry_tick():
         # Collect gated signals and live margins from all symbols.
         tradable: list[tuple[str, SyntheticForwardSignal, list, float, OptionChainCache]] = []
         for symbol in SYMBOLS:
+            # BFO closes 10 min before NFO — skip symbols whose venue is shut.
+            if not _is_market_open(symbol=symbol):
+                continue
             cache = OptionChainCache(symbol, fetcher)
             spot = cache.get_underlying_ltp()
             if spot is None:
@@ -163,10 +175,13 @@ def _entry_tick():
                             symbol, margin, available)
                 continue
 
-            sl_points = chosen.spot * STOP_LOSS_PCT
-            target_points = chosen.spot * TARGET_PCT
-            position = broker.place_combo(chosen, legs, use_limit=True,
-                                          sl_points=sl_points, target_points=target_points)
+            # The broker sizes its own protective bracket off each leg's fill
+            # premium (nse/config.py GTT_* dials). Passing a spot-derived
+            # distance here was the old bug: a ~360-point NIFTY stop was being
+            # subtracted from a ~150 option premium, producing negative GTT
+            # prices. STOP_LOSS_PCT / TARGET_PCT remain the combo-level exit,
+            # applied in _position_tick against spot.
+            position = broker.place_combo(chosen, legs, use_limit=True)
             if position is None:
                 continue
 
@@ -206,6 +221,9 @@ def _position_tick():
         now = datetime.now(timezone.utc)
         for pid in list(_OPEN_POSITIONS.keys()):
             pos = _OPEN_POSITIONS[pid]
+            # Don't send square-off orders to an exchange that has closed.
+            if not _is_market_open(symbol=pos.symbol):
+                continue
             spot = fetcher.get_index_ltp(pos.symbol)
             if spot is None or spot <= 0:
                 continue

@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 
 from data.angel_fetcher import AngelFetcher
-from nse.config import EXCHANGE, STEP_SIZES, SYMBOLS
+from nse.config import EXCHANGE, STEP_SIZES, SYMBOLS, market_close_for
 
 logger = logging.getLogger(__name__)
 
@@ -229,11 +229,17 @@ def _normalize_historical_df(df: pd.DataFrame, symbol: str,
     else:
         df["timestamp"] = pd.NaT
 
-    # Expiry: string -> date -> UTC 15:30 IST close.
+    # Expiry: string -> date -> UTC exchange close. NFO moved to 15:40 on
+    # 2026-08-03; BFO and all older NFO expiries settle at 15:30.
     if "expiry" in df.columns:
         df["expiry"] = pd.to_datetime(df["expiry"], errors="coerce")
         if df["expiry"].dt.tz is None:
-            df["expiry"] = df["expiry"].dt.tz_localize("Asia/Kolkata") + pd.Timedelta(hours=15, minutes=30)
+            close_minutes = df["expiry"].dt.date.map(
+                lambda d: (lambda c: c.hour * 60 + c.minute)(market_close_for(symbol, d))
+                if pd.notna(d) else 0
+            )
+            df["expiry"] = (df["expiry"].dt.tz_localize("Asia/Kolkata")
+                            + pd.to_timedelta(close_minutes, unit="m"))
             df["expiry"] = df["expiry"].dt.tz_convert("UTC")
     else:
         df["expiry"] = pd.NaT

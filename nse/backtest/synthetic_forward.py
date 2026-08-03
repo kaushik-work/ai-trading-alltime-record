@@ -29,6 +29,7 @@ import argparse
 import logging
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 import numpy as np
 import pandas as pd
@@ -38,6 +39,7 @@ from nse.config import (
     ENTRY_PCT,
     FEE_BPS_PER_LEG,
     FIXED_CAPITAL_INR,
+    GTT_ENABLED,
     LOT_SIZES,
     MAX_HOLD_HOURS,
     STEP_SIZES,
@@ -46,6 +48,7 @@ from nse.config import (
     TOTAL_CAPITAL_INR,
     TRAIL_GIVEBACK_PCT,
     TRAIL_PEAK_PCT,
+    gtt_levels_for_leg,
 )
 from nse.data.option_chain import load_snapshots_csv, load_snapshots_mongo
 from nse.strategies.synthetic_forward import SyntheticForwardStrategy
@@ -120,6 +123,55 @@ def _fees_for_lots(lots: int) -> float:
     # Fee per fill is a percentage of premium; here we approximate as a
     # fixed amount per lot to avoid premium-dependence. Override if needed.
     return lots * 40.0  # placeholder: ₹10 per fill per lot
+
+
+def _leg_brackets(ce_q: dict, pe_q: dict, side: str, spot: float) -> dict:
+    """Entry premiums per leg + the GTT levels live would park at the exchange.
+
+    long  synthetic → BUY CE + SELL PE
+    short synthetic → SELL CE + BUY PE
+    Entry fills cross the spread: buys at ask, sells at bid.
+    """
+    ce_long = side == "long"
+    pe_long = not ce_long
+    ce_px = ce_q["ask"] if ce_long else ce_q["bid"]
+    pe_px = pe_q["ask"] if pe_long else pe_q["bid"]
+    ce_stop, ce_target = gtt_levels_for_leg(ce_px, is_long=ce_long, spot=spot)
+    pe_stop, pe_target = gtt_levels_for_leg(pe_px, is_long=pe_long, spot=spot)
+    return {
+        "ce_entry_px": ce_px, "pe_entry_px": pe_px,
+        "ce_long": ce_long, "pe_long": pe_long,
+        "ce_gtt_stop": ce_stop, "ce_gtt_target": ce_target,
+        "pe_gtt_stop": pe_stop, "pe_gtt_target": pe_target,
+    }
+
+
+def _gtt_breach(pos: dict, ce_q: dict, pe_q: dict) -> Optional[str]:
+    """Has either leg's protective GTT bracket triggered?
+
+    Live, a triggered rule fires a market/limit exit on that ONE leg, which
+    leaves the other leg naked — the runner then flattens the remainder. We
+    model that as a full-combo exit tagged by which leg tripped, so backtest
+    trade counts and exit reasons line up with what the broker will do.
+    """
+    if not GTT_ENABLED or "ce_gtt_stop" not in pos:
+        return None
+    # Exit fills cross the spread the other way from entry.
+    ce_px = ce_q["bid"] if pos["ce_long"] else ce_q["ask"]
+    pe_px = pe_q["bid"] if pos["pe_long"] else pe_q["ask"]
+    for tag, px, is_long, stop, target in (
+        ("ce", ce_px, pos["ce_long"], pos["ce_gtt_stop"], pos["ce_gtt_target"]),
+        ("pe", pe_px, pos["pe_long"], pos["pe_gtt_stop"], pos["pe_gtt_target"]),
+    ):
+        if px <= 0:
+            continue
+        if is_long:
+            if px <= stop:   return f"gtt_stop_{tag}"
+            if px >= target: return f"gtt_target_{tag}"
+        else:
+            if px >= stop:   return f"gtt_stop_{tag}"
+            if px <= target: return f"gtt_target_{tag}"
+    return None
 
 
 def _exit_position(pos: dict, t: datetime, equity: float) -> tuple[float, dict]:
@@ -218,6 +270,10 @@ def run_backtest(symbol: str, df: pd.DataFrame, capital: float = FIXED_CAPITAL_I
                     reason = "trail"
                 elif unreal >= TARGET_PCT:
                     reason = "target"
+                else:
+                    # Broker-side bracket last: it sits wider than the combo
+                    # exit, so it only matters when nothing above fired.
+                    reason = _gtt_breach(open_pos, ce_q, pe_q)
 
                 if reason:
                     open_pos["exit_reason"] = reason
@@ -273,6 +329,9 @@ def run_backtest(symbol: str, df: pd.DataFrame, capital: float = FIXED_CAPITAL_I
             "peak": 0.0,
             "exit_combo_value": combo_val,
             "exit_underlying": spot_t,
+            # Per-leg entry premiums + the protective GTT levels the live
+            # broker would have parked at the exchange for this position.
+            **_leg_brackets(ce_q, pe_q, chosen.side, spot_t),
         }
 
     tdf = pd.DataFrame(events)
@@ -353,6 +412,8 @@ def run_backtest_shared(symbol_dfs: dict[str, pd.DataFrame],
                 reason = "trail"
             elif unreal >= TARGET_PCT:
                 reason = "target"
+            else:
+                reason = _gtt_breach(pos, ce_q, pe_q)
 
             if reason:
                 pos["exit_reason"] = reason
@@ -421,6 +482,7 @@ def run_backtest_shared(symbol_dfs: dict[str, pd.DataFrame],
                 "pred_pct": chosen.pred * 100,
                 "n_strikes": chosen.n_strikes,
                 "peak": 0.0,
+                **_leg_brackets(ce_q, pe_q, chosen.side, spot_t),
                 "exit_combo_value": combo_val,
                 "exit_underlying": spot_t,
             }

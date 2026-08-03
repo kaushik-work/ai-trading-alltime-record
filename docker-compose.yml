@@ -32,7 +32,7 @@ services:
       sh -c '
         while true; do
           NOW=$$(date -u +%H%M)
-          if [ "$$NOW" -ge "0330" ] && [ "$$NOW" -lt "1005" ]; then
+          if [ "$$NOW" -ge "0330" ] && [ "$$NOW" -lt "1015" ]; then
             python scripts/collect_option_snapshots.py --symbol NIFTY --interval 5 --strikes 8 --expiries 2 --greeks --vix || sleep 60
           else
             sleep 60
@@ -55,7 +55,7 @@ services:
       sh -c '
         while true; do
           NOW=$$(date -u +%H%M)
-          if [ "$$NOW" -ge "0330" ] && [ "$$NOW" -lt "1005" ]; then
+          if [ "$$NOW" -ge "0330" ] && [ "$$NOW" -lt "1015" ]; then
             python scripts/collect_option_snapshots.py --symbol BANKNIFTY --interval 5 --strikes 8 --expiries 2 --greeks --vix || sleep 60
           else
             sleep 60
@@ -78,7 +78,7 @@ services:
       sh -c '
         while true; do
           NOW=$$(date -u +%H%M)
-          if [ "$$NOW" -ge "0330" ] && [ "$$NOW" -lt "1005" ]; then
+          if [ "$$NOW" -ge "0330" ] && [ "$$NOW" -lt "1015" ]; then
             python scripts/collect_option_snapshots.py --symbol FINNIFTY --interval 5 --strikes 8 --expiries 2 --greeks --vix || sleep 60
           else
             sleep 60
@@ -94,6 +94,9 @@ services:
     depends_on:
       - api
 
+  # SENSEX trades on BFO, which did NOT extend to 15:40 — it still closes at
+  # 15:30 IST. Gate stays at 1005 UTC (15:35 IST) to match the collector's own
+  # BFO close; widening it would hot-restart the script for 10 idle minutes.
   collector-sensex:
     build: .
     profiles: ["collectors", "nse"]

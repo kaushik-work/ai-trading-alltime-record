@@ -68,8 +68,11 @@ SYMBOL       = args.symbol
 STEP         = {"NIFTY": 50, "BANKNIFTY": 100, "FINNIFTY": 50, "SENSEX": 100}[SYMBOL]
 EXCHANGE     = "BFO" if SYMBOL == "SENSEX" else "NFO"
 INTERVAL_SEC = args.interval * 60
+# NSE extended derivatives close to 15:40 on 2026-08-03; BSE stayed at 15:30.
+# We collect 5 min past the bell so the closing prints land in the file.
+EXCHANGE_CLOSE = dtime(15, 30) if EXCHANGE == "BFO" else dtime(15, 40)
 MARKET_OPEN  = dtime(9, 10)
-MARKET_CLOSE = dtime(15, 35)
+MARKET_CLOSE = dtime(15, 35) if EXCHANGE == "BFO" else dtime(15, 45)
 today_str    = date.today().isoformat()
 
 # ── Logging to disk + stdout ──────────────────────────────────────────────────
@@ -237,7 +240,7 @@ def take_snapshot(af: AngelFetcher, token_map: list, expiry: date, out_file: Pat
                     spot=spot,
                     strike=t["strike"],
                     option_type=t["option_type"],
-                    expiry=datetime.combine(expiry, dtime(15, 30)).replace(tzinfo=IST),
+                    expiry=datetime.combine(expiry, EXCHANGE_CLOSE).replace(tzinfo=IST),
                     mark=ltp,
                     timestamp=greek_ts,
                 )
@@ -317,7 +320,7 @@ try:
             time.sleep(30)
             continue
         if t_now > MARKET_CLOSE:
-            log.info("15:35 reached — collection complete.")
+            log.info("%s reached — collection complete.", MARKET_CLOSE.strftime("%H:%M"))
             break
 
         # Health check every 10 min
