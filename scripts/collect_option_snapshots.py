@@ -210,8 +210,8 @@ def take_snapshot(af: AngelFetcher, token_map: list, expiry: date, out_file: Pat
             ltp = float(q.get("ltp", 0) or 0)
             if ltp <= 0:
                 continue
-            bid    = float(q.get("bidPrice",    0) or 0)
-            ask    = float(q.get("askPrice",    0) or 0)
+            from data.angel_fetcher import best_bid_ask
+            bid, ask = best_bid_ask(q)
             volume = int(  q.get("tradeVolume", 0) or 0)
             oi     = int(  q.get("opnInterest", 0) or 0)
 

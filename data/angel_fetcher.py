@@ -26,6 +26,31 @@ import config
 
 logger = logging.getLogger(__name__)
 
+
+def best_bid_ask(quote: dict) -> tuple[float, float]:
+    """Best bid / best ask from an Angel getMarketData FULL row.
+
+    FULL mode exposes the top-5 book under `depth.buy[]` / `depth.sell[]`.
+    There are no top-level `bidPrice` / `askPrice` fields - reading those
+    returned 0.0 for every contract, which is why every bid/ask in the
+    option_snapshots archive is zero. Falls back to the old keys in case a
+    different mode or a future API version supplies them.
+    """
+    depth = quote.get("depth") or {}
+    def _side(key: str, legacy: str) -> float:
+        levels = depth.get(key) or []
+        if isinstance(levels, list) and levels:
+            try:
+                return float(levels[0].get("price") or 0)
+            except (AttributeError, TypeError, ValueError):
+                pass
+        try:
+            return float(quote.get(legacy) or 0)
+        except (TypeError, ValueError):
+            return 0.0
+    return _side("buy", "bidPrice"), _side("sell", "askPrice")
+
+
 _SPOT_TOKENS = {
     "NIFTY":      {"token": "99926000", "tradingsymbol": "Nifty 50",          "exchange": "NSE"},
     "BANKNIFTY":  {"token": "99926009", "tradingsymbol": "Nifty Bank",        "exchange": "NSE"},
@@ -776,10 +801,11 @@ class AngelFetcher:
             if not fetched:
                 return None
             q = fetched[0]
+            bid, ask = best_bid_ask(q)
             return {
                 "ltp": float(q.get("ltp", 0) or 0),
-                "bid": float(q.get("bidPrice", 0) or 0),
-                "ask": float(q.get("askPrice", 0) or 0),
+                "bid": bid,
+                "ask": ask,
                 "volume": int(q.get("tradeVolume", 0) or 0),
                 "oi": int(q.get("opnInterest", 0) or 0),
                 "open": float(q.get("open", 0) or 0),
