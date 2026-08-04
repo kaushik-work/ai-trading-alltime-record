@@ -110,7 +110,7 @@ export default function NseView() {
         {!state ? (
           <div className="card-pad"><div className="skel h-16 w-full" /></div>
         ) : state.open_positions.length === 0 ? (
-          <Empty icon="○" title="No open NSE positions" hint="The runner enters when the synthetic-forward gate is crossed." />
+          <Empty icon="○" title="No open NSE positions" hint="The NSE runner is off. The synthetic-forward gate never fired in 1,869 observations and the strategy was retired." />
         ) : (
           <>
             <div className="hidden sm:block scroll-x">

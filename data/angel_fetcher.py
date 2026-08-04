@@ -854,10 +854,6 @@ class AngelFetcher:
                 self._api = None
             return None, None
 
-    def get_option_token(self, tradingsymbol: str) -> Optional[str]:
-        """Look up Angel One symboltoken for a given NFO tradingsymbol."""
-        match = next((i for i in self._nfo_instruments() if i.get("symbol") == tradingsymbol), None)
-        return match["token"] if match else None
 
     def get_option_quote(self, tradingsymbol: str, token: str, exchange: str = "NFO") -> Optional[dict]:
         """Fetch FULL market-data quote for a single option. Returns dict with

@@ -50,11 +50,6 @@ def _day_files(root: Path = DEFAULT_ROOT) -> list[Path]:
     return sorted(root.glob("*/NIFTY_*_1m.csv"))
 
 
-def _date_of(path: Path) -> str:
-    m = re.search(r"(\d{4}-\d{2}-\d{2})", path.name)
-    return m.group(1) if m else ""
-
-
 def clean_day(df: pd.DataFrame, max_dev: float = MAX_SPOT_DEV) -> pd.DataFrame:
     """Drop rows whose spot is impossibly far from the session median.
 

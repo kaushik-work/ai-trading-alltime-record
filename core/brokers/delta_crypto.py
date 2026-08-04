@@ -203,10 +203,6 @@ class DeltaCryptoBroker:
             logger.error("get_perp_mark(%s): %s", symbol, e)
         return None
 
-    def get_funding_rate(self, symbol: str) -> Optional[float]:
-        """Current annualized funding rate for perp."""
-        stats = self.get_futures_stats().get(symbol)
-        return stats.get("funding_rate") if stats else None
 
     def get_futures_stats(self) -> dict[str, dict]:
         """Fan-out futures market stats for all perps in one REST call,

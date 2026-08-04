@@ -6,7 +6,6 @@ import logging
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
 
 from api.auth import decode_token, oauth2_scheme
 from nse.execution.nse_runner import get_nse_runner_state
@@ -45,13 +44,6 @@ def nse_unkill(user: dict = Depends(_get_current_user)):
     set_killed(False)
     logger.warning("NSE kill switch cleared via API by %s", user)
     return {"killed": False, "message": "NSE entries resumed"}
-
-
-class BacktestRequest(BaseModel):
-    symbol: str = "NIFTY"
-    source: str = "csv"
-    capital: float = 50_000.0
-    interval: int = 5
 
 
 @router.post("/test_buy_ce")
@@ -140,39 +132,4 @@ def nse_test_buy_ce(user: dict = Depends(_get_current_user)):
         "available_limit": rms.get("availablelimitmargin"),
         "net": rms.get("net"),
         "order_response": result,
-    }
-
-
-@router.post("/backtest/synthetic_forward")
-def nse_backtest(req: BacktestRequest, user: dict = Depends(_get_current_user)):
-    if req.symbol not in ("NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX"):
-        raise HTTPException(status_code=400, detail="Invalid symbol")
-    if req.source not in ("csv", "mongo"):
-        raise HTTPException(status_code=400, detail="source must be csv or mongo")
-
-    from nse.backtest.synthetic_forward import run_backtest
-    from nse.data.option_chain import load_snapshots_csv, load_snapshots_mongo
-
-    try:
-        df = load_snapshots_mongo(req.symbol) if req.source == "mongo" else load_snapshots_csv(req.symbol)
-    except Exception as e:
-        logger.warning("backtest data load failed: %s", e)
-        raise HTTPException(status_code=500, detail=f"Data load failed: {e}") from e
-
-    if df.empty:
-        return {"error": "no data"}
-
-    metrics = run_backtest(req.symbol, df, capital=req.capital, interval_minutes=req.interval)
-    return {
-        "symbol": req.symbol,
-        "mode": "live",
-        "trades": metrics["trades"],
-        "win_rate": round(metrics["win_rate"], 2),
-        "total_pnl": round(metrics["total_pnl"], 2),
-        "total_return_pct": round(metrics["total_return_pct"], 2),
-        "profit_factor": round(metrics["profit_factor"], 2),
-        "avg_win": round(metrics["avg_win"], 2),
-        "avg_loss": round(metrics["avg_loss"], 2),
-        "max_drawdown_pct": round(metrics["max_drawdown_pct"], 2),
-        "equity": round(metrics["equity"], 2),
     }

@@ -81,7 +81,7 @@ export default function SignalRadar({ signals, loading }: { signals: SignalRow[]
     <Card>
       <CardHead
         title="Signal radar"
-        sub="Price-action S/R retest · wick-touch entry"
+        sub="No active strategy — retired 2026-08-04"
         right={firing > 0
           ? <Pill tone="up"><span aria-hidden="true">▲</span>{firing} firing</Pill>
           : <Pill tone="neutral">Idle</Pill>}

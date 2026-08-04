@@ -147,7 +147,7 @@ export default function CryptoHome() {
               <div className="min-w-0">
                 <h1 className="text-xl sm:text-2xl font-semibold text-[var(--ink)]">Crypto · Delta India</h1>
                 <p className="text-xs text-[var(--ink-3)] mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
-                  <span>Price-action S/R retest · ETHUSD perp</span>
+                  <span>No active strategy · execution layer only</span>
                   {snap?.ts && <span className="tnum">· updated {clockTime(snap.ts)}</span>}
                   {snap?.stream && (
                     <span className="tnum">

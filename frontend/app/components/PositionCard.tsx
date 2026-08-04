@@ -56,7 +56,7 @@ export default function PositionCard({ positions, loading }: {
         </div>
       ) : positions.length === 0 ? (
         <Empty icon="○" title="No position open"
-               hint="The bot is flat. It will enter when a wick-touch retest forms at a 4h S/R edge in the trend direction." />
+               hint="The bot is flat and will stay flat — no strategy is active. Signal generation was retired after every candidate measured negative out-of-sample." />
       ) : (
         <div className="divide-y divide-[var(--line)]">
           {positions.map((p) => {
