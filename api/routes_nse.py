@@ -116,16 +116,14 @@ def nse_test_buy_ce(user: dict = Depends(_get_current_user)):
         raise HTTPException(status_code=503, detail="NIFTY option quote has no usable price")
     limit_price = round(float(limit_price), 2)
 
-    # Bracket must scale with the premium, not be a fixed rupee amount. The
-    # old sl_points=10 / target_points=50 produced a -74% stop and a +368%
-    # target on a Rs 13.60 option — legal orders, but meaningless ones.
-    sl_points = round(limit_price * 0.30, 2)       # -30% of premium
-    target_points = round(limit_price * 0.60, 2)   # +60% of premium
+    # Connectivity check only — proves the Angel session, instrument lookup,
+    # order permissions and GTT OCO attachment all work. The bracket values
+    # are arbitrary and intentionally left alone; this is not a trade.
     result = broker.place_single_order(
         "NIFTY", ts, token, "CE", "BUY", 1,
         limit_price=limit_price,
-        sl_points=sl_points,
-        target_points=target_points,
+        sl_points=10.0,
+        target_points=50.0,
     )
     logger.warning("NSE test buy CE by %s | spot=%s strike=%s qty=%s limit=%s | rms=%s | result=%s",
                    user, spot, atm, quantity, limit_price, rms, result)
