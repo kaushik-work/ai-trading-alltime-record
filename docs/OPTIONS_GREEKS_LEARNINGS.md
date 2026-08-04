@@ -276,7 +276,44 @@ Fixing it (use the **previous** session's IV) barely moved the ratios but
 
 ---
 
-## 8. Corrections to make elsewhere in the repo
+## 8. Applying this to the "5K → 50K" breakout-retest
+
+The headline for that strategy was **VALID −₹80,769**, computed treating every
+session alike. But a long option pays theta, and theta accelerates into expiry:
+on expiry day an ATM option is almost pure time value burning to zero within
+hours, so the same index move must be far larger to pay for the decay it fights.
+
+That suggests a specific, falsifiable question: **does it lose on direction, or
+on theta?** If the losses concentrate near expiry, the entry may be sound and
+the instrument wrong — a fixable problem. Split by *measured* sessions-to-expiry
+(`--by-dte`, SL 20, 3R, ₹180–200 band, ₹50k budget):
+
+| DTE | trades | WR | avg P&L | total | TRAIN | VALID | TEST |
+|---|---|---|---|---|---|---|---|
+| 0 | 27 | 26% | −854 | −23,046 | −7,394 | −23,361 | +7,709 |
+| 1 | 28 | 29% | −1,927 | **−53,970** | −120 | −42,708 | −11,141 |
+| 2 | 44 | 30% | −219 | −9,630 | −17,378 | +20,582 | −12,834 |
+| 3 | 58 | 40% | +1,345 | **+78,007** | +34,535 | −7,820 | +51,292 |
+| 4 | 32 | 28% | −237 | −7,569 | −13,764 | +13,429 | −7,235 |
+| **all** | **192** | **32%** | **−27** | **−5,249** | −4,121 | −39,878 | +38,750 |
+
+**The theta hypothesis is wrong, and the filter does not save it.**
+
+- Losses are **not** concentrated at 0 DTE — **1 DTE is twice as bad**. So this
+  is not a decay artifact that an expiry filter removes.
+- The one profitable bucket, 3 DTE at +₹78,007, **fails the hold-out**
+  (VALID −₹7,820). With eight buckets tested, one looking good is exactly what
+  chance produces — the same trap as `MR rsi 15/85` in `RESEARCH_LEARNINGS` §2.1.
+- Dropping expiry day entirely still leaves **VALID −₹16,517**.
+- The 5/8/9-DTE rows have n=1 (holiday gaps) and mean nothing.
+
+**Verdict: the entry signal has no edge; the instrument was not the problem.**
+This is a negative result and it is worth as much as a positive one, because it
+closes off "just avoid expiry day" as a rescue and stops further tuning here.
+
+---
+
+## 9. Corrections to make elsewhere in the repo
 
 1. `RESEARCH_LEARNINGS.md` §3.3 — premium ~+5.1 vol points, not +8.64. **Done.**
 2. Any DTE/expiry logic assuming Thursday — use `nse.quant.expiry_calendar`.

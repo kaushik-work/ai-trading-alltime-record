@@ -200,9 +200,71 @@ def split_of(d):
     return "TRAIN" if y <= 2023 else ("VALID" if y == 2024 else "TEST")
 
 
+def by_dte(bars, sl, rr) -> None:
+    """Does this strategy lose because of DIRECTION, or because of THETA?
+
+    The headline result (VALID -Rs 80,769) treats every session alike. But a
+    long option pays theta, and theta is not constant: it accelerates into
+    expiry. On expiry day an ATM option is almost pure time value burning to
+    zero within hours, so the same index move has to be far bigger to pay for
+    the decay it fights.
+
+    If the losses concentrate at 0 DTE, the entry signal may be sound and the
+    instrument wrong — which is a fixable problem. If they are spread evenly
+    across DTE, the signal itself has no edge and no expiry filter saves it.
+
+    DTE is the MEASURED sessions-to-expiry, never an assumed weekday
+    (OPTIONS_GREEKS_LEARNINGS 1).
+    """
+    from nse.quant.expiry_calendar import load_expiries
+
+    t = simulate(bars, sl, rr, 180.0, 200.0)
+    if t.empty:
+        print("  no trades")
+        return
+    cal = load_expiries()[["date", "dte_sessions", "is_expiry"]]
+    t["date"] = pd.to_datetime(t["date"])
+    t = t.merge(cal, on="date", how="left")
+    t["sp"] = t["date"].map(split_of)
+    unmatched = t["dte_sessions"].isna().sum()
+    t = t.dropna(subset=["dte_sessions"])
+
+    print("=" * 100)
+    print(f"BREAKOUT-RETEST OPTIONS LEDGER, SPLIT BY DAYS TO EXPIRY  "
+          f"(SL {sl:g}, {rr:g}R)")
+    print("=" * 100)
+    print(f"  {len(t)} trades matched to the expiry calendar"
+          + (f", {unmatched} unmatched (dropped)" if unmatched else ""))
+    print(f"\n  {'DTE':>5}{'trades':>8}{'WR':>7}{'avg P&L':>11}{'total':>13}"
+          f"{'TRAIN':>12}{'VALID':>12}{'TEST':>12}")
+    for d, g in t.groupby(t["dte_sessions"].astype(int)):
+        cells = [g[g["sp"] == k]["pnl"].sum() for k in ("TRAIN", "VALID", "TEST")]
+        allpos = all(c > 0 for c in cells)
+        print(f"  {d:>5}{len(g):>8}{(g['pnl'] > 0).mean() * 100:>6.0f}%"
+              f"{g['pnl'].mean():>11,.0f}{g['pnl'].sum():>13,.0f}"
+              + "".join(f"{c:>12,.0f}" for c in cells)
+              + ("  ALL +" if allpos else ""))
+    tot = [t[t["sp"] == k]["pnl"].sum() for k in ("TRAIN", "VALID", "TEST")]
+    print(f"  {'all':>5}{len(t):>8}{(t['pnl'] > 0).mean() * 100:>6.0f}%"
+          f"{t['pnl'].mean():>11,.0f}{t['pnl'].sum():>13,.0f}"
+          + "".join(f"{c:>12,.0f}" for c in tot))
+
+    print("\n  EXCLUDING expiry day (0 DTE) — is the rest of the week viable?")
+    ex = t[t["dte_sessions"] > 0]
+    cells = [ex[ex["sp"] == k]["pnl"].sum() for k in ("TRAIN", "VALID", "TEST")]
+    print(f"  {'1-4':>5}{len(ex):>8}{(ex['pnl'] > 0).mean() * 100:>6.0f}%"
+          f"{ex['pnl'].mean():>11,.0f}{ex['pnl'].sum():>13,.0f}"
+          + "".join(f"{c:>12,.0f}" for c in cells)
+          + ("  ALL +" if all(c > 0 for c in cells) else ""))
+    print("\n  A filter is only worth keeping if TRAIN, VALID and TEST are all")
+    print("  positive AFTER it. Improving the total alone is curve-fitting.")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--sweep", action="store_true")
+    ap.add_argument("--by-dte", action="store_true",
+                    help="split results by measured days-to-expiry")
     ap.add_argument("--years", nargs="+", default=None)
     ap.add_argument("--show", type=int, default=30, help="ledger rows to print")
     ap.add_argument("--sl", type=float, default=SL_PTS)
@@ -211,6 +273,9 @@ def main() -> None:
 
     print("Preparing index bars ...", flush=True)
     bars = prepare(load_spot())
+    if args.by_dte:
+        by_dte(bars, args.sl, args.rr)
+        return
     if args.sweep:
         print()
         print("=" * 96)
