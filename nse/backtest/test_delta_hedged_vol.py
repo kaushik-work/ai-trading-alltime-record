@@ -151,11 +151,14 @@ class Session:
         return {"px": float(px), "iv": float(iv), "spot": float(sp),
                 "tradable": bool(tr)}
 
+    def strikes(self, hhmm: str) -> list[float]:
+        return sorted({k for (h, k, _) in self.lookup if h == hhmm})
+
     def atm(self, hhmm: str) -> tuple[float, float] | None:
         spot = self.spot_at.get(hhmm)
         if spot is None or not np.isfinite(spot):
             return None
-        ks = {k for (h, k, _) in self.lookup if h == hhmm}
+        ks = self.strikes(hhmm)
         if not ks:
             return None
         return min(ks, key=lambda k: abs(k - spot)), float(spot)
@@ -180,12 +183,36 @@ def _delta(spot, K, T_years, iv_pct, is_call) -> float:
 STRIKE_STEP = 50.0
 
 
-def _spec(K: float, wings: int) -> list[tuple[float, bool, float]]:
-    """Short ATM straddle, plus long wings when defined-risk is wanted."""
+def _spec(K: float, wings: int,
+          avail: list[float] | None = None) -> list[tuple[float, bool, float]]:
+    """Short ATM straddle, plus long wings when defined-risk is wanted.
+
+    CLAMPING, AND WHY IT IS NOT OPTIONAL: our ladder only stores ATM+/-10
+    RELATIVE TO THE FILE'S OWN REFERENCE ATM. When the index moves, the 09:30
+    ATM drifts off that reference and the nominal wing falls outside the stored
+    strikes. Dropping those sessions looks harmless and is not: the wing goes
+    missing precisely on the days the index moved, which are the losing days
+    for a short straddle. Measured, the dropped sessions averaged -140 index
+    points against +7 for the kept ones at +/-200, and at +/-500 only 169 of
+    981 sessions survived with a mean absolute move of 0.085%.
+
+    That is conditioning on the outcome and it manufactured an edge of +19.67
+    points out of nothing. So instead of dropping, clamp the wing to the
+    outermost strike we DO hold. The market had the nominal strike; only our
+    data does not, and a slightly narrower wing is a real tradeable structure.
+
+    `avail` must be the INTERSECTION of the strikes present at entry and at
+    exit. Clamping on entry strikes alone fixed nothing: the ladder re-centres
+    intraday, so on a big move the wing is quoted at 09:30 and gone by 15:20.
+    That accounted for every one of the 279 dropped legs at +/-400.
+    """
     s = [(K, True, -1.0), (K, False, -1.0)]
     if wings > 0:
-        s += [(K + wings * STRIKE_STEP, True, +1.0),
-              (K - wings * STRIKE_STEP, False, +1.0)]
+        hi, lo = K + wings * STRIKE_STEP, K - wings * STRIKE_STEP
+        if avail:
+            hi = min(max(avail), hi)
+            lo = max(min(avail), lo)
+        s += [(hi, True, +1.0), (lo, False, +1.0)]
     return s
 
 
@@ -203,7 +230,9 @@ def run_intraday(sessions: dict, exp_days: dict, wings: int,
             continue
         K, spot0 = got
 
-        spec = _spec(K, wings)
+        both = sorted(set(sess.strikes(ENTRY_INTRADAY))
+                      & set(sess.strikes(EXIT_INTRADAY)))
+        spec = _spec(K, wings, both)
         ent = [(sess.leg(ENTRY_INTRADAY, k, c), k, c, q) for k, c, q in spec]
         if any(e is None or not e["tradable"] or e["px"] <= 0
                for e, *_ in ent):
@@ -265,7 +294,9 @@ def run_overnight(sessions: dict, exp_days: dict, wings: int) -> pd.DataFrame:
             continue
         K, spot0 = got
 
-        spec = _spec(K, wings)
+        both = sorted(set(sess.strikes(ENTRY_OVERNIGHT))
+                      & set(nsess.strikes(EXIT_OVERNIGHT)))
+        spec = _spec(K, wings, both)
         ent = [(sess.leg(ENTRY_OVERNIGHT, k, c), q) for k, c, q in spec]
         ext = [(nsess.leg(EXIT_OVERNIGHT, k, c), q) for k, c, q in spec]
         if any(e is None or not e["tradable"] or e["px"] <= 0 for e, _ in ent):

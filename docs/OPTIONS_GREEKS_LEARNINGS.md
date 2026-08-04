@@ -374,9 +374,87 @@ Short straddles also carry SPAN margin far above the premium collected — this
 must be checked against Angel's margin API before any of this is deployable,
 but the direction is not in doubt.
 
-The structure we *can* afford — the iron fly — has BE/leg of **0.22 points**,
-almost certainly **below** the real spread. So this is the same shape as the
-crypto finding: a real edge that sits underneath its cost and margin floor.
+The structure we *can* afford — any iron fly — is **negative before costs**
+(see the corrected wing sweep above). So this is worse than the crypto finding:
+there, a real edge sat under its cost floor. Here the edge exists only in the
+structure we cannot margin, and every affordable version of it loses money.
+
+### The wing sweep, and a selection bias that manufactured an edge
+
+Looking for a structure between "naked, unaffordable" and "±200 fly, no edge",
+I swept wing width. The first run looked spectacular — and was entirely false:
+
+| wings | n | mean | worst | verdict |
+|---|---|---|---|---|
+| naked | 981 | 3.38 | −298.6 | |
+| ±200 | 957 | 0.88 | −67.1 | 24 sessions dropped |
+| ±400 | 704 | **10.98** | −48.5 | **277 dropped** |
+| ±500 | 169 | **19.67** | −34.8 | **812 dropped** |
+
+Mean rising while worst-case *falls* is impossible for a wider fly — a wider
+wing means more risk, not less. The `n` column was the tell.
+
+**The wing strike goes missing precisely on the days the index moves**, because
+the recorded ladder re-centres intraday: the strike is quoted at 09:30 and gone
+by 15:20 on a big move. Dropping those sessions silently discards the losing
+days.
+
+    wings +/-400   dropped sessions  naked P&L -36.60,  |move| 1.006%
+                   kept sessions     naked P&L +19.11,  |move| 0.285%
+    wings +/-500   kept sessions     |move| 0.085%  -- only dead-flat days
+
+Two attempts were needed. Clamping to strikes available **at entry** changed
+nothing (`n` identical) — the strikes were all present at 09:30. The diagnostic
+that found it counted the failure reasons: `strike_absent 0, not_traded 0,
+zero_px 0, exit_absent 279`. Clamping to the **intersection of entry and exit**
+strikes fixed it.
+
+Corrected, with all 981 sessions retained:
+
+| wings | n | mean | worst | kurt | TRAIN | VALID | TEST |
+|---|---|---|---|---|---|---|---|
+| naked | 981 | **+3.38** | −298.6 | 7.9 | 3.02 | 3.87 | 3.81 |
+| ±100 | 981 | −0.08 | −51.8 | 22.0 | −0.30 | 0.26 | 0.14 |
+| ±200 | 981 | −0.33 | −103.4 | 8.6 | −0.64 | −0.04 | 0.15 |
+| ±300 | 981 | −1.07 | −174.2 | 8.2 | −1.19 | −1.49 | −0.52 |
+| ±400 | 981 | −2.66 | −236.9 | 8.0 | −2.09 | −4.19 | −2.81 |
+| ±500 | 981 | −4.85 | −289.3 | 8.5 | −3.53 | −7.38 | −5.93 |
+
+**Every defined-risk variant loses money before costs**, monotonically worse
+with wing width — and that monotonicity is itself evidence the result is real.
+
+The economics are now clear and they are not a coincidence. Far-OTM wings are
+expensive *because* of the fat tail measured in §6: the market charges for gap
+risk, so you **pay** the variance premium on the wings while **collecting** it
+on the body. Buying protection hands back more than it saves.
+
+> **Rule:** whenever a variant sweep changes the sample size, the sweep is
+> measuring the sample, not the variant. Put `n` next to every result.
+
+### Which expiry, and why ATM rather than ITM
+
+Both verified rather than assumed:
+
+- **Expiry: the nearest weekly.** Calendar days-to-expiry across the traded
+  sessions is 1–6 for 972 of 981, never the next weekly or the monthly.
+- **ATM is correct by construction for a seller.** Extrinsic value — the only
+  part a premium seller harvests — peaks hard at the money:
+
+| strike | CE price | CE **extrinsic** | PE price | PE **extrinsic** |
+|---|---|---|---|---|
+| ITM −300 | 344.0 | 43.8 | 35.6 | 35.6 |
+| ITM −100 | 185.8 | 85.6 | 77.1 | 77.1 |
+| **ATM** | 124.0 | **117.3** | 115.3 | **108.8** |
+| OTM +100 | 78.1 | 78.1 | 169.5 | 69.7 |
+| OTM +300 | 29.0 | 29.0 | 319.9 | 20.1 |
+
+  Selling an ITM call collects ₹344 but only **₹43.8** of it is time value; the
+  other ₹300 is intrinsic, which is a pure directional bet carrying no
+  volatility edge. Liquidity does not decide it — every strike above traded in
+  100% of the sampled minutes. ATM harvests **2.7× more** sellable premium than
+  ITM −300. (Note this is the opposite conclusion to the ₹180–200 *buying*
+  band, which selected ITM at delta 0.80 — buyers want delta, sellers want
+  extrinsic.)
 
 **Status: the most promising thing measured here, and not yet tradeable.** The
 next step is neither more tuning nor more architecture — it is measuring the
