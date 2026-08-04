@@ -40,6 +40,7 @@ import pandas as pd
 
 from nse.backtest.nifty_loader import DEFAULT_ROOT, clean_day, load_spot
 from nse.backtest.test_breakout_retest import prepare, ENTRY_START, ENTRY_END, SQUARE_OFF
+from nse.config import LOT_SIZES
 
 # pandas resample labels a bar by its START. A bar labelled 09:30 covers
 # 09:30:00-09:34:59, and the signal is only confirmed at its CLOSE. Reading the
@@ -51,7 +52,7 @@ BAR = pd.Timedelta(minutes=5)
 
 BUDGET = 50_000.0
 PREMIUM_LO, PREMIUM_HI = 180.0, 200.0
-LOT = 75
+LOT = LOT_SIZES.get("NIFTY", 65)   # from nse/config.py, not hardcoded
 SL_PTS, RR = 20.0, 3.0        # the config that held up across all three periods
 
 
