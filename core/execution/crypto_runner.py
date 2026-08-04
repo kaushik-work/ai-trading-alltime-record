@@ -494,6 +494,38 @@ def tick_reconcile() -> None:
         logger.error("reconcile tick failed: %s", e, exc_info=True)
 
 
+def _open_shadow_trade(name: str, strat, decision: CryptoSignalDecision,
+                       mark: float) -> None:
+    """Record a paper trade for a signal the exchange would not take."""
+    import uuid
+    shadow_id = uuid.uuid4().hex[:8]
+    shadow = {
+        "id":              shadow_id,
+        "entry_ts":        datetime.now(timezone.utc).isoformat(),
+        "strategy":        name,
+        "symbol":          decision.symbol,
+        "side":            decision.side,
+        "entry_px":        mark,
+        "width_pct":       decision.pred_pct,
+        "size_mult":       decision.size_mult,
+        "status":          "open",
+        "peak_pct":        0.0,
+        "stop_loss_pct":   decision.stop_loss_pct,
+        "partial_tp_pct":  decision.partial_tp_pct,
+        "trail_peak_pct":  decision.trail_peak_pct,
+        "trail_giveback":  decision.trail_giveback,
+    }
+    _SHADOW_TRADES.append(shadow)
+    _SHADOW_POSITIONS[shadow_id] = shadow
+    del _SHADOW_TRADES[:-_MAX_SHADOW_TRADES]
+    # Drop any open positions that fell out of the ring buffer.
+    for k in list(_SHADOW_POSITIONS):
+        if not any(t["id"] == k for t in _SHADOW_TRADES):
+            _SHADOW_POSITIONS.pop(k, None)
+    if hasattr(strat, "notify_entry_taken"):
+        strat.notify_entry_taken()
+
+
 def _manage_shadow_positions(broker) -> None:
     """Apply the active exit regime to each open shadow trade. Shadow exits
     are always 'full close' (single row) regardless of regime — simpler for
@@ -619,62 +651,30 @@ def tick_entry_decisions() -> None:
                                   "perp mark unavailable")
             continue
 
-        # Sizing: fixed-capital mode uses a constant INR budget per trade;
-        # otherwise we compound from the live wallet pool.  Delta handles the
-        # INR→USD conversion at trade time.
+        # Sizing. NOTE: we deliberately do NOT pre-check the wallet here.
+        # The exchange is the authority on whether an order can be funded, and
+        # asking first only adds a failure mode: a slow or failed balance call
+        # used to suppress a valid signal entirely. We size, send, and let
+        # Delta accept or reject — a rejection falls through to a shadow trade
+        # below, so nothing is lost either way.
         effective_equity = BASE_EQUITY_USD
-        wallet_blocked = False
         if broker.mode == "live":
-            balance = broker.get_balance()
-            if balance is None or balance <= 0:
-                wallet_blocked = True
-                shown = f"${balance:.2f}" if balance is not None else "unavailable"
-                logger.warning("%s: wallet %s — recording shadow trade only "
-                               "(deposit INR/USDT to enable live orders)",
-                               name, shown)
-                _record_missed_signal(decision, "wallet_empty",
-                                      f"wallet balance {shown}")
-            elif FIXED_CAPITAL_MODE:
+            if FIXED_CAPITAL_MODE:
                 effective_equity = FIXED_CAPITAL_INR / USD_INR_RATE
                 logger.info("%s: fixed-capital sizing Rs %.0f / %.2f = $%.2f",
                             name, FIXED_CAPITAL_INR, USD_INR_RATE, effective_equity)
             else:
-                pct = _capital_pct_for(name)
-                effective_equity = balance * pct
-                logger.info("%s: sizing on wallet $%.2f × %.0f%% = $%.2f",
-                            name, balance, pct * 100, effective_equity)
-
-        if wallet_blocked:
-            import uuid
-            shadow_id = uuid.uuid4().hex[:8]
-            shadow = {
-                "id":           shadow_id,
-                "entry_ts":     datetime.now(timezone.utc).isoformat(),
-                "strategy":     name,
-                "symbol":       decision.symbol,
-                "side":         decision.side,
-                "entry_px":     mark,
-                "width_pct":    decision.pred_pct,
-                "size_mult":    decision.size_mult,
-                "status":       "open",
-                "peak_pct":     0.0,
-                "stop_loss_pct":   decision.stop_loss_pct,
-                "trail_peak_pct":  decision.trail_peak_pct,
-                "trail_giveback":  decision.trail_giveback,
-            }
-            _SHADOW_TRADES.append(shadow)
-            _SHADOW_POSITIONS[shadow_id] = shadow
-            del _SHADOW_TRADES[:-_MAX_SHADOW_TRADES]
-            # Drop any open positions that fell out of the ring buffer
-            _SHADOW_POSITIONS.update({
-                t["id"]: t for t in _SHADOW_TRADES if t.get("status") == "open"
-            })
-            for k in list(_SHADOW_POSITIONS):
-                if not any(t["id"] == k for t in _SHADOW_TRADES):
-                    _SHADOW_POSITIONS.pop(k, None)
-            if hasattr(strat, "notify_entry_taken"):
-                strat.notify_entry_taken()
-            continue
+                # Only this branch genuinely needs the balance, because size
+                # is a fraction of it. Fall back to base equity if unreadable.
+                balance = broker.get_balance()
+                if balance and balance > 0:
+                    effective_equity = balance * _capital_pct_for(name)
+                    logger.info("%s: sizing on wallet $%.2f × %.0f%% = $%.2f",
+                                name, balance, _capital_pct_for(name) * 100,
+                                effective_equity)
+                else:
+                    logger.warning("%s: wallet unreadable — sizing on base equity $%.2f",
+                                   name, effective_equity)
 
         notional = effective_equity * decision.size_mult
         contracts = _contracts_for_notional(decision.symbol, notional, mark)
@@ -691,9 +691,13 @@ def tick_entry_decisions() -> None:
             leverage=LEVERAGE,
         )
         if not order.get("ok"):
-            logger.error("%s entry failed: %s", name, order)
+            logger.error("%s entry rejected by exchange: %s", name, order)
             _record_missed_signal(decision, "order_failed",
                                   str(order.get("error") or order))
+            # Track it as a paper trade so an unfunded or rejected signal still
+            # shows what it would have done. This used to happen via a wallet
+            # pre-check; the exchange's own rejection is the better trigger.
+            _open_shadow_trade(name, strat, decision, mark)
             continue
 
         _OPEN_POSITIONS[name] = {

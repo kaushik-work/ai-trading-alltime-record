@@ -66,7 +66,7 @@ export default function NseView() {
     <div className="space-y-4 sm:space-y-6">
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div className="min-w-0">
-          <h1 className="text-xl sm:text-2xl font-semibold text-[var(--ink)]">NSE · Synthetic forward</h1>
+          <h1 className="text-xl sm:text-2xl font-semibold text-[var(--ink)]">NSE · Options</h1>
           <p className="text-xs text-[var(--ink-3)] mt-1">
             Angel One SmartAPI · NIFTY / BANKNIFTY / FINNIFTY (close 15:40) · SENSEX (close 15:30)
           </p>
@@ -87,12 +87,19 @@ export default function NseView() {
         <Stat label="Total P&L" emphasis value={state ? inr(total) : "—"} loading={!state} />
       </div>
 
+      {/* Only broker-sourced numbers are shown. "Margin available" and
+          "Capital pool" were both just the hardcoded TOTAL_CAPITAL_INR
+          constant rendered twice — they looked like live balances and were
+          not. Funding is the exchange's call at order time, not a gate here. */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
-        <Stat label="Margin used" value={state ? inr(state.margin_used) : "—"} loading={!state} />
-        <Stat label="Margin available" value={state ? inr(state.margin_available) : "—"} loading={!state} />
+        <Stat label="Margin used" value={state ? inr(state.margin_used) : "—"} loading={!state}
+              footnote="Runner's own accounting" />
         <Stat label="Broker cash" value={inr(state?.broker_rms?.available_cash)} loading={!state}
               footnote="Live Angel One RMS" />
-        <Stat label="Capital pool" value={inr(state?.total_capital)} loading={!state} />
+        <Stat label="Broker limit" value={inr(state?.broker_rms?.available_limit)} loading={!state}
+              footnote="Live Angel One RMS" />
+        <Stat label="Utilised" value={inr(state?.broker_rms?.utiliseddebits)} loading={!state}
+              footnote="Live Angel One RMS" />
       </div>
 
       <Card>
