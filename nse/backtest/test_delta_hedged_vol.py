@@ -56,6 +56,58 @@ R = 0.07
 ENTRY_INTRADAY, EXIT_INTRADAY = "09:30", "15:20"
 ENTRY_OVERNIGHT, EXIT_OVERNIGHT = "15:20", "09:20"
 RESULT_CACHE = CACHE_DIR / "vol_harvest_legs.csv"
+SLICE_CACHE = CACHE_DIR / "vol_harvest_slice.csv"
+
+# Checkpoints the strategies actually touch. Reading all 1,255 raw files once
+# per variant means ~7,500 CSV loads and hours of wall clock; the variants only
+# ever look at ~25 minutes of each session, so extract those once and reuse.
+REBALANCE_EVERY = 15
+
+
+def _needed_minutes() -> list[str]:
+    mins = {ENTRY_OVERNIGHT, EXIT_OVERNIGHT, ENTRY_INTRADAY, EXIT_INTRADAY}
+    h, m = 9, 30
+    while (h, m) <= (15, 20):
+        mins.add(f"{h:02d}:{m:02d}")
+        m += REBALANCE_EVERY
+        h, m = h + m // 60, m % 60
+    return sorted(mins)
+
+
+def build_slice(force: bool = False) -> pd.DataFrame:
+    """Extract only the (minute, strike, side) points any variant can use."""
+    if SLICE_CACHE.exists() and not force:
+        return pd.read_csv(SLICE_CACHE, parse_dates=["date"])
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    want = set(_needed_minutes())
+    files = sorted(DEFAULT_ROOT.glob("*/NIFTY_*_1m.csv"))
+    out = []
+    for i, f in enumerate(files, 1):
+        try:
+            d = clean_day(pd.read_csv(f, usecols=[
+                "datetime", "option_type", "close", "iv", "strike_price",
+                "spot", "volume"]))
+        except Exception:
+            continue
+        if d.empty:
+            continue
+        d["dt"] = pd.to_datetime(d["datetime"], errors="coerce")
+        d = d.dropna(subset=["dt"])
+        d["hhmm"] = d["dt"].dt.strftime("%H:%M")
+        d = d[d["hhmm"].isin(want)]
+        if d.empty:
+            continue
+        d["isC"] = d["option_type"].astype(str).str.upper().str.startswith("C")
+        d["tradable"] = d["volume"] > 0
+        d["date"] = pd.Timestamp(f.name[6:16])
+        out.append(d[["date", "hhmm", "strike_price", "isC", "close", "iv",
+                      "spot", "tradable"]])
+        if i % 250 == 0:
+            print(f"    ... sliced {i}/{len(files)}", flush=True)
+    df = pd.concat(out, ignore_index=True)
+    df.to_csv(SLICE_CACHE, index=False)
+    print(f"  cached {len(df):,} rows -> {SLICE_CACHE}")
+    return df
 
 
 def _expiry_map() -> dict:
@@ -72,42 +124,48 @@ def _expiry_map() -> dict:
     return out
 
 
-def _session_frame(path: Path) -> pd.DataFrame | None:
-    """Wide frame: one row per (minute, strike) with CE/PE close and IV."""
-    try:
-        d = clean_day(pd.read_csv(path, usecols=[
-            "datetime", "option_type", "close", "iv", "strike_price",
-            "spot", "volume"]))
-    except Exception:
-        return None
-    if d.empty:
-        return None
-    d["dt"] = pd.to_datetime(d["datetime"], errors="coerce")
-    d = d.dropna(subset=["dt"])
-    d["hhmm"] = d["dt"].dt.strftime("%H:%M")
-    d["isC"] = d["option_type"].astype(str).str.upper().str.startswith("C")
+class Session:
+    """One session's usable points, indexed for O(1) probing.
 
-    # A bar with zero volume did not trade; its "price" is stale and not
-    # fillable (RESEARCH_LEARNINGS 4). Keep it for marking, flag for entry.
-    d["tradable"] = d["volume"] > 0
+    A bar with zero volume did not trade; its price is stale and not fillable
+    (RESEARCH_LEARNINGS 4), so `tradable` is carried through to entry checks.
+    """
 
-    # Delta-hedging probes ~100 (minute, strike, side) points per session.
-    # A boolean scan of 15k rows each time dominates the runtime, so index once.
-    d.attrs["lookup"] = {
-        (h, k, c): (px, iv, sp, tr) for h, k, c, px, iv, sp, tr in zip(
-            d["hhmm"], d["strike_price"], d["isC"], d["close"], d["iv"],
-            d["spot"], d["tradable"])
-    }
-    return d
+    __slots__ = ("date", "lookup", "spot_at", "minutes")
+
+    def __init__(self, date, g: pd.DataFrame):
+        self.date = date
+        self.lookup = {
+            (h, k, c): (px, iv, sp, tr) for h, k, c, px, iv, sp, tr in zip(
+                g["hhmm"], g["strike_price"], g["isC"], g["close"], g["iv"],
+                g["spot"], g["tradable"])
+        }
+        self.spot_at = g.groupby("hhmm")["spot"].median().to_dict()
+        self.minutes = sorted(self.spot_at)
+
+    def leg(self, hhmm: str, strike: float, is_call: bool) -> dict | None:
+        got = self.lookup.get((hhmm, float(strike), bool(is_call)))
+        if got is None:
+            return None
+        px, iv, sp, tr = got
+        return {"px": float(px), "iv": float(iv), "spot": float(sp),
+                "tradable": bool(tr)}
+
+    def atm(self, hhmm: str) -> tuple[float, float] | None:
+        spot = self.spot_at.get(hhmm)
+        if spot is None or not np.isfinite(spot):
+            return None
+        ks = {k for (h, k, _) in self.lookup if h == hhmm}
+        if not ks:
+            return None
+        return min(ks, key=lambda k: abs(k - spot)), float(spot)
 
 
-def _leg(sess: pd.DataFrame, hhmm: str, strike: float, is_call: bool) -> dict | None:
-    got = sess.attrs["lookup"].get((hhmm, strike, is_call))
-    if got is None:
-        return None
-    px, iv, sp, tr = got
-    return {"px": float(px), "iv": float(iv), "spot": float(sp),
-            "tradable": bool(tr)}
+def load_sessions(force: bool = False) -> dict:
+    df = build_slice(force)
+    df["strike_price"] = df["strike_price"].astype(float)
+    df["isC"] = df["isC"].astype(bool)
+    return {d: Session(d, g) for d, g in df.groupby("date", sort=True)}
 
 
 def _delta(spot, K, T_years, iv_pct, is_call) -> float:
@@ -119,126 +177,97 @@ def _delta(spot, K, T_years, iv_pct, is_call) -> float:
                   "C" if is_call else "P").delta
 
 
-def run_intraday(files, exp_days, wings: int, hedge_band: float,
-                 rebalance_min: int) -> pd.DataFrame:
+STRIKE_STEP = 50.0
+
+
+def _spec(K: float, wings: int) -> list[tuple[float, bool, float]]:
+    """Short ATM straddle, plus long wings when defined-risk is wanted."""
+    s = [(K, True, -1.0), (K, False, -1.0)]
+    if wings > 0:
+        s += [(K + wings * STRIKE_STEP, True, +1.0),
+              (K - wings * STRIKE_STEP, False, +1.0)]
+    return s
+
+
+def run_intraday(sessions: dict, exp_days: dict, wings: int,
+                 hedge_band: float) -> pd.DataFrame:
     """Sell the ATM straddle at 09:30, buy it back at 15:20 the same session."""
     rows = []
-    strike_step = 50.0
-    for n, f in enumerate(files, 1):
-        if n % 250 == 0:
-            print(f"    ... {n}/{len(files)}", flush=True)
-        sess = _session_frame(f)
-        if sess is None:
-            continue
-        date = pd.Timestamp(f.name[6:16])
+    for date, sess in sessions.items():
         dte_cal = exp_days.get(date)
         if dte_cal is None:
             continue
         T0 = max(dte_cal, 0.0) / 365.0
-
-        at_entry = sess[sess["hhmm"] == ENTRY_INTRADAY]
-        if at_entry.empty:
+        got = sess.atm(ENTRY_INTRADAY)
+        if got is None:
             continue
-        spot0 = float(at_entry["spot"].median())
-        K = float(at_entry.iloc[(at_entry["strike_price"] - spot0)
-                                .abs().argsort()].iloc[0]["strike_price"])
+        K, spot0 = got
 
-        legs = {}
-        for tag, k, isc, qty in (("ce", K, True, -1.0), ("pe", K, False, -1.0)):
-            legs[tag] = (_leg(sess, ENTRY_INTRADAY, k, isc), k, isc, qty)
-        if wings > 0:
-            legs["ce_w"] = (_leg(sess, ENTRY_INTRADAY, K + wings * strike_step,
-                                 True), K + wings * strike_step, True, +1.0)
-            legs["pe_w"] = (_leg(sess, ENTRY_INTRADAY, K - wings * strike_step,
-                                 False), K - wings * strike_step, False, +1.0)
-        if any(v[0] is None or not v[0]["tradable"] or v[0]["px"] <= 0
-               for v in legs.values()):
+        spec = _spec(K, wings)
+        ent = [(sess.leg(ENTRY_INTRADAY, k, c), k, c, q) for k, c, q in spec]
+        if any(e is None or not e["tradable"] or e["px"] <= 0
+               for e, *_ in ent):
+            continue
+        ext = [(sess.leg(EXIT_INTRADAY, k, c), q) for k, c, q in spec]
+        if any(e is None or e["px"] < 0 for e, _ in ext):
             continue
 
-        credit = -sum(v[3] * v[0]["px"] for v in legs.values())
+        credit = -sum(q * e["px"] for e, _, _, q in ent)
+        debit = -sum(q * e["px"] for e, q in ext)
 
         # ── delta hedge across the session ───────────────────────────────
         hedge_pnl, hedge_units, n_rebal = 0.0, 0.0, 0
         if hedge_band > 0:
-            marks = [t for t in sorted(sess["hhmm"].unique())
+            marks = [t for t in sess.minutes
                      if ENTRY_INTRADAY <= t <= EXIT_INTRADAY]
-            marks = marks[::rebalance_min]
             prev_spot = spot0
-            for t in marks:
-                sub = sess[sess["hhmm"] == t]
-                if sub.empty:
+            for j, t in enumerate(marks):
+                spot_t = sess.spot_at.get(t)
+                if spot_t is None or not np.isfinite(spot_t):
                     continue
-                spot_t = float(sub["spot"].median())
                 hedge_pnl += hedge_units * (spot_t - prev_spot)
                 prev_spot = spot_t
-                frac = 1 - (marks.index(t) / max(len(marks) - 1, 1))
-                T_t = max(T0 - (1 - frac) * (6.25 / 24) / 365.0, 1e-6)
+                if t == EXIT_INTRADAY:
+                    break
+                # Time decays across the session; a session is 6.25/24 of a day.
+                elapsed = (j / max(len(marks) - 1, 1)) * (6.25 / 24) / 365.0
+                T_t = max(T0 - elapsed, 1e-6)
                 net = 0.0
-                for lg, k, isc, qty in legs.values():
-                    iv_t = _leg(sess, t, k, isc)
-                    iv = iv_t["iv"] if iv_t else lg["iv"]
-                    net += qty * _delta(spot_t, k, T_t, iv, isc)
+                for e, k, c, q in ent:
+                    cur = sess.leg(t, k, c)
+                    net += q * _delta(spot_t, k, T_t,
+                                      cur["iv"] if cur else e["iv"], c)
                 if abs(net + hedge_units) > hedge_band:
                     hedge_units = -net
                     n_rebal += 1
-            sub = sess[sess["hhmm"] == EXIT_INTRADAY]
-            if not sub.empty:
-                hedge_pnl += hedge_units * (float(sub["spot"].median()) - prev_spot)
 
-        exits = {tag: _leg(sess, EXIT_INTRADAY, k, isc)
-                 for tag, (lg, k, isc, qty) in legs.items()}
-        if any(v is None for v in exits.values()):
-            continue
-        debit = -sum(legs[t][3] * exits[t]["px"] for t in legs)
-        opt_pnl = credit - debit
-        spot_exit = float(exits["ce"]["spot"])
-
+        spot_exit = float(ext[0][0]["spot"])
         rows.append({"date": date, "K": K, "dte_cal": dte_cal,
-                     "credit": credit, "opt_pnl": opt_pnl,
+                     "credit": credit, "opt_pnl": credit - debit,
                      "hedge_pnl": hedge_pnl, "n_rebal": n_rebal,
-                     "pnl": opt_pnl + hedge_pnl,
+                     "pnl": credit - debit + hedge_pnl,
                      "move_pct": (spot_exit - spot0) / spot0 * 100})
     return pd.DataFrame(rows)
 
 
-def run_overnight(files, exp_days, wings: int) -> pd.DataFrame:
-    """Sell at 15:20, buy back at 09:20 the NEXT session. No hedging possible
-    while the market is shut — that is the whole point of the comparison."""
+def run_overnight(sessions: dict, exp_days: dict, wings: int) -> pd.DataFrame:
+    """Sell at 15:20, buy back at 09:20 the NEXT session. Unhedgeable while the
+    market is shut — which is exactly what the comparison is testing."""
     rows = []
-    strike_step = 50.0
-    frames = {}
-    for n, f in enumerate(files, 1):
-        if n % 250 == 0:
-            print(f"    ... {n}/{len(files)}", flush=True)
-        date = pd.Timestamp(f.name[6:16])
-        frames[date] = f
-    dates = sorted(frames)
-
-    prev = None
-    for i, date in enumerate(dates):
-        if i + 1 >= len(dates):
-            break
-        nxt = dates[i + 1]
+    dates = sorted(sessions)
+    for i, date in enumerate(dates[:-1]):
         dte_cal = exp_days.get(date)
         if dte_cal is None or dte_cal < 1:
             continue                      # expires before the buy-back
-        sess = _session_frame(frames[date])
-        nsess = _session_frame(frames[nxt])
-        if sess is None or nsess is None:
+        sess, nsess = sessions[date], sessions[dates[i + 1]]
+        got = sess.atm(ENTRY_OVERNIGHT)
+        if got is None:
             continue
-        at_entry = sess[sess["hhmm"] == ENTRY_OVERNIGHT]
-        if at_entry.empty:
-            continue
-        spot0 = float(at_entry["spot"].median())
-        K = float(at_entry.iloc[(at_entry["strike_price"] - spot0)
-                                .abs().argsort()].iloc[0]["strike_price"])
+        K, spot0 = got
 
-        spec = [(K, True, -1.0), (K, False, -1.0)]
-        if wings > 0:
-            spec += [(K + wings * strike_step, True, +1.0),
-                     (K - wings * strike_step, False, +1.0)]
-        ent = [(_leg(sess, ENTRY_OVERNIGHT, k, c), q) for k, c, q in spec]
-        ext = [(_leg(nsess, EXIT_OVERNIGHT, k, c), q) for k, c, q in spec]
+        spec = _spec(K, wings)
+        ent = [(sess.leg(ENTRY_OVERNIGHT, k, c), q) for k, c, q in spec]
+        ext = [(nsess.leg(EXIT_OVERNIGHT, k, c), q) for k, c, q in spec]
         if any(e is None or not e["tradable"] or e["px"] <= 0 for e, _ in ent):
             continue
         if any(e is None or e["px"] < 0 for e, _ in ext):
@@ -282,19 +311,20 @@ def main() -> None:
                     help="strikes out for long wings; 0 = naked")
     ap.add_argument("--hedge-band", type=float, default=0.0,
                     help="rebalance when |net delta| exceeds this; 0 = unhedged")
-    ap.add_argument("--rebalance-min", type=int, default=15)
+    ap.add_argument("--rebuild", action="store_true", help="rebuild the slice cache")
     ap.add_argument("--limit", type=int, default=0)
     args = ap.parse_args()
 
-    files = sorted(DEFAULT_ROOT.glob("*/NIFTY_*_1m.csv"))
+    sessions = load_sessions(force=args.rebuild)
     if args.limit:
-        files = files[-args.limit:]
+        keep = sorted(sessions)[-args.limit:]
+        sessions = {d: sessions[d] for d in keep}
     exp_days = _expiry_map()
 
     print("=" * 118)
     print("VARIANCE PREMIUM AS A TRADE — short ATM straddle on recorded prices")
     print("=" * 118)
-    print(f"  {len(files):,} sessions. P&L in INDEX POINTS per 1 unit; "
+    print(f"  {len(sessions):,} sessions. P&L in INDEX POINTS per 1 unit; "
           f"x{LOT} for rupees per lot. Gross of costs.")
     print(f"  {'variant':32}{'n':>6}{'win':>6}{'mean':>9}{'sd':>9}"
           f"{'worst':>9}{'kurt':>8}{'TRAIN':>8}{'VALID':>8}{'TEST':>8}{'BE/leg':>8}")
@@ -304,14 +334,14 @@ def main() -> None:
                              (0, 0.15, "naked straddle, delta-hedged"),
                              (4, 0.0, "iron fly +/-200, unhedged"),
                              (4, 0.15, "iron fly +/-200, delta-hedged")):
-        t = run_intraday(files, exp_days, wings, band, args.rebalance_min)
+        t = run_intraday(sessions, exp_days, wings, band)
         summarise(t, lab, 4 if wings else 2)
         if wings == 0 and band == 0.0:
             t.to_csv(RESULT_CACHE, index=False)
 
     print("\n  OVERNIGHT (sell 15:20, buy back 09:20 next session — unhedgeable)")
     for wings, lab in ((0, "naked straddle"), (4, "iron fly +/-200")):
-        t = run_overnight(files, exp_days, wings)
+        t = run_overnight(sessions, exp_days, wings)
         summarise(t, lab, 4 if wings else 2)
 
     print("\n  'BE/leg' is the half-spread per leg that would erase the mean edge.")

@@ -26,3 +26,5 @@ delta_exchange/backtest_results/
 delta_exchange/data/
 delta_exchange/.venv/
 delta_exchange/results_*.csv
+
+db/nse_cache/vol_harvest_slice.csv

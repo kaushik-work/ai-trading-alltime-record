@@ -313,7 +313,79 @@ closes off "just avoid expiry day" as a rescue and stops further tuning here.
 
 ---
 
-## 9. Corrections to make elsewhere in the repo
+## 9. The variance premium traded — the first thing here that survives
+
+`nse/backtest/test_delta_hedged_vol.py`. Short ATM straddle on **recorded**
+prices, 1,251 sessions, index points per unit (×65 = rupees per lot), gross.
+
+| variant | n | win | mean | sd | worst | kurt | TRAIN | VALID | TEST | BE/leg |
+|---|---|---|---|---|---|---|---|---|---|---|
+| naked, unhedged | 1243 | 64% | 4.49 | 56.3 | −386 | 6.5 | 3.08 | 3.66 | 8.17 | 2.25 |
+| naked, delta-hedged | 1243 | 65% | **7.14** | 43.7 | −399 | 13.3 | 7.24 | 6.93 | 7.06 | 3.57 |
+| iron fly ±200, unhedged | 1212 | 61% | 1.70 | 30.3 | −131 | 4.6 | 0.02 | 3.13 | 4.47 | 0.42 |
+| overnight naked | 973 | 70% | 4.21 | 35.5 | −475 | **42.5** | 2.45 | 3.15 | 8.85 | 2.11 |
+
+**Every variant is positive in TRAIN, VALID and TEST** — the first time anything
+in this repo has done that. The delta-hedged straddle is also remarkably stable
+across splits (7.24 / 6.93 / 7.06), which is what a real structural edge looks
+like as opposed to a fitted one.
+
+Confirmation it is the mechanism we think it is: P&L by |move| decile is
+positive in deciles 0–8 and −18.7 in decile 9. That is textbook short gamma —
+it earns on quiet days and pays on violent ones.
+
+### The mistake I made inside this test
+
+The two worst delta-hedged sessions:
+
+    2024-02-29  move +0.39%   opt +114.0   hedge -512.8   net -398.8
+    2025-10-20  move -0.07%   opt +115.8   hedge -303.5   net -187.7
+
+**The options made money. The hedge lost 3–5× the credit, on days the index
+barely moved.** Both are **0 DTE** — and this file computes hedge deltas from
+Black-Scholes at T→0, which §3 of this very document says is unusable. I
+documented the rule and then broke it one file later.
+
+The mechanism is short-gamma whipsaw: at 0 DTE gamma is enormous, delta flips
+violently around the strike, and every rebalance buys high and sells low.
+
+### What survives once that is fixed and hedging is charged for
+
+| variant | n | mean | sd | worst | kurt | TRAIN | VALID | TEST | BE/leg |
+|---|---|---|---|---|---|---|---|---|---|
+| naked unhedged, **ex-0DTE** | 981 | 3.38 | 44.6 | −299 | 7.9 | 3.02 | 3.87 | 3.81 | **1.69** |
+| naked hedged, ex-0DTE | 981 | 4.53 | 28.8 | −184 | 7.0 | 4.72 | 5.96 | 3.11 | 2.26 |
+| naked hedged, ex-0DTE, **1pt/rebalance** | 981 | 1.64 | 29.3 | −186 | 6.7 | 1.75 | 3.26 | **0.25** | 0.82 |
+| iron fly, ex-0DTE | 957 | 0.88 | 12.1 | −67 | 4.8 | 0.01 | 2.39 | 1.75 | 0.22 |
+
+- Dropping 0 DTE **halves the tail** (worst −399 → −184, kurtosis 13.3 → 7.0).
+- Hedging averages only 3.2 rebalances/session, but at 1 point each the edge
+  falls from 4.53 to 1.64 and **TEST collapses to 0.25**. The hedged version is
+  far more cost-sensitive than its headline suggests.
+- The **simplest** variant is the most robust: unhedged, skip expiry day,
+  3.02 / 3.87 / 3.81 across splits with BE/leg 1.69 points — above our
+  estimated 0.5–1.35 point spread, though not by a comfortable margin.
+
+### The catch, and it is a big one
+
+**The edge lives in the naked structure, which we cannot margin.** A −299 point
+day is **−₹19,400 per lot**; on 4 lots that exceeds the entire ₹50k budget.
+Short straddles also carry SPAN margin far above the premium collected — this
+must be checked against Angel's margin API before any of this is deployable,
+but the direction is not in doubt.
+
+The structure we *can* afford — the iron fly — has BE/leg of **0.22 points**,
+almost certainly **below** the real spread. So this is the same shape as the
+crypto finding: a real edge that sits underneath its cost and margin floor.
+
+**Status: the most promising thing measured here, and not yet tradeable.** The
+next step is neither more tuning nor more architecture — it is measuring the
+actual bid/ask on ATM weeklies (collection was fixed 2026-08-04) and the real
+SPAN margin, because those two numbers decide it and both are now collectable.
+
+---
+
+## 10. Corrections to make elsewhere in the repo
 
 1. `RESEARCH_LEARNINGS.md` §3.3 — premium ~+5.1 vol points, not +8.64. **Done.**
 2. Any DTE/expiry logic assuming Thursday — use `nse.quant.expiry_calendar`.
