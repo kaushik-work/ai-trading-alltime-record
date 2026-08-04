@@ -23,6 +23,7 @@ from nse.config import (
     LOT_SIZES,
     PRODUCT_TYPE,
     gtt_levels_for_leg,
+    gtt_limit_through,
 )
 from nse.models import ComboLeg, Position, SyntheticForwardSignal
 
@@ -191,9 +192,9 @@ class AngelBroker:
                 producttype=PRODUCT_TYPE,
                 qty=qty,
                 triggerprice=target_px,
-                price=target_px,
+                price=gtt_limit_through(target_px, exit_side == "SELL"),
                 stoploss_trigger=stop_px,
-                stoploss_price=stop_px,
+                stoploss_price=gtt_limit_through(stop_px, exit_side == "SELL"),
                 timeperiod=GTT_MAX_TIMEPERIOD_DAYS,
             )
             result["gtt"] = {
@@ -368,9 +369,9 @@ class AngelBroker:
                 producttype=PRODUCT_TYPE,
                 qty=leg.lots * lot,
                 triggerprice=target_px,
-                price=target_px,
+                price=gtt_limit_through(target_px, exit_side == "SELL"),
                 stoploss_trigger=stop_px,
-                stoploss_price=stop_px,
+                stoploss_price=gtt_limit_through(stop_px, exit_side == "SELL"),
                 timeperiod=timeperiod,
             )
             leg.gtt_rule_id = rule_id

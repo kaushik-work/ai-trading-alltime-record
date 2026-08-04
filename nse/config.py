@@ -124,6 +124,21 @@ GTT_BRACKET_MULT: float = 2.5
 GTT_LEG_DELTA: float = 0.5
 # Exchange tick floor — a GTT price must never be <= 0.
 GTT_MIN_PREMIUM: float = 0.05
+# GTT legs are limit orders. A limit priced exactly AT its trigger frequently
+# does not fill in the move that fired it, which on a stop is the worst
+# possible time to miss. Placing the limit this far THROUGH the trigger makes
+# the leg behave like a market order while still bounding the fill.
+GTT_TRIGGER_SLIP_PCT: float = 2.0
+
+
+def gtt_limit_through(trigger: float, is_exit_sell: bool) -> float:
+    """Limit price set through the trigger so the leg actually crosses.
+
+    An exiting SELL must accept a LOWER price; an exiting BUY a HIGHER one.
+    """
+    slip = GTT_TRIGGER_SLIP_PCT / 100.0
+    px = trigger * (1 - slip) if is_exit_sell else trigger * (1 + slip)
+    return round(max(GTT_MIN_PREMIUM, px), 2)
 # Rule lifetime is clamped to the contract's remaining life; a weekly option
 # must never carry a 365-day rule that outlives the instrument.
 GTT_MAX_TIMEPERIOD_DAYS: int = 365
