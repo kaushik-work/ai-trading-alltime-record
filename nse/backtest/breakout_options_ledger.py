@@ -155,8 +155,53 @@ def premium_at(chain: pd.DataFrame, at, strike: float, want_call: bool) -> float
     return float(s.sort_values("datetime").iloc[-1]["close"])
 
 
+_CHAIN_CACHE: dict = {}
+
+
+def cached_chain(day):
+    """Option files are the slow part; a sweep re-reads the same days."""
+    if day not in _CHAIN_CACHE:
+        _CHAIN_CACHE[day] = option_chain_for(day)
+    return _CHAIN_CACHE[day]
+
+
+def simulate(bars, sl_pts, rr, band_lo, band_hi):
+    """One (SL, RR) configuration -> ledger DataFrame."""
+    global PREMIUM_LO, PREMIUM_HI
+    PREMIUM_LO, PREMIUM_HI = band_lo, band_hi
+    sig = index_signals(bars, sl_pts, rr)
+    rows = []
+    for _, s in sig.iterrows():
+        chain = cached_chain(s["date"])
+        if chain is None:
+            continue
+        want_call = s["dir"] > 0
+        fill_in = pd.Timestamp(s["entry_dt"]) + BAR
+        fill_out = pd.Timestamp(s["exit_dt"]) + BAR
+        picked = pick_strike(chain, fill_in, want_call)
+        if picked is None:
+            continue
+        strike, entry_prem = picked
+        lots = int(BUDGET // (entry_prem * LOT))
+        if lots < 1:
+            continue
+        exit_prem = premium_at(chain, fill_out, strike, want_call)
+        if exit_prem is None:
+            continue
+        qty = lots * LOT
+        rows.append({"date": s["date"], "pnl": (exit_prem - entry_prem) * qty,
+                     "reason": s["reason"]})
+    return pd.DataFrame(rows)
+
+
+def split_of(d):
+    y = pd.Timestamp(d).year
+    return "TRAIN" if y <= 2023 else ("VALID" if y == 2024 else "TEST")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser()
+    ap.add_argument("--sweep", action="store_true")
     ap.add_argument("--years", nargs="+", default=None)
     ap.add_argument("--show", type=int, default=30, help="ledger rows to print")
     ap.add_argument("--sl", type=float, default=SL_PTS)
@@ -165,6 +210,28 @@ def main() -> None:
 
     print("Preparing index bars ...", flush=True)
     bars = prepare(load_spot())
+    if args.sweep:
+        print()
+        print("=" * 96)
+        print(f"SL / R:R SWEEP — option band Rs {PREMIUM_LO:.0f}-{PREMIUM_HI:.0f}, "
+              f"budget Rs {BUDGET:,.0f}   (GROSS)")
+        print("=" * 96)
+        print(f"  {'SL':>4}{'RR':>6}{'target':>8}{'trades':>8}{'WR':>7}"
+              f"{'TRAIN':>12}{'VALID':>12}{'TEST':>12}{'TOTAL':>12}")
+        for sl in (10, 15, 20, 25, 30):
+            for rr in (1.5, 2, 3, 5):
+                t = simulate(bars, float(sl), float(rr), 180.0, 200.0)
+                if t.empty:
+                    continue
+                t["sp"] = t["date"].map(split_of)
+                cells = [t[t["sp"] == k]["pnl"].sum() for k in ("TRAIN", "VALID", "TEST")]
+                print(f"  {sl:>4}{rr:>6.1f}{sl * rr:>8.0f}{len(t):>8}"
+                      f"{(t['pnl'] > 0).mean() * 100:>6.0f}%"
+                      + "".join(f"{c:>12,.0f}" for c in cells)
+                      + f"{t['pnl'].sum():>12,.0f}")
+        print()
+        print("  All three columns must be positive for the config to be believable.")
+        return
     if args.years:
         bars = bars[bars["datetime"].dt.year.astype(str).isin(args.years)]
     sig = index_signals(bars, args.sl, args.rr)
