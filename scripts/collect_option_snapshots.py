@@ -45,6 +45,18 @@ p.add_argument("--no-vix",    dest="vix",    action="store_false",
                help="skip India VIX")
 p.add_argument("--no-futures", dest="futures", action="store_false",
                help="skip near-month futures quote")
+# Accepted and ignored: these were store_true flags before these fields became
+# default-on. docker-compose.yml passes "--greeks --vix" to every collector
+# service, and argparse exit(2)s on an unrecognised flag — which the compose
+# command swallows into `|| sleep 60`, so the collector would crash-loop
+# silently for a whole session. Deleting a flag someone else's config still
+# passes is a breaking change; keep them as no-ops.
+p.add_argument("--greeks", dest="greeks", action="store_true",
+               help=argparse.SUPPRESS)
+p.add_argument("--vix", dest="vix", action="store_true",
+               help=argparse.SUPPRESS)
+p.add_argument("--futures", dest="futures", action="store_true",
+               help=argparse.SUPPRESS)
 p.set_defaults(greeks=True, vix=True, futures=True)
 p.add_argument("--dry-run",  action="store_true", help="skip market hours check")
 args = p.parse_args()
