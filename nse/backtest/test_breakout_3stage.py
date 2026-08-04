@@ -154,6 +154,7 @@ def summarise(t: pd.DataFrame, label: str) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--sweep", action="store_true")
+    ap.add_argument("--rr-scan", action="store_true")
     ap.add_argument("--sl", type=float, default=20.0)
     ap.add_argument("--rr", type=float, default=3.0)
     ap.add_argument("--chop", type=float, default=1.0)
@@ -168,6 +169,36 @@ def main() -> None:
     print("=" * 104)
     print(f"  {'variant':34}{'trades':>7}{'WR':>8}{'TRAIN':>11}{'VALID':>11}"
           f"{'TEST':>11}{'TOTAL':>11}")
+
+    if args.rr_scan:
+        # WR and profit move in OPPOSITE directions as R:R rises. Show the
+        # expectancy components so the reason is visible, not just the totals.
+        for three in (False, True):
+            tag = "3-stage (partial 1R + breakeven)" if three else "1-stage (pure stop/target)"
+            print()
+            print(f"  {tag}   SL {args.sl:.0f}pts, chop>{args.chop:g}")
+            print(f"    {'R:R':>5}{'trades':>8}{'WR':>7}{'avg win':>10}{'avg loss':>10}"
+                  f"{'expectancy':>12}{'TRAIN':>9}{'VALID':>9}{'TEST':>9}{'TOTAL':>9}")
+            for rr in range(1, 11):
+                t = run(bars, args.sl, float(rr), three_stage=three, chop_min=args.chop)
+                if t.empty:
+                    continue
+                w = t[t["pts"] > 0]["pts"]
+                l = t[t["pts"] <= 0]["pts"]
+                wr = len(w) / len(t)
+                exp = t["pts"].mean()
+                t["sp"] = t["date"].map(split_of)
+                cells = [t[t["sp"] == k]["pts"].sum() for k in ("TRAIN", "VALID", "TEST")]
+                flag = "  ALL +" if all(c > 0 for c in cells) else ""
+                print(f"    1:{rr:<3}{len(t):>8}{wr * 100:>6.0f}%{w.mean():>10.1f}"
+                      f"{(l.mean() if len(l) else 0):>10.1f}{exp:>12.2f}"
+                      + "".join(f"{c:>9,.0f}" for c in cells)
+                      + f"{t['pts'].sum():>9,.0f}{flag}")
+        print()
+        print("  Expectancy = WR x avg_win - (1-WR) x |avg_loss|. Raising R:R lowers WR")
+        print("  (the target is further away) but raises avg_win. Profit follows the")
+        print("  PRODUCT, not the win rate.")
+        return
 
     if args.sweep:
         for sl in (15, 20, 25):
