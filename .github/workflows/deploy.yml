@@ -25,7 +25,16 @@ jobs:
             df -h /
             docker system prune -af --volumes
             df -h /
-            docker compose down
+            # --remove-orphans clears containers left behind by profile
+            # changes; the explicit rm is the fallback for a container stuck in
+            # Created state, which `down` does not always remove and which then
+            # fails the next `up` with "container name is already in use".
+            # deploy.sh has always done this; the workflow did not.
+            docker compose --profile collectors --profile nse down --remove-orphans || true
+            docker compose down --remove-orphans || true
+            for c in api collector collector-banknifty collector-finnifty collector-sensex nse-runner; do
+              docker rm -f "ai-trading-alltime-record-$c-1" 2>/dev/null || true
+            done
             # Drop --no-cache: with the new .dockerignore the build context
             # is small (≈4MB) and layer caching is correct, so cache reuse
             # cuts deploy time from ~60s to ~10s without staleness risk.
