@@ -47,6 +47,10 @@ class ComboLeg:
     entry_px: float = 0.0
     filled_px: Optional[float] = None
     order_id: Optional[str] = None
+    # True only when the trade book confirmed a fill. A protective GTT must
+    # never be armed on an unconfirmed leg: if the entry did not fill, the
+    # exit rule OPENS a naked position instead of closing one.
+    fill_confirmed: bool = False
     # Id of this leg's protective OCO GTT rule. Must be cancelled on every
     # exit path, otherwise the rule stays armed at the exchange and later
     # opens a position we no longer want.

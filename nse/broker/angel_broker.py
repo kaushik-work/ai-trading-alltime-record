@@ -173,7 +173,16 @@ class AngelBroker:
         # actually own the position.
         if (sl_points is not None or target_points is not None) and result["entry_price"]:
             fill_px = self._wait_for_fill(order_id, max_wait_sec=5, poll_sec=0.5)
-            entry = fill_px if fill_px else result["entry_price"]
+            if not fill_px:
+                # Do NOT fall back to the limit price. An unfilled entry with a
+                # live GTT means the exit rule opens a naked position when it
+                # triggers, rather than closing one.
+                logger.error("entry %s NOT confirmed filled within 5s — no GTT armed. "
+                             "Cancel the resting order or re-check before retrying.",
+                             order_id)
+                result["gtt"] = {"skipped": "entry fill not confirmed"}
+                return result
+            entry = fill_px
             result["fill_price"] = entry
 
             long_leg = side == "BUY"
@@ -345,7 +354,12 @@ class AngelBroker:
         out: list[dict] = []
 
         for leg in legs:
-            fill = leg.filled_px or leg.entry_px or 0.0
+            if not getattr(leg, "fill_confirmed", False):
+                logger.error("attach_gtt_brackets: %s has NO CONFIRMED FILL — refusing "
+                             "to arm a bracket. Arming it would open a naked position "
+                             "when it triggers.", leg.tradingsymbol)
+                continue
+            fill = leg.filled_px or 0.0
             if fill <= 0:
                 logger.warning("attach_gtt_brackets: no fill price for %s — skipping bracket",
                                leg.tradingsymbol)
@@ -460,20 +474,31 @@ class AngelBroker:
                 logger.error("Revert leg failed for %s: %s", leg.tradingsymbol, e)
 
     def _attach_fill_prices(self, legs: list[ComboLeg]):
-        """Pull fill prices from Angel trade book."""
+        """Pull fill prices from Angel trade book.
+
+        A leg NOT found in the trade book is treated as UNFILLED. It used to
+        fall back to the limit price, which made an unfilled leg
+        indistinguishable from a filled one — and a GTT armed on that leg
+        opens a naked position when it triggers instead of closing one.
+        """
         try:
             tb = self.fetcher.get_trade_book()
-            by_order = {t["order_id"]: t for t in tb}
-            for leg in legs:
-                t = by_order.get(leg.order_id)
-                if t:
-                    leg.filled_px = float(t.get("price") or 0)
-                else:
-                    leg.filled_px = leg.entry_px
+            by_order = {x["order_id"]: x for x in tb}
         except Exception as e:
-            logger.warning("Could not attach fill prices: %s", e)
+            logger.error("Could not read trade book: %s — treating all legs as "
+                         "UNFILLED so no bracket is armed on a phantom position", e)
             for leg in legs:
-                leg.filled_px = leg.entry_px
+                leg.filled_px, leg.fill_confirmed = None, False
+            return
+        for leg in legs:
+            row = by_order.get(leg.order_id)
+            px = float(row.get("price") or 0) if row else 0.0
+            if row and px > 0:
+                leg.filled_px, leg.fill_confirmed = px, True
+            else:
+                leg.filled_px, leg.fill_confirmed = None, False
+                logger.error("leg %s order %s NOT confirmed filled — no bracket "
+                             "will be attached", leg.tradingsymbol, leg.order_id)
 
     def close_combo(self, position: Position) -> bool:
         """Square off an open combo position. Returns True on full success.
