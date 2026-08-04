@@ -35,8 +35,17 @@ p.add_argument("--symbol",   default="NIFTY",     choices=["NIFTY", "BANKNIFTY",
 p.add_argument("--interval", type=int, default=5, help="snapshot interval minutes")
 p.add_argument("--strikes",  type=int, default=8, help="ATM +/- N strikes (default 8 => 17 strikes x 2 sides = 34 contracts per bar)")
 p.add_argument("--expiries", type=int, default=1, help="number of nearest weekly expiries to collect (default 1)")
-p.add_argument("--greeks",   action="store_true", help="compute and store Black-Scholes Greeks + IV")
-p.add_argument("--vix",      action="store_true", help="also snapshot India VIX")
+# Greeks, VIX and futures default ON. They were opt-in, and the archive we
+# actually accumulated has none of them — an analysis is only as good as the
+# field nobody remembered to enable. Storage is cheap; a re-collected year is
+# not obtainable at any price.
+p.add_argument("--no-greeks", dest="greeks", action="store_false",
+               help="skip Black-Scholes Greeks + IV")
+p.add_argument("--no-vix",    dest="vix",    action="store_false",
+               help="skip India VIX")
+p.add_argument("--no-futures", dest="futures", action="store_false",
+               help="skip near-month futures quote")
+p.set_defaults(greeks=True, vix=True, futures=True)
 p.add_argument("--dry-run",  action="store_true", help="skip market hours check")
 args = p.parse_args()
 
@@ -178,17 +187,85 @@ def build_tokens(af: AngelFetcher, expiry: date, atm: int) -> list:
     return tokens
 
 
+# Angel caps FULL mode at 50 tokens per request. A 17-strike chain is 34
+# contracts and fits, but --strikes 16 or --expiries 2 does not, and an
+# over-long request returns a partial fetch rather than an error. Batch always.
+FULL_MODE_MAX_TOKENS = 50
+
+# One list drives both the CSV header and every row, so they cannot drift.
+# A header/row mismatch silently shifts every column and is invisible until
+# something downstream reads volume as OI.
+MARKET_FIELDS = [
+    "ltp", "bid", "ask", "mid", "spread", "spread_pct",
+    "bid_qty", "ask_qty", "book_imbalance",
+    "open", "high", "low", "close", "avg_price",
+    "volume", "oi", "last_trade_qty",
+    "net_change", "pct_change", "lower_circuit", "upper_circuit",
+    "tot_buy_qty", "tot_sell_qty",
+    "exch_feed_time", "exch_trade_time",
+]
+# Depth is 5 levels x 3 numbers x 2 sides. Flattened for CSV, nested for Mongo.
+DEPTH_FIELDS = [f"{side}{i}_{k}"
+                for side in ("b", "a") for i in range(1, 6)
+                for k in ("px", "qty", "ord")]
+
+
+_FUT_TOKEN: dict = {}
+
+
+def futures_token(af: AngelFetcher) -> dict | None:
+    """Near-month index futures. Cached — the master is large and static.
+
+    WHY THIS IS COLLECTED
+        The delta-hedged straddle test had to hedge with the SPOT INDEX, which
+        cannot be traded. Futures are the real hedging instrument, and they
+        carry a basis that spot does not: F = S*e^((r-q)T). Without the futures
+        mark, every hedge P&L we compute is off by the basis and its drift,
+        and no put-call-parity or synthetic-forward work is possible at all.
+    """
+    if SYMBOL in _FUT_TOKEN:
+        return _FUT_TOKEN[SYMBOL]
+    futs = [i for i in _instruments(af)
+            if i.get("name") == SYMBOL and i.get("instrumenttype") == "FUTIDX"
+            and _parse_expiry(i.get("expiry", ""))]
+    if not futs:
+        _FUT_TOKEN[SYMBOL] = None
+        return None
+    nearest = min(futs, key=lambda i: _parse_expiry(i["expiry"]))
+    _FUT_TOKEN[SYMBOL] = {"token": str(nearest["token"]),
+                          "symbol": nearest.get("symbol"),
+                          "expiry": str(_parse_expiry(nearest["expiry"]))}
+    return _FUT_TOKEN[SYMBOL]
+
+
+def _fetch_full(af: AngelFetcher, tokens: list[str]) -> dict:
+    """FULL quotes for any number of tokens, batched under Angel's cap."""
+    quotes: dict[str, dict] = {}
+    for i in range(0, len(tokens), FULL_MODE_MAX_TOKENS):
+        batch = tokens[i:i + FULL_MODE_MAX_TOKENS]
+        resp = af._api.getMarketData("FULL", {EXCHANGE: batch})
+        if not resp or not resp.get("status"):
+            raise RuntimeError(f"getMarketData failed: {resp}")
+        for r in resp.get("data", {}).get("fetched", []) or []:
+            quotes[str(r.get("symbolToken"))] = r
+    return quotes
+
+
 def take_snapshot(af: AngelFetcher, token_map: list, expiry: date, out_file: Path) -> int:
     spot = af.get_index_ltp(SYMBOL)
     if not spot:
         raise RuntimeError("Spot is None")
-    resp = af._api.getMarketData("FULL", {EXCHANGE: [t["token"] for t in token_map]})
-    if not resp or not resp.get("status"):
-        raise RuntimeError(f"getMarketData failed: {resp}")
-    quotes = {
-        str(r["symbolToken"]): r
-        for r in resp.get("data", {}).get("fetched", [])
-    }
+    fut = futures_token(af) if args.futures else None
+    tokens = [t["token"] for t in token_map] + ([fut["token"]] if fut else [])
+    quotes = _fetch_full(af, tokens)
+
+    # Futures mark + basis, identical for every contract in this snapshot.
+    fut_ltp, fut_bid, fut_ask, basis = 0.0, 0.0, 0.0, 0.0
+    if fut and fut["token"] in quotes:
+        from data.angel_fetcher import _quote_fields as _qf
+        fq = _qf(quotes[fut["token"]])
+        fut_ltp, fut_bid, fut_ask = fq["ltp"], fq["bid"], fq["ask"]
+        basis = fut_ltp - spot if fut_ltp > 0 else 0.0
     ts = datetime.now(IST)
     ts_str = ts.strftime("%Y-%m-%d %H:%M:%S")
     rows = 0
@@ -205,20 +282,30 @@ def take_snapshot(af: AngelFetcher, token_map: list, expiry: date, out_file: Pat
 
     with open(out_file, "a", newline="", encoding="utf-8") as f:
         w = csv.writer(f)
+        from data.angel_fetcher import _quote_fields
         for t in token_map:
-            q = quotes.get(str(t["token"]), {})
-            ltp = float(q.get("ltp", 0) or 0)
-            if ltp <= 0:
-                continue
-            from data.angel_fetcher import best_bid_ask
-            bid, ask = best_bid_ask(q)
-            volume = int(  q.get("tradeVolume", 0) or 0)
-            oi     = int(  q.get("opnInterest", 0) or 0)
+            q = quotes.get(str(t["token"]))
+            if q is None:
+                continue                       # contract not in the response
+            f_ = _quote_fields(q)
+            ltp = f_["ltp"]
 
-            csv_row = [
-                ts_str, SYMBOL, str(expiry), t["strike"], t["option_type"],
-                ltp, bid, ask, volume, oi, round(spot, 2),
-            ]
+            # A contract with no LTP has usually not traded yet — but it can
+            # still be QUOTED, and a live two-sided book is exactly what we
+            # need to measure spread at the open. Dropping these rows was
+            # discarding the quietest contracts, which is a biased sample.
+            # Keep them and flag instead.
+            if ltp <= 0 and f_["bid"] <= 0 and f_["ask"] <= 0:
+                continue                       # genuinely nothing to record
+            no_trade = ltp <= 0
+
+            csv_row = [ts_str, SYMBOL, str(expiry), t["strike"],
+                       t["option_type"], round(spot, 2), int(no_trade),
+                       fut_ltp, fut_bid, fut_ask, round(basis, 2)]
+            csv_row += [f_[k] for k in MARKET_FIELDS]
+            csv_row += [lvl[k] for side in ("depth_buy", "depth_sell")
+                        for lvl in f_[side] for k in ("price", "qty", "orders")]
+
             doc = {
                 "timestamp":    ts_str,
                 "date":         today_str,
@@ -226,12 +313,14 @@ def take_snapshot(af: AngelFetcher, token_map: list, expiry: date, out_file: Pat
                 "expiry":       str(expiry),
                 "strike":       t["strike"],
                 "option_type":  t["option_type"],
-                "ltp":          ltp,
-                "bid":          bid,
-                "ask":          ask,
-                "volume":       volume,
-                "oi":           oi,
                 "spot":         round(spot, 2),
+                "no_trade":     no_trade,
+                "fut_ltp":      fut_ltp,
+                "fut_bid":      fut_bid,
+                "fut_ask":      fut_ask,
+                "basis":        round(basis, 2),
+                "fut_expiry":   (fut or {}).get("expiry"),
+                **f_,                          # nested depth kept as-is in Mongo
             }
 
             if args.greeks:
@@ -299,10 +388,9 @@ relogin_count   = 0
 out_file = SNAP_DIR / f"{today_str}_{SYMBOL}.csv"
 if not out_file.exists():
     with open(out_file, "w", newline="", encoding="utf-8") as f:
-        hdr = [
-            "timestamp", "symbol", "expiry", "strike", "option_type",
-            "ltp", "bid", "ask", "volume", "oi", "spot",
-        ]
+        hdr = ["timestamp", "symbol", "expiry", "strike", "option_type",
+               "spot", "no_trade", "fut_ltp", "fut_bid", "fut_ask",
+               "basis"] + MARKET_FIELDS + DEPTH_FIELDS
         if args.greeks:
             hdr += ["iv", "delta", "gamma", "theta", "vega", "rho"]
         if args.vix:
