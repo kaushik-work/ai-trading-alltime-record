@@ -51,6 +51,81 @@ def best_bid_ask(quote: dict) -> tuple[float, float]:
     return _side("buy", "bidPrice"), _side("sell", "askPrice")
 
 
+def _depth_levels(depth: dict, key: str, n: int = 5) -> list[dict]:
+    """Normalise one side of the book to exactly n levels."""
+    levels = (depth or {}).get(key) or []
+    out = []
+    for i in range(n):
+        lvl = levels[i] if isinstance(levels, list) and i < len(levels) else {}
+        if not isinstance(lvl, dict):
+            lvl = {}
+        out.append({
+            "price": _f(lvl.get("price")),
+            "qty": int(_f(lvl.get("quantity"))),
+            "orders": int(_f(lvl.get("orders"))),
+        })
+    return out
+
+
+def _f(v) -> float:
+    try:
+        return float(v or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _quote_fields(row: dict) -> dict:
+    """Every field an Angel FULL row carries, flattened for storage.
+
+    Kept deliberately complete: a field we do not store is a backtest we
+    cannot run later, and we have already paid that price once — the archived
+    snapshots hold only `ltp`, which is why spread had to be estimated across
+    a 30x band instead of measured.
+    """
+    depth = row.get("depth") or {}
+    buy, sell = _depth_levels(depth, "buy"), _depth_levels(depth, "sell")
+    bid, ask = buy[0]["price"], sell[0]["price"]
+    mid = (bid + ask) / 2 if bid > 0 and ask > 0 else 0.0
+    return {
+        "ltp": _f(row.get("ltp")),
+        "open": _f(row.get("open")),
+        "high": _f(row.get("high")),
+        "low": _f(row.get("low")),
+        "close": _f(row.get("close")),
+        "avg_price": _f(row.get("avgPrice")),
+        "volume": int(_f(row.get("tradeVolume"))),
+        "oi": int(_f(row.get("opnInterest"))),
+        "last_trade_qty": int(_f(row.get("lastTradeQty"))),
+        "net_change": _f(row.get("netChange")),
+        "pct_change": _f(row.get("percentChange")),
+        "lower_circuit": _f(row.get("lowerCircuit")),
+        "upper_circuit": _f(row.get("upperCircuit")),
+        "tot_buy_qty": int(_f(row.get("totBuyQuan"))),
+        "tot_sell_qty": int(_f(row.get("totSellQuan"))),
+        # Exchange clocks. Our own timestamp says when we ASKED; these say when
+        # the exchange last spoke. The difference is how stale the quote is —
+        # measured directly instead of proxied by volume>0.
+        "exch_feed_time": row.get("exchFeedTime"),
+        "exch_trade_time": row.get("exchTradeTime"),
+        # Derived here so every consumer computes them identically.
+        "bid": bid,
+        "ask": ask,
+        "mid": mid,
+        "spread": (ask - bid) if bid > 0 and ask > 0 else 0.0,
+        "spread_pct": ((ask - bid) / mid * 100) if mid > 0 else 0.0,
+        "depth_buy": buy,
+        "depth_sell": sell,
+        # Displayed liquidity at the touch — decides whether our size can fill.
+        "bid_qty": buy[0]["qty"],
+        "ask_qty": sell[0]["qty"],
+        # Book imbalance in [-1, 1]; +1 = all bids, -1 = all offers.
+        "book_imbalance": (
+            (buy[0]["qty"] - sell[0]["qty"]) / (buy[0]["qty"] + sell[0]["qty"])
+            if (buy[0]["qty"] + sell[0]["qty"]) > 0 else 0.0
+        ),
+    }
+
+
 _SPOT_TOKENS = {
     "NIFTY":      {"token": "99926000", "tradingsymbol": "Nifty 50",          "exchange": "NSE"},
     "BANKNIFTY":  {"token": "99926009", "tradingsymbol": "Nifty Bank",        "exchange": "NSE"},
@@ -933,6 +1008,96 @@ class AngelFetcher:
         except Exception as e:
             logger.error("gtt_list_rules failed: %s", e)
             return []
+
+    # Angel caps FULL mode at 50 tokens per request (LTP/OHLC allow 1000).
+    # A 34-strike chain is 34 CE + 34 PE = 68 tokens, so FULL must be batched.
+    FULL_MODE_MAX_TOKENS = 50
+
+    def get_option_quotes_bulk(self, symbol: str, strikes: list[int],
+                               option_type: str, expiry: date) -> dict[int, dict]:
+        """FULL-mode quotes for many strikes. Returns {strike: {...fields}}.
+
+        WHY THIS REPLACES get_option_ltps_bulk FOR COLLECTION
+            The collector used LTP mode, which returns exactly one number per
+            contract. That is why every archived snapshot has ltp and nothing
+            else — no book, no volume, no OI. Fixing best_bid_ask() to read
+            `depth.buy[]` could not help, because LTP mode never sends a depth
+            object at all.
+
+            Consequences we actually hit: spread had to be ESTIMATED, leaving
+            a 30x band from 0.03% to 0.9% (RESEARCH_LEARNINGS 2.3), and the
+            variance-premium result is still undecided because break-even sits
+            inside that band. Staleness had to be proxied by volume>0. Neither
+            gap was a modelling problem; both were a collection problem.
+
+        WHAT FULL MODE ADDS, and what each unlocks
+            depth.buy/sell (5 levels)  real spread, book imbalance, and fills
+                                       sized against displayed liquidity
+            tradeVolume, opnInterest   liquidity filters, OI change signals
+            open/high/low/close        true bars instead of LTP samples, so
+                                       wick-touch rules stop under-firing
+                                       (RESEARCH_LEARNINGS 4)
+            avgPrice                   session VWAP per contract
+            exchFeedTime               exchange clock — detects stale quotes
+                                       directly instead of proxying
+            totBuyQuan/totSellQuan     aggregate book pressure
+            upper/lowerCircuit         when a contract cannot be traded
+        """
+        if not self._ensure_logged_in():
+            return {}
+        try:
+            resolved = self._resolve_strikes(symbol, strikes, option_type, expiry)
+            if not resolved:
+                return {}
+            by_token = {str(m["token"]): (k, m) for k, m in resolved.items()}
+            tokens = list(by_token)
+
+            rows: list[dict] = []
+            for i in range(0, len(tokens), self.FULL_MODE_MAX_TOKENS):
+                batch = tokens[i:i + self.FULL_MODE_MAX_TOKENS]
+                resp = self._api.getMarketData("FULL", {"NFO": batch})
+                if self._is_auth_failure(resp):
+                    if self._ensure_logged_in():
+                        resp = self._api.getMarketData("FULL", {"NFO": batch})
+                if not resp or not resp.get("status"):
+                    logger.warning("get_option_quotes_bulk: FULL failed: %s", resp)
+                    continue
+                rows.extend(resp.get("data", {}).get("fetched", []) or [])
+
+            out: dict[int, dict] = {}
+            for row in rows:
+                got = by_token.get(str(row.get("symbolToken")))
+                if not got:
+                    continue
+                strike, m = got
+                out[strike] = {**_quote_fields(row), "tradingsymbol": m["symbol"],
+                               "token": str(m["token"]), "strike": strike,
+                               "option_type": option_type}
+            return out
+        except Exception as e:
+            logger.warning("get_option_quotes_bulk %s %s exp=%s: %s",
+                           symbol, option_type, expiry, e)
+            return {}
+
+    def _resolve_strikes(self, symbol: str, strikes: list[int],
+                         option_type: str, expiry: date) -> dict[int, dict]:
+        """{strike: instrument-master row}. Shared by the LTP and FULL paths."""
+        instruments = self._nfo_instruments()
+        def _master_strike(i) -> int:
+            return int(float(i.get("strike", 0))) // 100
+        resolved: dict[int, dict] = {}
+        for strike in strikes:
+            m = next((
+                i for i in instruments
+                if i.get("name") == symbol
+                and _master_strike(i) == strike
+                and i.get("instrumenttype") == "OPTIDX"
+                and i.get("symbol", "").endswith(option_type)
+                and _parse_expiry(i.get("expiry", "")) == expiry
+            ), None)
+            if m:
+                resolved[strike] = m
+        return resolved
 
     def get_option_ltps_bulk(self, symbol: str, strikes: list[int],
                              option_type: str, expiry: date) -> dict[int, tuple[str, float]]:

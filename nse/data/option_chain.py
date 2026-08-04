@@ -132,40 +132,52 @@ class OptionChainCache:
         """Return {strike: (tradingsymbol, ltp)} for a set of strikes."""
         return self.fetcher.get_option_ltps_bulk(self.symbol, strikes, option_type, expiry)
 
-    def get_snapshot(self, expiry: date, atm: int, strikes_around: int = 8):
-        """Fetch a full snapshot for backtest/signal use. Returns DataFrame."""
+    def get_snapshot(self, expiry: date, atm: int, strikes_around: int = 8,
+                     full: bool = True):
+        """Fetch a snapshot for backtest/signal use. Returns DataFrame.
+
+        `full=True` uses Angel FULL mode and stores the 5-level book, volume,
+        OI, OHLC, VWAP and the exchange feed clock alongside the LTP. That is
+        roughly 25 fields per contract instead of one.
+
+        The cost is two API calls per side instead of one (FULL caps at 50
+        tokens), so a 17-strike chain costs 4 calls rather than 2. At a 1-min
+        cadence over a 6.25h session that is ~1,500 calls — well inside the
+        allowance the 5-min collector already used.
+
+        `full=False` keeps the old LTP-only path for latency-sensitive signal
+        polling, where the book is not needed.
+        """
         step = self._step
         strikes = [atm + k * step for k in range(-strikes_around, strikes_around + 1)]
-        ce = self.get_option_ltps_bulk(strikes, "CE", expiry)
-        pe = self.get_option_ltps_bulk(strikes, "PE", expiry)
         spot = self.get_underlying_ltp()
         if spot is None:
             logger.warning("OptionChainCache.get_snapshot: spot unavailable for %s", self.symbol)
             return pd.DataFrame()
-        rows = []
         now = datetime.now(timezone.utc)
-        for strike, (ts, ltp) in ce.items():
-            rows.append({
-                "timestamp": now,
-                "symbol": self.symbol,
-                "expiry": expiry,
-                "strike": strike,
-                "option_type": "CE",
-                "ltp": ltp,
-                "spot": spot,
-                "tradingsymbol": ts,
-            })
-        for strike, (ts, ltp) in pe.items():
-            rows.append({
-                "timestamp": now,
-                "symbol": self.symbol,
-                "expiry": expiry,
-                "strike": strike,
-                "option_type": "PE",
-                "ltp": ltp,
-                "spot": spot,
-                "tradingsymbol": ts,
-            })
+
+        if not full:
+            rows = []
+            for opt in ("CE", "PE"):
+                for strike, (ts, ltp) in self.get_option_ltps_bulk(
+                        strikes, opt, expiry).items():
+                    rows.append({"timestamp": now, "symbol": self.symbol,
+                                 "expiry": expiry, "strike": strike,
+                                 "option_type": opt, "ltp": ltp, "spot": spot,
+                                 "tradingsymbol": ts})
+            return pd.DataFrame(rows)
+
+        rows = []
+        for opt in ("CE", "PE"):
+            quotes = self.fetcher.get_option_quotes_bulk(
+                self.symbol, strikes, opt, expiry)
+            for strike, q in quotes.items():
+                rows.append({"timestamp": now, "symbol": self.symbol,
+                             "expiry": expiry, "spot": spot, **q})
+        if not rows:
+            logger.warning("get_snapshot: FULL returned nothing for %s, "
+                           "falling back to LTP", self.symbol)
+            return self.get_snapshot(expiry, atm, strikes_around, full=False)
         return pd.DataFrame(rows)
 
 
