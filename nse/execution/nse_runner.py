@@ -42,9 +42,18 @@ from nse.risk import (
     check_kill_switch,
     is_killed,
 )
-from nse.strategies.synthetic_forward import SyntheticForwardStrategy
-
 logger = logging.getLogger(__name__)
+
+# Signal generation retired 2026-08-04. The synthetic-forward strategy that
+# lived here fired 0 times in 1,869 observations: its 0.60% entry gate sat
+# above the 0.404% maximum deviation ever recorded, and put-call parity bounds
+# that deviation to single-digit basis points. See RESEARCH_LEARNINGS 1.3.
+#
+# The runner is kept as execution scaffolding — order placement, GTT brackets,
+# the kill switch and the dashboard state endpoint all still work. init_nse_runner()
+# returns early on ENABLE_NSE_RUNNER=False, so the scan path below is
+# unreachable; it stays only so a replacement signal has somewhere to plug in.
+SyntheticForwardStrategy = None
 
 # In-memory runtime state
 _OPEN_POSITIONS: dict[str, Position] = {}
@@ -111,6 +120,9 @@ def _entry_tick():
             if snapshot.empty:
                 continue
 
+            if SyntheticForwardStrategy is None:
+                logger.warning("NSE scan reached with no strategy registered")
+                continue
             strategy = SyntheticForwardStrategy(symbol)
             t = datetime.now(timezone.utc)
             sigs = strategy.compute(snapshot, t)

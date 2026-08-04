@@ -51,11 +51,9 @@ from core.risk_management import (
     ENABLE_CRYPTO_RUNNER, EXIT_REGIME, EXCHANGE_BRACKET_ENABLED,
     FIXED_CAPITAL_MODE, FIXED_CAPITAL_INR, USD_INR_RATE,
 )
-from strategies.price_action_sr import (
-    ETHPriceActionSRSignal, MAX_HOLD_MINUTES, ASSET_DIALS, SL_PCT, RR_RATIO,
+from core.execution.signal_types import (
+    CryptoSignalDecision, MAX_HOLD_MINUTES, ASSET_DIALS, SL_PCT, RR_RATIO,
 )
-
-from strategies.crypto_base import CryptoSignalDecision
 
 logger = logging.getLogger(__name__)
 
@@ -87,15 +85,17 @@ _MAX_MISSED_SIGNALS = 50
 
 # ── strategies ────────────────────────────────────────────────────────────────
 def _get_strategies():
-    if not _STRATEGY_INSTANCES:
-        broker = get_crypto_broker()
-        # Running ETH-only: vol filter is ETH-specific and BTC filter degraded
-        # backtest performance.  Add BTCPriceActionSRSignal back to re-enable BTC.
-        classes = (ETHPriceActionSRSignal,)
-        logger.info("using ETH-only price-action S/R strategy")
-        for cls in classes:
-            inst = cls(broker=broker)
-            _STRATEGY_INSTANCES[inst.name] = inst
+    """Registered signal sources. EMPTY — all strategies retired 2026-08-04.
+
+    The price-action S/R strategy that used to be instantiated here measured
+    net-negative once the declared-but-never-applied PERP_FEE_BPS was actually
+    charged: BTC +23.89% -> -8.21%, ETH +16.27% -> -3.58%.
+
+    Everything downstream — sizing, bracket orders, reconciliation, the kill
+    switch, the dashboard — iterates over this dict and therefore no-ops
+    cleanly while it is empty. To bring a strategy back, instantiate it here
+    and have it emit a CryptoSignalDecision; nothing else needs to change.
+    """
     return _STRATEGY_INSTANCES
 
 
