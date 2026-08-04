@@ -97,7 +97,13 @@ def run_day(path: Path, expiry: date, strat: SyntheticForwardStrategy,
     trades: list[dict] = []
     pos = None
 
-    for slot, snap in d.groupby("slot", sort=True):
+    for slot, rows in d.groupby("slot", sort=True):
+        # A 5-minute slot holds five 1m rows per contract. The strategy expects
+        # a SNAPSHOT — one row per (strike, side) — otherwise calls.loc[K,"mark"]
+        # returns a Series and float() on it raises. Take the last print in the
+        # slot, which is the price actually available at decision time.
+        snap = (rows.sort_values("datetime")
+                    .drop_duplicates(subset=["side", "strike"], keep="last"))
         t = slot.to_pydatetime().replace(tzinfo=timezone.utc)
         tod = slot.time()
 
