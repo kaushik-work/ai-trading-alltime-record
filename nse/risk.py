@@ -1,7 +1,20 @@
 """NSE-specific risk management.
 
-All dials are hardcoded. No .env overrides. The NSE runner is always enabled
-when the API starts; there is no paper mode.
+All dials are hardcoded. No .env overrides.
+
+RETIRED 2026-08-04. The NSE runner is OFF and no NSE strategy is cleared to
+trade. Every candidate was measured and none survived:
+
+    synthetic forward     gate 0.60% vs a maximum observed deviation of
+                          0.404%; fired 0 times in 1,869 observations
+    breakout-retest       VALID negative at every days-to-expiry bucket
+    variance premium      real (Sharpe 1.19) but the edge exists only in a
+                          naked short straddle we cannot margin; every
+                          defined-risk version is negative before costs
+
+Findings are preserved in docs/RESEARCH_LEARNINGS.md and
+docs/OPTIONS_GREEKS_LEARNINGS.md. Do not re-enable without a strategy that
+clears TRAIN, VALID and TEST after costs.
 """
 
 from __future__ import annotations
@@ -14,8 +27,8 @@ from nse.config import TOTAL_CAPITAL_INR
 
 logger = logging.getLogger(__name__)
 
-# Activation — always enabled.
-ENABLE_NSE_RUNNER: bool = True
+# Activation — RETIRED. See the module docstring for what was measured.
+ENABLE_NSE_RUNNER: bool = False
 
 # Capital
 NSE_BASE_CAPITAL_INR: float = TOTAL_CAPITAL_INR

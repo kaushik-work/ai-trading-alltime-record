@@ -32,9 +32,16 @@ def _env_bool(key: str, default: bool) -> bool:
 
 
 # ── Activation ───────────────────────────────────────────────────────────────
-ENABLE_CRYPTO_RUNNER: bool = _env_bool("ENABLE_CRYPTO_RUNNER", True)
+# RETIRED 2026-08-04, default OFF. The price-action S/R strategy was measured
+# net-negative once the declared-but-unapplied PERP_FEE_BPS was actually
+# applied: BTC +23.89% -> -8.21%, ETH +16.27% -> -3.58%, PF below 1.0 for both.
+# The 1:7 target was reached once in 515 trades. Order placement, bracket
+# handling, reconciliation and the WS stream are all KEPT and working — only
+# signal generation is retired. Re-enable by setting ENABLE_CRYPTO_RUNNER=1
+# once a strategy clears TRAIN/VALID/TEST after costs.
+ENABLE_CRYPTO_RUNNER: bool = _env_bool("ENABLE_CRYPTO_RUNNER", False)
 # "live" hits Delta with real orders; "paper" journals but doesn't trade
-CRYPTO_TRADING_MODE: str = os.environ.get("CRYPTO_TRADING_MODE", "live")
+CRYPTO_TRADING_MODE: str = os.environ.get("CRYPTO_TRADING_MODE", "paper")
 
 
 # ── Trading cadence ──────────────────────────────────────────────────────────
