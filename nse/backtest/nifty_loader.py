@@ -102,14 +102,15 @@ def build_spot_cache(root: Path = DEFAULT_ROOT, force: bool = False) -> pd.DataF
     frames = []
     for i, f in enumerate(files, 1):
         try:
-            df = pd.read_csv(f, usecols=["datetime", "spot"])
+            df = pd.read_csv(f, usecols=["datetime", "spot", "volume"])
         except Exception:
             continue
         med = df["spot"].median()
         if np.isfinite(med) and med > 0:
             df = df[(df["spot"] - med).abs() / med <= MAX_SPOT_DEV]
         # One index value per minute; all contracts repeat it.
-        g = df.groupby("datetime", as_index=False)["spot"].first()
+        g = df.groupby("datetime", as_index=False).agg(
+            spot=("spot", "first"), volume=("volume", "sum"))
         frames.append(g)
         if i % 200 == 0:
             print(f"  ... {i}/{len(files)} files", flush=True)
