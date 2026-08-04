@@ -95,6 +95,12 @@ Used `LOT = 75` while `nse/config.py` says 65. Every rupee figure was ~15% off.
 Worse, **NIFTY lot size changed during 2021–2026**, so a single constant is
 wrong for a five-year backtest — it needs a date-indexed table like STT has.
 
+**Same class, found later:** the NIFTY **expiry weekday** also changed
+mid-dataset — Thursday until **2025-08-28**, Tuesday from **2025-09-02**. Any
+`weekday == 3` is wrong for the last nine months of data, and expiry date sets
+T, which sets every Greek. Derived empirically in `nse/quant/expiry_calendar.py`.
+Assume nothing about a calendar constant across a five-year window; measure it.
+
 ### 1.9 Selecting features while looking at the hold-out
 Chose four journal features because their sign was consistent across TRAIN,
 VALIDATE **and TEST**. Thresholds came from TRAIN only, which is correct, but
@@ -172,10 +178,21 @@ full-priced; the target is slow and decayed. Theta at 1 DTE is **−32/day**.
     VALID 24     n= 75  IV 17.29  RV  9.92  premium +7.38  t=12.27  IV>RV  96%
     TEST  25-26  n= 39  IV 18.55  RV 10.10  premium +8.45  t= 9.62  IV>RV 100%
 
-Present in every year 2021–2025. **Caveat:** RV is intraday-only (overnight gaps
-excluded from realised but priced into implied), so the premium is overstated
-for anything held overnight. **Tails are real:** 2023-06-26 IV 10.83 vs RV
-67.78. Defined-risk spreads only, never a naked short.
+Present in every year 2021–2025.
+
+**CORRECTED 2026-08-04 — the caveat below was worth 41% of the edge.** RV above
+is intraday-only while implied prices the whole calendar. Measured properly
+(`nse/quant/test_vix_coverage.py`), the overnight session is **42.3% of total
+variance**, so intraday-only RV understates true volatility by **1.335×**. The
+TRAIN premium is therefore about **+5.1 vol points, not +8.64**. The premium is
+still real — realised/implied is below 1.00 in every year — but it is a third
+smaller than published here, and **in 2026 the ratio is 0.99, i.e. gone**.
+
+**Tails live overnight, not intraday.** Normalised by its own IV, the intraday
+move has kurtosis **0.98** and never reached 3σ in 1,249 sessions. Close-to-close
+kurtosis is **13.75** with a −3.73σ day. An intraday-only backtest is
+structurally blind to the risk that kills short-vol books. Defined-risk spreads
+only, never a naked short. Full working in `docs/OPTIONS_GREEKS_LEARNINGS.md`.
 
 ### 3.4 Strategy verdicts
 | Strategy | Verdict |
@@ -230,8 +247,13 @@ for anything held overnight. **Tails are real:** 2023-06-26 IV 10.83 vs RV
 1. Redo journal feature selection on TRAIN+VALID only, spend TEST once (§1.9)
 2. Date-indexed NIFTY lot-size table (§1.8)
 3. ATR-normalised stops — a fixed 25-point stop is 2× tighter in 2026 than 2021
-4. Re-measure the variance premium including overnight gaps (§3.3)
-5. Design the defined-risk structure for the variance premium
+4. ~~Re-measure the variance premium including overnight gaps~~ **DONE** — see
+   §3.3 and `docs/OPTIONS_GREEKS_LEARNINGS.md` §6. Premium ~+5.1, not +8.64.
+5. Design the defined-risk structure for the variance premium — now known to
+   need overnight-spanning defined risk (close-to-close kurtosis 13.75)
 6. Test the breakout-retest on BTC/ETH/XAUT
 7. Surface the journal on the frontend
 8. `ENABLE_NSE_RUNNER=false` until the synthetic forward is replaced
+9. Re-run any backtest that used an assumed Thursday expiry (§1.8)
+10. Live Greeks must reprice at ≤2 DTE — stored Greek vectors are up to 100%
+    wrong there (`OPTIONS_GREEKS_LEARNINGS.md` §3)
