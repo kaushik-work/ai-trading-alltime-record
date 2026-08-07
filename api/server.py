@@ -164,6 +164,90 @@ async def crypto_websocket_endpoint(ws: WebSocket, token: str = Query(default=""
         logger.error("crypto WebSocket error (disconnecting): %s", e)
 
 
+@app.websocket("/ws/nse/chain")
+async def nse_chain_websocket(ws: WebSocket, token: str = Query(default=""),
+                              symbol: str = Query(default="NIFTY"),
+                              strikes: int = Query(default=10)):
+    """Tick-driven option chain. Replaces 3-second polling.
+
+    Cadence is bounded by physics, not by choice. Angel's SNAP_QUOTE delivers a
+    few updates per second per contract and browser round-trip alone is
+    10-50ms, so "every microsecond" is not on offer from any retail feed. What
+    IS achievable, and what this does, is remove the polling delay entirely:
+    the socket cache is read at CHAIN_PUSH_HZ and anything that changed goes
+    out immediately. The screen is never more than ~100ms behind the exchange.
+
+    Payloads are diffed. The first frame is a full snapshot; after that only
+    strikes whose numbers actually moved are sent, which keeps a 40-contract
+    chain at a few hundred bytes per frame instead of ~15KB.
+    """
+    await ws.accept()
+    try:
+        decode_token(token)
+    except Exception:
+        await ws.close(code=1008, reason="Invalid or expired token")
+        return
+
+    from api.routes_nse import build_chain_payload
+
+    CHAIN_PUSH_HZ = 10.0
+    interval = 1.0 / CHAIN_PUSH_HZ
+    last_rows: dict = {}
+    last_header: dict = {}
+    first = True
+
+    # Subscribing is best-effort: outside market hours it fails and the builder
+    # simply falls back to REST, which is the correct degraded behaviour rather
+    # than an error the user has to interpret.
+    logger.info("nse chain WS: accepted symbol=%s strikes=%d", symbol, strikes)
+    try:
+        from nse.ws.angel_stream import ensure_subscribed
+        await asyncio.wait_for(
+            asyncio.to_thread(ensure_subscribed, symbol, strikes), timeout=30)
+        logger.info("nse chain WS: subscribe done")
+    except Exception as e:
+        # Never let a slow or stuck subscribe block the push loop: the builder
+        # falls back to REST on its own, and a chain arriving over the fallback
+        # is far better than a socket that silently never sends anything.
+        logger.info("nse chain WS: stream subscribe skipped (%s: %s)",
+                    type(e).__name__, e)
+
+    try:
+        while True:
+            try:
+                payload = await asyncio.wait_for(
+                    asyncio.to_thread(build_chain_payload, symbol, strikes),
+                    timeout=15)
+            except Exception as e:
+                logger.warning("nse chain WS: build failed (%s: %s)",
+                               type(e).__name__, e)
+                await ws.send_text(_safe_json({"type": "error", "message": str(e)}))
+                await asyncio.sleep(2.0)
+                continue
+            if first:
+                logger.info("nse chain WS: first payload built, %d rows, source=%s",
+                            len(payload.get("rows", [])), payload.get("source"))
+
+            rows = {r["strike"]: r for r in payload["rows"]}
+            header = {k: v for k, v in payload.items() if k != "rows"}
+
+            if first:
+                await ws.send_text(_safe_json({"type": "snapshot", **payload}))
+                first = False
+            else:
+                changed = [r for k, r in rows.items() if last_rows.get(k) != r]
+                if changed or header != last_header:
+                    await ws.send_text(_safe_json({
+                        "type": "patch", "rows": changed, **header,
+                    }))
+            last_rows, last_header = rows, header
+            await asyncio.sleep(interval)
+    except WebSocketDisconnect:
+        return
+    except Exception as e:
+        logger.error("nse chain WebSocket error (disconnecting): %s", e)
+
+
 # ── Run ──────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
     import uvicorn

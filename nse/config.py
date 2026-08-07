@@ -192,3 +192,64 @@ TRAIL_GIVEBACK_PCT = 0.0025
 # Cost assumptions for backtest (live broker records actual fills).
 SLIPPAGE_BPS = 5.0
 FEE_BPS_PER_LEG = 3.0        # per fill, both entry and exit
+
+
+# ── Lens lifecycle and the aggregator vote ───────────────────────────────────
+# How a specialist lens earns, keeps, or loses its vote. Hardcoded here rather
+# than in .env so every change to selection pressure is tracked in git.
+#
+# The metric is EXPECTANCY CONTRIBUTION in rupees per trade, never win rate.
+# Win rate is not profit: booking half at 1R pins WR at 50% for every R:R from
+# 1:2 up while capping average win at ~35 points against ~87 for a single-stage
+# exit. Weighting a lens by win rate actively selects the worse lens.
+# See RESEARCH_LEARNINGS section 3.1.
+
+# A lens's weight does not move off its bootstrap value until it has this many
+# CLOSED trades on record. With ~23 hypotheses roughly one clears p<0.05 by
+# chance alone, so a handful of trades is indistinguishable from luck.
+# See RESEARCH_LEARNINGS section 2.1.
+LENS_MIN_TRADES_FOR_WEIGHT: int = 30
+
+# Attribution is measured over a rolling window of closed trades, NOT per
+# session. Refitting daily on one session's data is fitting noise, and this
+# repo has been burned by that three times.
+LENS_ATTRIBUTION_WINDOW: int = 200
+
+# Weights are recomputed once daily, OUT of market hours, and stay frozen for
+# the whole session. No weight ever moves mid-trade on live P&L.
+LENS_REVIEW_HOUR_IST: int = 18
+
+# Promotion and demotion are deliberately ASYMMETRIC — losing money benches a
+# lens faster than making it promotes one. Units are rupees of expectancy
+# contribution per trade.
+LENS_PROMOTE_CONTRIBUTION: float = 150.0
+LENS_PROMOTE_MIN_TRADES: int = 30
+LENS_SUSPEND_CONTRIBUTION: float = -100.0    # smaller magnitude: fires sooner
+LENS_SUSPEND_MIN_TRADES: int = 15
+
+# A suspended lens that fails this many consecutive reviews is retired.
+LENS_REVIEWS_BEFORE_RETIRE: int = 3
+
+# Consecutive exceptions before a lens is benched as broken. A lens that cannot
+# read the snapshot is not neutral, it is absent.
+LENS_MAX_STRIKES: int = 10
+
+# Weight bounds. A lens on PROBATION is capped so an unproven reading cannot
+# dominate the vote before it has earned the right to.
+LENS_WEIGHT_MIN: float = 0.0
+LENS_WEIGHT_MAX: float = 2.0
+LENS_PROBATION_WEIGHT_CAP: float = 0.5
+LENS_DEFAULT_WEIGHT: float = 1.0
+
+# Net signed conviction the aggregator must clear before an intent is emitted.
+# Below this the decision is still journaled — every decision is, including the
+# ones voted down. That journal is what the attribution pass trains on.
+VOTE_THRESHOLD: float = 0.35
+
+# At least this many non-abstaining lenses must have read the snapshot, or the
+# vote is not trustworthy regardless of how convinced the survivors are.
+MIN_VOTING_LENSES: int = 2
+
+# Per-trade budget. Sits inside TOTAL_CAPITAL_INR, so the pool allows
+# TOTAL_CAPITAL_INR / PER_TRADE_CAPITAL_INR concurrent positions.
+PER_TRADE_CAPITAL_INR: float = 50_000.0

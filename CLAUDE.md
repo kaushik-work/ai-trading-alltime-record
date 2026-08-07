@@ -1,18 +1,31 @@
 # Claude Agent Notes
 
-> Project state: **crypto-only live trading** on Delta India (BTCUSD + ETHUSD
-> perps via Price-action S/R retest). NSE/NIFTY trading code retired. NSE
-> option-chain collectors still run for research data, gated behind
+> Project state: **no live strategy on either venue.** Every strategy was
+> deleted in `62f89c9` (2026-08-04) after measurement killed it — see
+> `docs/RESEARCH_LEARNINGS.md`. `_get_strategies()` returns `{}` and
+> `ENABLE_NSE_RUNNER=false`. The execution layer is intact and working:
+> order placement, brackets, reconciliation, kill switch, dashboard.
+> NSE option-chain collectors run for research data behind
 > `docker compose --profile nse up -d`. See `AGENTS.md` for architecture.
+>
+> In progress: NIFTY options multi-lens system (see the architecture brief).
 
 ## Project-specific rules
 - **Crypto Mongo collections use `crypto_` prefix.** Don't write to legacy
   NSE collections from crypto code.
 - **Risk dials live in `core/risk_management.py`**, not `.env`. PR review,
   not silent edits.
-- **No LLM / RL in signal generation.** Strategy is deterministic by design.
-- **Strategy file:** `strategies/price_action_sr.py`. Execution: `core/execution/crypto_runner.py`.
-  WS stream: `core/ws/delta_stream.py`.
+- **No LLM / RL in signal generation.** The deterministic core decides every
+  trade. The NIFTY vision lens is the one deliberate exception and is pinned
+  at weight 0 (commentary only) until live attribution earns it a vote.
+- **Signal seam:** a strategy emits `CryptoSignalDecision`
+  (`core/execution/signal_types.py`) and registers in
+  `crypto_runner._get_strategies()`. Nothing else in the execution path changes.
+- **Execution:** `core/execution/crypto_runner.py` (Delta),
+  `nse/execution/nse_runner.py` (Angel). Brokers: `core/brokers/delta_crypto.py`,
+  `nse/broker/angel_broker.py`. WS stream: `core/ws/delta_stream.py`.
+- **Angel order placement requires a whitelisted static IP**; market data does
+  not. Order placement belongs on the VPS sentinel only — never localhost.
 
 ---
 

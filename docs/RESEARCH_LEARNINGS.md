@@ -202,6 +202,37 @@ only, never a naked short. Full working in `docs/OPTIONS_GREEKS_LEARNINGS.md`.
 | Breakout-retest (index) | +165/+259/+320 pts — positive in all three |
 | Breakout-retest (options) | VALID −₹80,769 — period-specific, not viable |
 | Variance risk premium | Survives hold-out at p<0.0001 |
+| Greeks lens (25d risk reversal) | No directional edge; negative in TRAIN and VALID |
+
+### 3.5 The 25-delta risk reversal does not predict NIFTY direction
+
+First lens measured through `nse/backtest/lens_harness.py`. 390 sessions,
+30-minute grid, 60-minute horizon, signed forward return against a mix-matched
+baseline.
+
+    split      n     long%   edge       t       p
+    TRAIN    1600    56.4%   −0.54bps   −0.76   0.4485
+    VALIDATE  784    86.6%   −1.08bps   −1.48   0.1405
+
+Negative in both, significant in neither, break-even spread NONE. Left in
+SHADOW at weight 0.
+
+**Two things worth keeping from it.**
+
+*Index skew is structurally negative, so raw sign is not a signal.* Measured on
+TRAIN: rr_norm median −0.2098, **negative in 98.4% of 1,092 observations**. A
+lens reading raw sign votes SHORT essentially always — a permanent bearish tilt
+wearing a signal's clothes. Centring on the measured median made the vote 50/50
+by construction, which is the only way anything surviving is timing rather than
+tilt. This is §1.3's lesson again: measure the distribution before setting the
+threshold.
+
+*The calibration does not transport across years.* Long fraction was 56.4% on
+TRAIN by construction but **86.6% on VALIDATE** — the neutral skew level drifted
+between 2021-23 and 2024, and the lens read the flatter 2024 surface as
+persistently bullish. Any constant fitted to a volatility surface needs either
+a trailing reference or an explicit recalibration cadence; a fixed number is the
+wrong shape for the quantity.
 
 ---
 

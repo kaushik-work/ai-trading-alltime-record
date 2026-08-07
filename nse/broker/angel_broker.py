@@ -22,6 +22,8 @@ from nse.config import (
     GTT_MIN_PREMIUM,
     LOT_SIZES,
     PRODUCT_TYPE,
+    STOP_LOSS_PCT,
+    TARGET_PCT,
     gtt_levels_for_leg,
     gtt_limit_through,
 )
@@ -315,8 +317,8 @@ class AngelBroker:
                 legs=filled_legs,
                 spot_at_entry=signal.spot,
                 pred_pct=signal.pred * 100,
-                stop_loss_pct=0.015,
-                target_pct=0.010,
+                stop_loss_pct=STOP_LOSS_PCT,
+                target_pct=TARGET_PCT,
                 max_hold_until=signal.expiry,
             )
         except Exception as e:

@@ -21,6 +21,7 @@ from core.utils import now_ist
 from data.angel_fetcher import AngelFetcher
 from nse.broker.angel_broker import AngelBroker
 from nse.config import (
+    LOT_SIZES,
     MARKET_CLOSE,
     MARKET_OPEN,
     market_close_for,

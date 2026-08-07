@@ -46,6 +46,258 @@ def nse_unkill(user: dict = Depends(_get_current_user)):
     return {"killed": False, "message": "NSE entries resumed"}
 
 
+@router.get("/chain")
+def nse_chain(symbol: str = Query("NIFTY"),
+              strikes: int = Query(10, ge=1, le=25),
+              user: dict = Depends(_get_current_user)):
+    """REST view of the chain.
+
+    Shares one builder with the WebSocket push at /ws/nse/chain so the two can
+    never drift into showing different numbers for the same instant.
+    """
+    try:
+        return build_chain_payload(symbol, strikes)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except RuntimeError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+
+
+def build_chain_payload(symbol: str = "NIFTY", strikes: int = 10) -> dict:
+    """Live option chain, shaped for the classic calls-strike-puts table.
+
+    Prefers the WebSocket cache — that is the whole point of the socket — and
+    falls back to a REST snapshot when the stream has no fresh coverage, which
+    is the normal state outside market hours.
+
+    Greeks are COMPUTED here from the current mark, never read from storage.
+    Stored Greek vectors are up to 100% wrong inside 2 DTE, so the response
+    also carries `greeks_trustworthy` and the UI greys them out when false.
+    See docs/OPTIONS_GREEKS_LEARNINGS.md section 3.
+
+    Raises ValueError for a bad request and RuntimeError when the market is
+    unreadable, so the REST route can map them to status codes and the socket
+    can report them inline without a FastAPI dependency.
+    """
+    import pandas as pd
+    from data.angel_fetcher import AngelFetcher
+    from nse.snapshot import MIN_TRUSTWORTHY_DTE, expiry_at_close
+
+    if symbol not in STEP_SIZES:
+        raise ValueError(f"Unsupported symbol {symbol}")
+
+    fetcher = AngelFetcher.get()
+    cache = OptionChainCache(symbol, fetcher)
+
+    # Hot path. At a 10Hz push cadence there is no room for a REST round-trip:
+    # one ltpData call costs ~500ms, so spot + expiry + VIX by REST capped the
+    # socket at 0.29 frames/sec — slower than the polling it replaced. Spot now
+    # comes off the socket, expiry is cached for the day and VIX for a few
+    # seconds. All three fall back to REST when the stream is cold.
+    spot = _stream_spot(symbol)
+    if spot is None:
+        spot = cache.get_underlying_ltp()
+    if spot is None or spot <= 0:
+        raise RuntimeError(f"{symbol} spot unavailable")
+
+    expiry_d = _cached_expiry(symbol, cache)
+    if expiry_d is None:
+        raise RuntimeError(f"{symbol} expiry unavailable")
+
+    step = STEP_SIZES[symbol]
+    atm = int(round(spot / step)) * step
+    expiry_dt = expiry_at_close(expiry_d, symbol)
+
+    df, source = pd.DataFrame(), "rest"
+    try:
+        from nse.ws.angel_stream import get_stream
+        df = get_stream().chain_frame(symbol)
+        if not df.empty:
+            source = "ws"
+    except Exception as e:
+        logger.debug("nse_chain: stream unavailable (%s), using REST", e)
+    if df.empty:
+        df = cache.get_snapshot(expiry_d, atm, strikes_around=strikes, full=True)
+    if df is None or df.empty:
+        raise RuntimeError(f"{symbol} chain unavailable")
+
+    df = df.copy()
+    if "option_type" not in df.columns and "side" in df.columns:
+        df["option_type"] = df["side"]
+    df["spot"] = spot
+    df["expiry"] = pd.to_datetime(expiry_dt)
+    df["side"] = df["option_type"].astype(str).str.upper()
+    if "mark" not in df.columns:
+        df["mark"] = df.get("mid", df.get("ltp", 0))
+        df.loc[df["mark"] <= 0, "mark"] = df.get("ltp", 0)
+
+    dte = max(0.0, (expiry_dt - pd.Timestamp.now(tz="UTC").to_pydatetime()).total_seconds() / 86400.0)
+
+    # Value the Greeks against a clock quantised to the MINUTE, not to `now`.
+    # add_greeks_to_dataframe derives T from this column, so an unquantised
+    # timestamp makes T shrink between every push and every Greek drift in its
+    # low decimals — measured: theta/delta/vega/iv/gamma accounted for ~5,000
+    # field changes per 15s against ~350 for ltp, so the diff saw all 13 strikes
+    # change on every frame purely from clock drift.
+    #
+    # Quantising is physically honest rather than a fudge: theta at 1 DTE is
+    # about -32/day, i.e. -0.00007 over 200ms. Minute resolution is far finer
+    # than the number is meaningful to.
+    df["timestamp"] = pd.Timestamp.now(tz="Asia/Kolkata").floor("min")
+    try:
+        from nse.data.greeks_vectorized import add_greeks_to_dataframe
+        add_greeks_to_dataframe(df)
+    except Exception as e:
+        logger.warning("nse_chain: greeks failed for %s: %s", symbol, e)
+
+    def leg(row) -> dict:
+        g = lambda k, d=0.0: (float(row[k]) if k in row and pd.notna(row[k]) else d)
+        # Rounded deliberately, and not only for readability. Greeks are solved
+        # against a time-to-expiry computed from NOW, so T shrinks on every
+        # frame and every Greek changes in its tenth decimal — which made the
+        # WebSocket diff classify all 13 strikes as "changed" on every push and
+        # sent a full 12KB ladder at 5Hz. Rounding to more precision than anyone
+        # can read restores a meaningful diff.
+        return {
+            "ltp": round(g("ltp"), 2), "bid": round(g("bid"), 2),
+            "ask": round(g("ask"), 2), "mid": round(g("mid"), 2),
+            "spread": round(g("spread"), 2),
+            "spread_pct": round(g("spread_pct"), 3),
+            "volume": int(g("volume")), "oi": int(g("oi")),
+            "oi_change_pct": round(g("oi_change_pct"), 2),
+            # The solver returns IV in DECIMAL (0.1209) while Angel reports VIX
+            # in PERCENT (12.39). Both render in the same table, so IV is
+            # converted here — at the presentation boundary — and every number
+            # the UI receives is in percent. The lenses call
+            # add_greeks_to_dataframe directly and keep the decimal form.
+            "iv": round(g("iv") * 100.0, 2),
+            "delta": round(g("delta"), 4), "gamma": round(g("gamma"), 6),
+            "theta": round(g("theta"), 3), "vega": round(g("vega"), 3),
+            "book_imbalance": round(g("book_imbalance"), 3),
+            "tradingsymbol": row.get("tradingsymbol"),
+        }
+
+    wanted = {atm + k * step for k in range(-strikes, strikes + 1)}
+    rows, ce_oi_tot, pe_oi_tot = [], 0, 0
+    for strike in sorted(s for s in df["strike"].dropna().unique() if int(s) in wanted):
+        strike = int(strike)
+        sel = df[df["strike"] == strike]
+        ce = sel[sel["side"] == "CE"]
+        pe = sel[sel["side"] == "PE"]
+        ce_leg = leg(ce.iloc[0]) if not ce.empty else None
+        pe_leg = leg(pe.iloc[0]) if not pe.empty else None
+        ce_oi_tot += ce_leg["oi"] if ce_leg else 0
+        pe_oi_tot += pe_leg["oi"] if pe_leg else 0
+        rows.append({
+            "strike": strike,
+            "is_atm": strike == atm,
+            # Moneyness drives the ITM shading: a call is ITM below spot, a put
+            # above it, so the two sides shade in opposite directions.
+            "ce_itm": strike < atm,
+            "pe_itm": strike > atm,
+            "ce": ce_leg,
+            "pe": pe_leg,
+        })
+
+    return {
+        "symbol": symbol,
+        "spot": round(float(spot), 2),
+        "atm": atm,
+        "step": step,
+        "lot_size": LOT_SIZES.get(symbol),
+        "expiry": expiry_d.isoformat(),
+        "dte": round(dte, 3),
+        "greeks_trustworthy": dte >= MIN_TRUSTWORTHY_DTE,
+        "vix": _safe_vix(fetcher),
+        "source": source,
+        "rows": rows,
+        "totals": {
+            "ce_oi": ce_oi_tot,
+            "pe_oi": pe_oi_tot,
+            "pcr": round(pe_oi_tot / ce_oi_tot, 3) if ce_oi_tot else None,
+            "max_pain": _max_pain(rows),
+        },
+    }
+
+
+def _stream_spot(symbol: str) -> Optional[float]:
+    try:
+        from nse.ws.angel_stream import get_stream
+        return get_stream().get_spot(symbol)
+    except Exception:
+        return None
+
+
+_expiry_cache: dict[tuple, object] = {}
+
+
+def _cached_expiry(symbol: str, cache):
+    """Nearest expiry, resolved once per symbol per day.
+
+    Keyed by date so it re-resolves after a rollover rather than serving an
+    expired contract into the next session.
+    """
+    import datetime as _dt
+    key = (symbol, _dt.date.today())
+    if key not in _expiry_cache:
+        _expiry_cache.clear()
+        _expiry_cache[key] = cache.nearest_expiry(min_days=0)
+    return _expiry_cache[key]
+
+
+_vix_cache: dict = {"value": None, "at": 0.0}
+_VIX_TTL_SEC = 5.0
+
+
+def _safe_vix(fetcher) -> Optional[float]:
+    """VIX with a short TTL. It is a 30-day index — it does not move in 100ms,
+    and re-fetching it per frame was the single biggest cost in the push loop."""
+    import time as _t
+    if _t.time() - _vix_cache["at"] < _VIX_TTL_SEC:
+        return _vix_cache["value"]
+    try:
+        v = fetcher.fetch_vix()
+    except Exception:
+        v = None
+    if v is not None:
+        _vix_cache["value"] = v
+    _vix_cache["at"] = _t.time()
+    return _vix_cache["value"]
+
+
+def _max_pain(rows: list[dict]) -> Optional[int]:
+    """Strike where option writers lose least — standard on Indian chains.
+
+    For each candidate expiry level, sum what writers pay out: calls below it
+    and puts above it, each weighted by open interest.
+    """
+    strikes = [r["strike"] for r in rows if r["ce"] or r["pe"]]
+    if len(strikes) < 3:
+        return None
+    best, best_loss = None, None
+    for at in strikes:
+        loss = 0.0
+        for r in rows:
+            k = r["strike"]
+            if r["ce"] and k < at:
+                loss += (at - k) * r["ce"]["oi"]
+            if r["pe"] and k > at:
+                loss += (k - at) * r["pe"]["oi"]
+        if best_loss is None or loss < best_loss:
+            best, best_loss = at, loss
+    return best
+
+
+@router.get("/stream_health")
+def nse_stream_health(user: dict = Depends(_get_current_user)):
+    """WebSocket feed diagnostics — is 'live' actually live right now?"""
+    try:
+        from nse.ws.angel_stream import get_stream
+        return get_stream().diagnostics()
+    except Exception as e:
+        return {"connected": False, "error": str(e)}
+
+
 @router.post("/test_buy_ce")
 def nse_test_buy_ce(user: dict = Depends(_get_current_user)):
     """Place a test LIMIT buy CE order at current NIFTY ATM strike with GTT SL/Target.

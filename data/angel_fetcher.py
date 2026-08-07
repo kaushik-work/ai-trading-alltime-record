@@ -185,6 +185,28 @@ class AngelFetcher:
             "feed_token":    v.get("ANGEL_FEED_TOKEN", ""),
         }
 
+    def ws_credentials(self) -> Optional[dict]:
+        """The four values SmartWebSocketV2 needs, or None if not logged in.
+
+        Reads back from .env rather than from memory because _save_tokens()
+        writes the freshest JWT/feed token there on every login — including the
+        automatic midnight re-login. A stream holding the in-memory copy from
+        yesterday would reconnect with an expired token and fail silently.
+        """
+        if not self._ensure_logged_in():
+            return None
+        creds = self._read_env()
+        jwt, feed = creds.get("jwt_token", ""), creds.get("feed_token", "")
+        if not jwt or not feed:
+            logger.error("ws_credentials: JWT/feed token missing after login")
+            return None
+        return {
+            "auth_token":  jwt,
+            "api_key":     creds.get("api_key", ""),
+            "client_code": creds.get("client_id", ""),
+            "feed_token":  feed,
+        }
+
     _LOGIN_RETRY_SECS = 120  # retry failed login after 2 minutes
 
     def _ensure_logged_in(self, force: bool = False) -> bool:
@@ -555,10 +577,21 @@ class AngelFetcher:
     # ── VIX ──────────────────────────────────────────────────────────────────
 
     def fetch_vix(self) -> Optional[float]:
-        """Fetch India VIX live price. Returns None if unavailable."""
+        """Fetch India VIX live price. Returns None if unavailable.
+
+        Token verified against the scrip master on 2026-08-07: India VIX is
+        99926017 (exch_seg NSE, instrumenttype AMXIDX), which sits in the same
+        99926xxx index family as NIFTY 99926000 and BANKNIFTY 99926009.
+
+        The previous constants 99919000/99919003 were not in the scrip master
+        at all — every call returned AB4046 and this method had been returning
+        None for its whole deployment. It failed quietly because both the retry
+        loop and the caller logged at DEBUG, so a VIX of None looked like a
+        closed market rather than a wrong constant.
+        """
         if not self._ensure_logged_in():
             return None
-        for token in ("99919000", "99919003"):
+        for token in ("99926017",):
             try:
                 resp = self._api.ltpData(exchange="NSE", tradingsymbol="India VIX",
                                          symboltoken=token)

@@ -122,7 +122,12 @@ def breakeven_move_pct(premium: float, qty: int, entry_side: str,
 if __name__ == "__main__":
     import sys
     sys.stdout.reconfigure(encoding="utf-8")
-    LOT = 75   # NIFTY lot size
+    # Imported, never restated. A hardcoded 75 here contradicted nse/config.py's
+    # 65 and put every rupee figure ~15% out — the same mistake recorded in
+    # RESEARCH_LEARNINGS section 1.8, which is also why a single constant cannot
+    # serve a five-year window: the NIFTY lot size changed inside it.
+    from nse.config import LOT_SIZES
+    LOT = LOT_SIZES["NIFTY"]
 
     print("=" * 92)
     print("NSE OPTION COST MODEL — break-even move required, by premium")

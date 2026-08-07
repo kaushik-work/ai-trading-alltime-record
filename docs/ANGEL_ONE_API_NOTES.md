@@ -66,7 +66,31 @@ Required fields:
 | NIFTY 50 | 99926000 | Nifty 50 | NSE |
 | BANKNIFTY | 99926009 | Nifty Bank | NSE |
 | FINNIFTY | 99926037 | Nifty Fin Service | NSE |
+| **INDIA VIX** | **99926017** | India VIX | NSE |
 | SENSEX | 1 | SENSEX | BSE |
+
+India VIX sits in the same `99926xxx` index family as the others
+(`instrumenttype AMXIDX`), verified against the scrip master and a live
+`ltpData` call on 2026-08-07. The constants previously used in
+`fetch_vix()` — `99919000` and `99919003` — are not in the scrip master at
+all; every call returned `AB4046` and the function had returned `None` for its
+entire deployment. It failed silently because the retry loop and the callers
+both logged at DEBUG, so "no VIX" was indistinguishable from a closed market.
+
+## WebSocket (SmartWebSocketV2)
+
+- Modes: `LTP=1`, `QUOTE=2`, `SNAP_QUOTE=3`, `DEPTH=4`. **Only SNAP_QUOTE
+  carries open interest** — QUOTE alone will starve any OI-based signal.
+- **1000 token subscriptions per session; 3 concurrent sockets per client code.**
+  Exceeding the token cap does not error — the socket just stops delivering
+  part of what you asked for.
+- Exchange types: `NSE_CM=1`, `NSE_FO=2`, `BSE_CM=3`, `BSE_FO=4`.
+- **Prices arrive as integers in paise — divide by 100.**
+- `best_5_buy_data` / `best_5_sell_data` level order is not guaranteed. Take the
+  best bid as the highest buy price and the best ask as the lowest sell price;
+  trusting index 0 will occasionally invert the spread.
+- smartapi-python 1.5.5 `_on_close` has the wrong arity and throws on every
+  disconnect. Harmless but noisy — see `nse/ws/angel_stream.py`.
 
 ## Market Data (`getMarketData`)
 

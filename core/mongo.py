@@ -125,6 +125,19 @@ def _ensure_indexes(db) -> None:
         db.nse_trades.create_index([("position_id", ASCENDING)])
         db.nse_signals.create_index([("ts", DESCENDING)])
         db.nse_signals.create_index([("symbol", ASCENDING), ("ts", DESCENDING)])
+        # NIFTY multi-lens system. One brain document per lens — the unique
+        # index is what makes `lens` the stable identity; renaming a lens
+        # orphans its measured history rather than silently merging it.
+        db.nse_lens_brains.create_index([("lens", ASCENDING)], unique=True)
+        db.nse_lens_reviews.create_index([("ts", DESCENDING)])
+        db.nse_lens_reviews.create_index([("lens", ASCENDING), ("ts", DESCENDING)])
+        # Every aggregator decision, including the ones voted down. Attribution
+        # trains on this, so rejected decisions are as load-bearing as filled
+        # ones and must never be pruned by outcome.
+        db.nse_decisions.create_index([("decision_id", ASCENDING)], unique=True)
+        db.nse_decisions.create_index([("ts", DESCENDING)])
+        db.nse_decisions.create_index([("symbol", ASCENDING), ("ts", DESCENDING)])
+        db.nse_decisions.create_index([("executed", ASCENDING), ("status", ASCENDING)])
     except Exception as e:
         logger.warning("Mongo index creation failed (non-fatal): %s", e)
 
