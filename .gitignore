@@ -28,3 +28,6 @@ delta_exchange/.venv/
 delta_exchange/results_*.csv
 
 db/nse_cache/vol_harvest_slice.csv
+
+# sentinel runtime
+sentinel/__pycache__/

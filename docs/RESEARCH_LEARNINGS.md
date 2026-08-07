@@ -261,6 +261,65 @@ premium at 1 lot with the measured delta 0.80.
 4. Three components were each scale-calibrated on TRAIN. That is centring, not
    return-fitting, but it is not free either.
 
+### 3.8 Traded as an option, Volume/OI lands exactly on the spread boundary
+
+The index edge (§3.6) run through `nse/backtest/options_harness.py` — real
+recorded premiums, date-aware costs, exit at the same 60-minute horizon the
+entry was measured at, no new degrees of freedom.
+
+**Gross is positive everywhere.** The direction call is real and it does convert
+into option P&L. What happens next is entirely about costs.
+
+    variant                       TRAIN gross   VALID gross   verdict @ tick floor
+    ATM, 1 lot                       +18,015       +41,018     both NEGATIVE
+    Rs150 band (ITM), 1 lot          +90,727       +82,725     TRAIN negative
+    Rs150 band (ITM), 5 lots        +453,635      +413,627     both POSITIVE
+
+Two things move it from dead to alive, and neither is a signal change:
+
+*Strike selection.* The ₹150 premium band picks ITM strikes at delta ~0.80 and
+captures **5x the gross** of ATM for the same signal. ATM has the tightest
+spread but the least delta per rupee of premium.
+
+*Position size.* At 1 lot, flat ₹20-per-order brokerage is **59% of total
+cost**. At 5 lots it is 27%. Gross scales with size; flat brokerage does not.
+The ₹50,000 per-trade budget allows exactly 5 lots at a ₹150 premium — so the
+1-lot runs were testing a size the capital rule never specified.
+
+**Where it actually lands:**
+
+    half-spread   TRAIN net    VALIDATE net
+    0.03%          +223,457       +298,376
+    0.10%          +118,005       +245,387
+    0.20%           -32,640       +169,690     <- TRAIN flips
+    VERDICT: profitable in BOTH splits up to a half-spread of 0.10%
+
+**And the measured spread sits on that exact number.** Live NIFTY weekly quotes
+captured from the WS feed on 2026-08-07 at ~11:27 IST, for the contracts this
+strategy actually buys (₹120-190 premium):
+
+    24500 CE  188.95   half-spread 0.1323%
+    24550 CE  158.15   half-spread 0.1421%
+    24600 CE  130.45   half-spread 0.0383%
+    24600 PE  124.00   half-spread 0.1411%
+    24650 PE  150.70   half-spread 0.0997%
+    24700 PE  179.90   half-spread 0.0695%
+    mean 0.1038%   vs a survival threshold of 0.1000%
+
+**This is not viable on current evidence, and it is not dead either.** It sits
+on the knife edge, and the deciding input is the one thing never measured
+properly here. One morning of twenty contracts is not a distribution: spreads
+widen at the open and close, widen with volatility, and were almost certainly
+wider across 2021-2024 than they are now.
+
+The next step is therefore a measurement, not a tuning pass. The collector has
+stored real `depth.buy[]`/`depth.sell[]` since 2026-08-04 (§4), so a genuine
+half-spread distribution by strike, by moneyness and by time of day is now
+buildable. That distribution decides this strategy, and no amount of further
+signal work substitutes for it.
+
+TEST remains unspent.
+
 ### 3.7 An index-bps edge is not an option-premium bps edge
 
 `breakeven_spread()` multiplied an index-move edge straight into the option's

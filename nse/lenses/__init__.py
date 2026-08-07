@@ -19,6 +19,7 @@ from nse.lenses.base import (
 )
 from nse.lenses.greeks import GreeksLens
 from nse.lenses.volume_oi import VolumeOILens
+from nse.lenses.vwap import VWAPLens
 
 __all__ = ["BaseLens", "Direction", "Lens", "LensVerdict", "abstain",
-           "GreeksLens", "VolumeOILens"]
+           "GreeksLens", "VolumeOILens", "VWAPLens"]
