@@ -203,6 +203,7 @@ only, never a naked short. Full working in `docs/OPTIONS_GREEKS_LEARNINGS.md`.
 | Breakout-retest (options) | VALID −₹80,769 — period-specific, not viable |
 | Variance risk premium | Survives hold-out at p<0.0001 |
 | Greeks lens (25d risk reversal) | No directional edge; negative in TRAIN and VALID |
+| Volume/OI lens (walls + profile + build) | +1.80/+1.62 bps, positive and significant in TRAIN and VALID. TEST unspent. |
 
 ### 3.5 The 25-delta risk reversal does not predict NIFTY direction
 
@@ -233,6 +234,52 @@ between 2021-23 and 2024, and the lens read the flatter 2024 surface as
 persistently bullish. Any constant fitted to a volatility surface needs either
 a trailing reference or an explicit recalibration cadence; a fixed number is the
 wrong shape for the quantity.
+
+### 3.6 Volume/OI is the first entry that survives a hold-out
+
+OI walls + volume profile + OI build direction, blended. Same protocol as §3.5:
+390 sessions, 30-minute grid, 60-minute horizon, mix-matched baseline.
+
+    split      n     long%   edge       t       p
+    TRAIN    2693    54.4%   +1.80bps   +3.53   0.0004
+    VALIDATE 1381    55.7%   +1.62bps   +2.10   0.0360
+
+Positive and significant in both, signs agree, long/short balanced, and only 30
+abstentions in 4,854 observations. Break-even half-spread **0.70%** on a ₹150
+premium at 1 lot with the measured delta 0.80.
+
+**This is promising, not proven.** Four things stand between it and capital:
+
+1. **TEST is unspent and must stay that way** until one final candidate is
+   ready. Spending it now to satisfy curiosity converts the only clean hold-out
+   into another training set (§2.1).
+2. **The estimated half-spread band is 0.03%–0.90% and break-even is 0.70%.**
+   The edge clears most of that band but not its top. Where the truth sits
+   inside the band decides whether this is tradeable at 1 lot (§2.3).
+3. **1.80 bps is an INDEX forward return, not an option P&L.** Turning it into
+   money still needs a structure, a strike rule and real fills.
+4. Three components were each scale-calibrated on TRAIN. That is centring, not
+   return-fitting, but it is not free either.
+
+### 3.7 An index-bps edge is not an option-premium bps edge
+
+`breakeven_spread()` multiplied an index-move edge straight into the option's
+premium notional (`premium × qty`). That understated gross by roughly **80×**
+and reported "costs eat the edge at the tick floor" for a signal that in fact
+clears 0.70%. The conversion takes three steps, not one:
+
+    index move   = spot × edge_bps / 10,000     index points
+    premium move = delta × index move           option points
+    gross        = premium move × qty           rupees
+
+Caught because a signal significant at p=0.0004 was being declared unviable,
+which was too convenient to accept. §2.3 warns that a wrong-but-conservative
+cost figure kills viable strategies exactly as unscientifically as an
+optimistic one flatters dead ones — this was that, in the conservative
+direction, inside our own harness.
+
+Delta defaults to the **measured 0.80**, not 0.5 (§1.7). Premium and delta must
+describe the same contract: (₹2, 0.80) is not a contract that exists.
 
 ---
 

@@ -209,26 +209,57 @@ def _two_sided_p(t: float, dof: int) -> float:
 
 def breakeven_spread(edge_bps: float, premium: float, lots: int = 1,
                      symbol: str = "NIFTY",
+                     spot: float = 24_500.0,
+                     delta: float = 0.80,
                      trade_date: Optional[date] = None,
                      grid: Sequence[float] = SPREAD_GRID) -> Optional[float]:
     """Largest half-spread at which this edge still clears its costs.
 
-    Returns None when even the tick floor eats it — which is the honest answer
-    for most option strategies and the one worth reporting loudly.
+    UNITS MATTER HERE AND GOT THEM WRONG ONCE. `edge_bps` is a move in the
+    INDEX, because that is what measure_entry() reports. Converting it to money
+    needs three steps, not one:
+
+        index move   = spot x edge_bps / 10,000        (index points)
+        premium move = delta x index move              (option points)
+        gross        = premium move x qty              (rupees)
+
+    The earlier version multiplied edge_bps straight into the option's premium
+    notional (premium x qty), which understated gross by roughly 80x and
+    reported NONE for a signal that in fact clears its costs comfortably. A
+    wrong-but-conservative cost figure kills viable strategies exactly as
+    unscientifically as a wrong-but-optimistic one flatters dead ones
+    (RESEARCH_LEARNINGS 2.3).
+
+    `delta` DEFAULTS TO 0.80 BECAUSE THAT IS THE MEASURED VALUE, not a
+    convenient round number: realised delta on the recorded premiums was median
+    0.80 / mean 0.84, because a Rs 180-200 premium band selects in-the-money
+    strikes rather than ATM. Assuming 0.5 here was a documented mistake
+    (RESEARCH_LEARNINGS 1.7). Pass the delta your structure actually runs at.
+
+    CAVEAT: `premium` and `delta` must describe the SAME contract. Nothing here
+    checks that, and the pair (premium Rs 2, delta 0.80) is not a contract that
+    exists — a deep-OTM option carries a low delta, which is exactly why cheap
+    OTM strikes are a cost trap. Feed both from the strike you actually intend
+    to trade, not one from the structure and one from habit.
+
+    Returns None when even the tick floor eats the edge.
     """
     from nse.backtest.costs import round_trip_cost
 
     qty = lots * LOT_SIZES.get(symbol, 65)
-    notional = premium * qty
-    if notional <= 0:
+    if premium <= 0 or qty <= 0 or spot <= 0:
         return None
-    gross = notional * (edge_bps / 10_000.0)
-    td = trade_date or date.today()
 
+    index_move = spot * (edge_bps / 10_000.0)
+    premium_move = delta * index_move
+    gross = premium_move * qty
+    if gross <= 0:
+        return None
+
+    td = trade_date or date.today()
     survived = None
     for hs in grid:
-        cost = round_trip_cost(premium, premium, qty, "BUY", td, hs)
-        if gross > cost:
+        if gross > round_trip_cost(premium, premium, qty, "BUY", td, hs):
             survived = hs
         else:
             break
@@ -273,8 +304,12 @@ def report(lens, observations: list[Observation], *,
     print()
     print(f"  TRAIN/VALIDATE sign agreement: {'YES' if consistent else 'NO'}")
     be = tr.get("breakeven_half_spread_pct")
-    print(f"  break-even half-spread on a Rs {premium:.0f} premium, {lots} lot: "
+    print(f"  break-even half-spread on a Rs {premium:.0f} premium, {lots} lot, "
+          f"delta 0.80: "
           f"{f'{be:.2f}%' if be else 'NONE — costs eat the edge at the tick floor'}")
+    if be is not None:
+        print(f"    (estimated spread band is 0.03%-0.90%; this survives to "
+              f"{be:.2f}%, so it {'clears the whole band' if be >= 0.90 else 'clears only part of it'})")
     out["train_valid_agree"] = consistent
     return out
 

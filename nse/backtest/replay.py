@@ -36,6 +36,7 @@ import logging
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Iterator, Optional
 
+import numpy as np
 import pandas as pd
 
 from nse.config import STEP_SIZES, market_close_for
@@ -117,6 +118,21 @@ def normalise_day(day_df: pd.DataFrame, session: date,
         raise ValueError(f"no measured expiry on or after {session}")
     df["expiry"] = pd.Timestamp(expiry_at_close(exp, symbol))
     df["symbol"] = symbol
+
+    # Open interest CHANGE since the session's first print, per contract.
+    # The live feed supplies this directly (SNAP_QUOTE carries
+    # open_interest_change_percentage); the archive has only the level, so it
+    # is derived here. Day-scoped on purpose: it is baked into each snapshot,
+    # so a lens still reads one immutable observation and stays stateless.
+    if "oi" in df.columns:
+        df["oi"] = pd.to_numeric(df["oi"], errors="coerce").fillna(0)
+        first = (df.sort_values("datetime")
+                   .groupby(["strike", "option_type"])["oi"].first()
+                   .rename("oi_open"))
+        df = df.merge(first, on=["strike", "option_type"], how="left")
+        df["oi_change"] = df["oi"] - df["oi_open"]
+        df["oi_change_pct"] = np.where(
+            df["oi_open"] > 0, df["oi_change"] / df["oi_open"] * 100.0, 0.0)
     return df
 
 
@@ -148,6 +164,16 @@ def snapshots_for_day(session: date, symbol: str = "NIFTY",
     step = STEP_SIZES.get(symbol, 50)
     close_t = market_close_for(symbol, session)
 
+    # Per-minute index series with total traded volume, for the volume-profile
+    # lens. Built once for the whole day, then sliced STRICTLY up to each
+    # snapshot's own timestamp — handing a lens the full day's profile would be
+    # lookahead of the most flattering kind, since a session's POC is only
+    # knowable once the session is over.
+    minute_bars = (df.groupby("datetime", as_index=False)
+                     .agg(close=("spot", "first"), volume=("volume", "sum"))
+                     .sort_values("datetime")
+                     .reset_index(drop=True))
+
     for ts, bar in df.groupby("datetime", sort=True):
         if not isinstance(ts, pd.Timestamp):
             continue
@@ -175,6 +201,9 @@ def snapshots_for_day(session: date, symbol: str = "NIFTY",
         missing = max(0, expected - len(chain))
 
         ts_utc = (ts.tz_localize(IST) if ts.tzinfo is None else ts).tz_convert("UTC")
+        # <= ts, never beyond: the profile may only see bars that had already
+        # printed when the decision was made.
+        bars = minute_bars[minute_bars["datetime"] <= ts]
         yield MarketSnapshot(
             symbol=symbol,
             ts=ts_utc.to_pydatetime(),
@@ -182,6 +211,7 @@ def snapshots_for_day(session: date, symbol: str = "NIFTY",
             expiry=chain["expiry"].iloc[0].to_pydatetime(),
             atm=atm,
             chain=chain.reset_index(drop=True),
+            bars=bars.reset_index(drop=True),
             vix=None,                      # not in the archive; never faked
             source="replay",
         ), missing
