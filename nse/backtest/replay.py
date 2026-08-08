@@ -139,6 +139,7 @@ def normalise_day(day_df: pd.DataFrame, session: date,
 def snapshots_for_day(session: date, symbol: str = "NIFTY",
                       every_minutes: int = 5,
                       strikes_around: int = 10,
+                      bar_minutes: int = 5,
                       day_df: Optional[pd.DataFrame] = None,
                       ) -> Iterator[MarketSnapshot]:
     """Emit one MarketSnapshot per sampled minute of a session.
@@ -164,15 +165,31 @@ def snapshots_for_day(session: date, symbol: str = "NIFTY",
     step = STEP_SIZES.get(symbol, 50)
     close_t = market_close_for(symbol, session)
 
-    # Per-minute index series with total traded volume, for the volume-profile
-    # lens. Built once for the whole day, then sliced STRICTLY up to each
-    # snapshot's own timestamp — handing a lens the full day's profile would be
-    # lookahead of the most flattering kind, since a session's POC is only
-    # knowable once the session is over.
-    minute_bars = (df.groupby("datetime", as_index=False)
-                     .agg(close=("spot", "first"), volume=("volume", "sum"))
-                     .sort_values("datetime")
-                     .reset_index(drop=True))
+    # Index bars for the structural lenses. Built once for the whole day, then
+    # sliced STRICTLY up to each snapshot's own timestamp — handing a lens the
+    # full day's bars would be lookahead of the most flattering kind, since a
+    # session's POC or swing high is only knowable once the session is over.
+    #
+    # THE HIGHS AND LOWS HERE ARE EXTREMES OF ONE-MINUTE CLOSES, NOT TRUE
+    # INTRABAR EXTREMES. The archive stores `spot` as a single close per minute
+    # (RESEARCH_LEARNINGS §4), so resampling to 5 minutes gives the max and min
+    # of five closes rather than the real wick. They are genuine values, not
+    # fabricated ones — but they are systematically SHALLOWER than live, so any
+    # lens keying on wicks (ict_smc, sweeps) will under-fire on replay relative
+    # to live and validate worse than it performs. Stated here rather than
+    # discovered later.
+    per_minute = (df.groupby("datetime", as_index=False)
+                    .agg(close=("spot", "first"), volume=("volume", "sum"))
+                    .sort_values("datetime")
+                    .set_index("datetime"))
+    minute_bars = (per_minute.resample(f"{bar_minutes}min")
+                             .agg(close=("close", "last"),
+                                  high=("close", "max"),
+                                  low=("close", "min"),
+                                  open=("close", "first"),
+                                  volume=("volume", "sum"))
+                             .dropna()
+                             .reset_index())
 
     for ts, bar in df.groupby("datetime", sort=True):
         if not isinstance(ts, pd.Timestamp):
@@ -201,9 +218,17 @@ def snapshots_for_day(session: date, symbol: str = "NIFTY",
         missing = max(0, expected - len(chain))
 
         ts_utc = (ts.tz_localize(IST) if ts.tzinfo is None else ts).tz_convert("UTC")
-        # <= ts, never beyond: the profile may only see bars that had already
-        # printed when the decision was made.
-        bars = minute_bars[minute_bars["datetime"] <= ts]
+
+        # A resampled bar is LABELLED BY ITS START. The bar labelled 12:30
+        # covers 12:30:00-12:34:59 and does not close until 12:35, so including
+        # it in a decision made at 12:30 hands the lens five minutes of its own
+        # future. That is precisely the resample-label bug that turned
+        # -Rs 6,110 into +Rs 377,749 (RESEARCH_LEARNINGS 1.2), and it reappeared
+        # here the moment per-minute rows were resampled into OHLC.
+        #
+        # Only bars that have CLOSED are visible: label + bar_minutes <= ts.
+        cutoff = ts - pd.Timedelta(minutes=bar_minutes)
+        bars = minute_bars[minute_bars["datetime"] <= cutoff]
         yield MarketSnapshot(
             symbol=symbol,
             ts=ts_utc.to_pydatetime(),

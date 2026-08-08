@@ -18,8 +18,16 @@ from nse.lenses.base import (
     abstain,
 )
 from nse.lenses.greeks import GreeksLens
+from nse.lenses.ict_smc import ICTSMCLens
 from nse.lenses.volume_oi import VolumeOILens
 from nse.lenses.vwap import VWAPLens
+from nse.lenses.vision import VisionLens
+
+#: The full roster. Each carries its OWN brain (nse/brain.py) — its own weight,
+#: lifecycle, attribution history and health, keyed by `name` in Mongo. One
+#: lens being suspended never touches another.
+ROSTER = [GreeksLens, VolumeOILens, VWAPLens, ICTSMCLens, VisionLens]
 
 __all__ = ["BaseLens", "Direction", "Lens", "LensVerdict", "abstain",
-           "GreeksLens", "VolumeOILens", "VWAPLens"]
+           "GreeksLens", "VolumeOILens", "VWAPLens", "ICTSMCLens", "VisionLens",
+           "ROSTER"]

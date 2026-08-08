@@ -294,31 +294,61 @@ The ₹50,000 per-trade budget allows exactly 5 lots at a ₹150 premium — so 
     0.20%           -32,640       +169,690     <- TRAIN flips
     VERDICT: profitable in BOTH splits up to a half-spread of 0.10%
 
-**And the measured spread sits on that exact number.** Live NIFTY weekly quotes
-captured from the WS feed on 2026-08-07 at ~11:27 IST, for the contracts this
-strategy actually buys (₹120-190 premium):
+**CORRECTED 2026-08-08 — the "0.10% survival threshold" above was a GRID
+ARTEFACT, not a break-even.** The sweep ran on `(0.03, 0.10, 0.20, …)`, TRAIN
+turned negative somewhere between 0.10 and 0.20, and the coarse grid reported
+the last surviving gridpoint as though it were the boundary. Re-running on the
+measured percentiles instead put the true break-even **above 0.16%**:
 
-    24500 CE  188.95   half-spread 0.1323%
-    24550 CE  158.15   half-spread 0.1421%
-    24600 CE  130.45   half-spread 0.0383%
-    24600 PE  124.00   half-spread 0.1411%
-    24650 PE  150.70   half-spread 0.0997%
-    24700 PE  179.90   half-spread 0.0695%
-    mean 0.1038%   vs a survival threshold of 0.1000%
+    half-spread          TRAIN net    VALIDATE net
+    0.1028%  (p25)        +113,787       +243,268
+    0.1230%  (p50)         +83,357       +227,977
+    0.1409%  (p75)         +56,391       +214,427
+    0.1573%  (p90)         +31,686       +202,013
+    VERDICT: profitable in BOTH splits up to a half-spread of 0.16%
 
-**This is not viable on current evidence, and it is not dead either.** It sits
-on the knife edge, and the deciding input is the one thing never measured
-properly here. One morning of twenty contracts is not a distribution: spreads
-widen at the open and close, widen with volatility, and were almost certainly
-wider across 2021-2024 than they are now.
+**Profitable in both splits at every measured percentile, including p90.** The
+whole measured distribution (§3.10) sits below break-even. Declaring it dead off
+a gridpoint would have been the mirror image of §3.7 — there a units bug made a
+live signal look worthless; here grid granularity nearly did the same.
 
-The next step is therefore a measurement, not a tuning pass. The collector has
-stored real `depth.buy[]`/`depth.sell[]` since 2026-08-04 (§4), so a genuine
-half-spread distribution by strike, by moneyness and by time of day is now
-buildable. That distribution decides this strategy, and no amount of further
-signal work substitutes for it.
+Remaining caveats, none of them small:
+- **TEST is unspent.** This is a TRAIN/VALIDATE result.
+- The spread sample is **four sessions in August 2026**. The backtest spans
+  2021-2026 and spreads were plausibly wider for most of it.
+- **VALIDATE is 3-6x stronger than TRAIN** at every spread level. A hold-out
+  outperforming the training set that consistently is a regime signal, not a
+  bonus — treat the TRAIN column as the honest one.
+- Expectancy at p90 on TRAIN is **+₹20/trade**. Thin.
+- Worst single trade is **−₹46,150**, roughly 92% of a ₹50,000 position.
+- Slippage beyond the quoted touch is not modelled.
 
-TEST remains unspent.
+### 3.10 The measured half-spread distribution
+
+Collector depth, 14,204 NIFTY observations with a genuine two-sided book across
+four sessions from 2026-08-04. Half-spread as a percentage of mid.
+
+    bucket          n      mean     p25     p50     p75     p90
+    deep ITM    1,676    0.2214  0.1321  0.1577  0.2236  0.2998
+    ITM         3,352    0.1590  0.1197  0.1369  0.1637  0.2077
+    near ATM    3,346    0.1371  0.1025  0.1234  0.1418  0.1604
+    OTM         3,334    0.2815  0.1198  0.1439  0.1735  0.5405
+    deep OTM    2,496    0.5558  0.1418  0.1792  0.2295  2.1277
+
+**Deep OTM has a p90 of 2.13% against a 0.18% median** — the same "cheap OTM is
+a cost trap" finding as §1.4's brokerage arithmetic, now visible in the spread.
+
+By time of day, the close is a different market:
+
+    open 09:15-09:30    p50 0.1490  p75 0.1943  p90 0.2916
+    midday 10:30-14:00  p50 0.1399  p75 0.1720  p90 0.2385
+    close 15:00+        p50 0.1592  p75 0.3829  p90 1.2048
+
+p90 at the close is **5x midday**. A session-wide average hides that entirely.
+
+Across symbols, ₹120-190 premium band: NIFTY p50 **0.1230%**, SENSEX **0.1423%**,
+FINNIFTY **1.4760%**. FINNIFTY is an order of magnitude wider and effectively
+untradeable at these premiums.
 
 ### 3.9 Liquidity sweeps have no edge on BTC/ETH 5m
 
@@ -383,6 +413,90 @@ direction, inside our own harness.
 
 Delta defaults to the **measured 0.80**, not 0.5 (§1.7). Premium and delta must
 describe the same contract: (₹2, 0.80) is not a contract that exists.
+
+---
+
+### 3.11 Four lenses measured on identical snapshots: one survived
+
+390 NIFTY sessions (260 TRAIN, 130 VALIDATE), 30-minute grid, 60-minute
+horizon, **the same `MarketSnapshot` handed to every lens** so the comparison is
+between perspectives and not between datasets.
+
+| lens | TRAIN | VALIDATE | signs agree | verdict |
+|---|---|---|---|---|
+| `volume_oi` | **+1.66** p=0.0012 | **+1.49** p=0.0527 | **yes** | survives, PROBATION |
+| `vwap` | −2.31 p=0.0014 | −1.06 p=0.2585 | no | no edge |
+| `ict_smc` | −4.25 p=0.0000 | −0.68 p=0.5609 | no | no edge |
+| `greeks` | −0.54 p=0.4485 | −1.08 p=0.1405 | no | no edge |
+
+Building a lens is cheap; earning a weight is not. Four of five got built, one
+gets to move capital, and it does so capped at PROBATION weight.
+
+**`volume_oi` moved +1.80 → +1.66 bps on a change of bar construction alone**
+(per-minute → 5-minute OHLC), and VALIDATE crossed p=0.036 → p=0.053 with it.
+Nothing about the signal changed — only how the bars were sliced. Real, but not
+robust; that fragility is why it sits on PROBATION rather than ACTIVE.
+
+`greeks` went **86.6% long on VALIDATE against 56.4% on TRAIN**: `SKEW_NEUTRAL`
+was calibrated on TRAIN and does not hold in 2024, so the lens is measuring its
+own constant rather than the skew.
+
+### 3.12 A correlated lens is not a second opinion
+
+|            | volume_oi | vwap | ict_smc | greeks |
+|---|---|---|---|---|
+| volume_oi  | 1.000 | **−0.769** | −0.285 | −0.178 |
+| vwap       | −0.769 | 1.000 | 0.394 | 0.230 |
+
+`vwap` agrees with `volume_oi` on **18.4%** of decisions — it is substantially
+volume_oi's volume-profile component read with the opposite sign convention, not
+an independent reading. Its negative result is therefore *not* separate evidence
+against the champion, and weighting it would double-count one opinion.
+
+Measure pairwise correlation **before** assigning weights. A vote cannot detect
+this on its own: it sees N opinions and has no way to know it is being handed
+the same one twice.
+
+### 3.13 The combined vote did not beat the best single lens
+
+| scheme | VALIDATE | vs champion |
+|---|---|---|
+| `volume_oi` alone | +1.49 bps p=0.0527 | — |
+| `equal` weights | +0.22 bps p=0.7656 | −1.27 |
+| `positive_only` | +1.49 bps p=0.0527 | +0.00 (collapses to the champion) |
+| `train_signed` | +1.90 bps p=0.0139 | +0.40 |
+
+Equal weighting **destroys** the edge — three negative lenses outvote one
+positive one. `positive_only` is identical to the champion by construction.
+
+`train_signed` (each lens's TRAIN sign as its convention, weight |edge|) looks
+like the combination finally working. It is not, and the three checks that killed
+it are the reusable part:
+
+1. **It agreed with `volume_oi` alone on 82.5% of decisions.** Sign-flipping a
+   −0.77-correlated lens makes it a +0.77-correlated copy, so the "combination"
+   is the champion levered up.
+2. **It gave 48.5% of its weight to `ict_smc`, the worst lens**, because
+   weighting by |edge| rewards whichever lens was most *wrong*.
+3. **With `volume_oi` removed, the three flipped lenses scored VALIDATE +0.91
+   bps at p=0.2118** — nothing.
+
+By that point VALIDATE had been looked at ~10 times, which puts p=0.0139 inside
+what multiple comparisons produce by chance. **Do not flip a lens's sign after
+seeing its result** — §2.3's discipline applies to conventions, not just costs.
+The convention is stated before the measurement or the measurement is worthless.
+
+### 3.14 The roster measurement left the aggregator unable to trade
+
+`MIN_VOTING_LENSES = 2`, and exactly one lens now carries weight. Verified on
+10 VALIDATE sessions: **129 decisions, 0 executed**, every one rejected with
+`only 1 lens(es) with weight could read this snapshot, need 2`.
+
+This is the guard working, not a bug — but it means the multi-lens system is
+structurally a no-op until either a second lens earns weight or the quorum is
+deliberately lowered to 1, which converts it into a single-lens system that
+happens to journal four opinions. That is a capital decision, not a config
+tidy-up, and it is left to explicit review.
 
 ---
 
