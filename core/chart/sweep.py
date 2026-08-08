@@ -42,7 +42,7 @@ from typing import Optional
 import numpy as np
 import pandas as pd
 
-from core.chart.structure import ChartStructure, atr
+from core.chart.structure import ChartStructure, atr_series
 
 logger = logging.getLogger(__name__)
 
@@ -132,8 +132,12 @@ def find_sweeps(df: pd.DataFrame, structure: Optional[ChartStructure] = None,
     if df is None or len(df) < 40 or not need <= set(df.columns):
         return []
 
-    a = structure.atr if structure else atr(df)
-    if a <= 0:
+    # PER-BAR ATR. A single series-wide value would measure a sweep 300 bars
+    # back using volatility from its own future, which changes its stop
+    # distance, pierce depth and R:R as soon as more data is appended — caught
+    # by a prefix-vs-full comparison that should have been identical.
+    atrs = atr_series(df)
+    if not np.any(atrs > 0):
         return []
 
     h = pd.to_numeric(df["high"], errors="coerce").to_numpy(float)
@@ -143,6 +147,9 @@ def find_sweeps(df: pd.DataFrame, structure: Optional[ChartStructure] = None,
 
     out: list[Sweep] = []
     for i in range(SWING_LOOKBACK * 2, len(df)):
+        a = float(atrs[i])
+        if a <= 0:
+            continue
         # A swing at index j is only CONFIRMED at j + SWING_LOOKBACK, so bar i
         # may only consider swings whose confirmation already happened.
         confirmed_by = i - SWING_LOOKBACK

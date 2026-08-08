@@ -320,6 +320,50 @@ signal work substitutes for it.
 
 TEST remains unspent.
 
+### 3.9 Liquidity sweeps have no edge on BTC/ETH 5m
+
+Wick pierces a prior swing extreme, closes back inside, stop beyond the wick,
+target at the next opposing level. 399 days of true OHLC per symbol, 5-minute
+bars, per-bar ATR, no lookahead.
+
+**Unconditional base rate — negative in all four cells, GROSS:**
+
+    symbol    split       n    hit%   need%    edge
+    ETHUSD    TRAIN    6,108   29.5%   31.1%  −0.016
+    ETHUSD    VALIDATE 2,243   31.0%   31.9%  −0.009
+    BTCUSD    TRAIN    5,889   29.0%   30.2%  −0.013
+    BTCUSD    VALIDATE 2,276   30.0%   30.5%  −0.005
+
+`need%` is 1/(1+medianRR). The sweep resolves in its favour slightly less often
+than its own reward ratio requires, before a single rupee of cost.
+
+**Conditional — no feature survives out of sample.** Quintiled seven entry-time
+features on TRAIN and checked each on VALIDATE: pierce depth, rejection
+strength, level age, stop width, target touches, volatility regime, R:R. TRAIN
+spreads of 0.04–0.13 R across quintiles look promising and then do not hold —
+the VALIDATE columns are noise. Four of thirty-five cells came back positive in
+both splits, which is what chance delivers at that many comparisons (§2.1).
+
+**The best cell still loses.** Tight stops (`stop_atr` q1) was the one candidate
+with a monotonic story: +0.085 R on TRAIN, +0.084 on VALIDATE. Against Delta's
+5 bps/side fee and 2 bps/side slippage — 14 bps round trip — the cost in R units
+is 0.0014 / stop_fraction:
+
+    stop 0.3%  cost 0.467 R      stop 1.0%  cost 0.140 R
+    stop 0.5%  cost 0.280 R      stop 1.5%  cost 0.093 R
+
+Every one exceeds the 0.085 R gross edge. The setup loses at every stop width,
+and that is being generous — 0.085 R is the best of thirty-five cells.
+
+This is the crypto price-action finding again in a harsher form. There, BTC had
+a real 9–12 bps edge sitting under a ~14 bps cost floor (§2.2). Here there is no
+real edge to begin with.
+
+**What this does and does not rule out.** It rules out *this* sweep definition,
+on 5-minute BTC/ETH, with next-opposing-level targets. It does not rule out
+chart-based trading in general, other timeframes, or NSE. The value is that the
+infrastructure to test the next variant now exists and answers in hours.
+
 ### 3.7 An index-bps edge is not an option-premium bps edge
 
 `breakeven_spread()` multiplied an index-move edge straight into the option's

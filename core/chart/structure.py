@@ -88,17 +88,30 @@ class ChartStructure:
                 "levels": [l.as_dict() for l in self.levels[:8]]}
 
 
-def atr(df: pd.DataFrame, span: int = 14) -> float:
-    """Average true range, EWM. The unit everything else is measured in."""
+def atr_series(df: pd.DataFrame, span: int = 14) -> np.ndarray:
+    """Per-bar ATR — the value as it stood AT each bar.
+
+    Anything scanning a whole series must index this rather than call atr(),
+    which returns only the final value. Using one series-wide ATR to judge a
+    bar 300 positions back measures that bar with volatility from its own
+    future: the stop distance, the pierce depth and therefore the R:R all come
+    out wrong, and wrong in a way that shifts when more data is appended.
+    """
     h = pd.to_numeric(df["high"], errors="coerce").to_numpy(float)
     l = pd.to_numeric(df["low"], errors="coerce").to_numpy(float)
     c = pd.to_numeric(df["close"], errors="coerce").to_numpy(float)
     if len(h) < 2:
-        return 0.0
+        return np.zeros(len(h))
     prev = np.concatenate([[c[0]], c[:-1]])
     tr = np.maximum.reduce([h - l, np.abs(h - prev), np.abs(l - prev)])
-    val = pd.Series(tr).ewm(span=span, adjust=False).mean().iloc[-1]
-    return float(val) if np.isfinite(val) else 0.0
+    out = pd.Series(tr).ewm(span=span, adjust=False).mean().to_numpy()
+    return np.nan_to_num(out, nan=0.0, posinf=0.0, neginf=0.0)
+
+
+def atr(df: pd.DataFrame, span: int = 14) -> float:
+    """ATR at the LAST bar. Safe only when df already ends at the decision bar."""
+    s = atr_series(df, span)
+    return float(s[-1]) if len(s) else 0.0
 
 
 def find_swings(df: pd.DataFrame, lookback: int = SWING_LOOKBACK

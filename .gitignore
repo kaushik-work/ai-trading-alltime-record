@@ -31,3 +31,6 @@ db/nse_cache/vol_harvest_slice.csv
 
 # sentinel runtime
 sentinel/__pycache__/
+
+# OHLC + chart caches (regenerable from the APIs)
+db/ohlc_cache/
