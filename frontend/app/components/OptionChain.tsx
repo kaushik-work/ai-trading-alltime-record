@@ -8,13 +8,10 @@ import { Banner, Card, CardHead, Empty, Pill } from "./ui";
    and Indian retail platforms, so traders read it without instruction — this is
    not the place to be inventive.
 
-   Two visual devices do most of the work:
-
-   1. ITM shading. A call is in-the-money BELOW spot and a put ABOVE it, so the
-      shaded blocks meet at the ATM row and form a natural centre mark.
-   2. Mirrored OI bars. Open interest is drawn as a bar behind the number,
-      growing away from the strike column. Relative OI is what traders scan for
-      — where the walls are — and a bar answers that far faster than digits.
+   Mirrored OI bars do most of the visual work: open interest is drawn as a
+   bar behind the number, growing away from the strike column. Relative OI is
+   what traders scan for — where the walls are — and a bar answers that far
+   faster than digits.
 
    Greeks are hidden by default (the table is already wide) and are greyed with
    a warning inside 2 DTE, where analytic Greeks stop being usable. */
@@ -241,14 +238,18 @@ export default function OptionChain() {
               <tr>
                 {/* Calls read right-to-left toward the strike: OI furthest out,
                     price nearest the centre. Mirrored on the put side so both
-                    sides put their most-read column closest to the strike. */}
-                <th className="text-right">OI</th>
-                <th className="text-right">Vol</th>
-                {showGreeks && <th className="text-right">IV %</th>}
-                {showGreeks && <th className="text-right">Δ</th>}
-                {showGreeks && <th className="text-right">Θ</th>}
-                <th className="text-right">Bid / Ask</th>
-                <th className="text-right">LTP</th>
+                    sides put their most-read column closest to the strike.
+                    The `!` is required: `.tbl thead th` in globals.css sets
+                    text-align:left at higher specificity than the plain
+                    Tailwind utility, so without it the call-side headers drift
+                    left while their numbers align right. */}
+                <th className="!text-right">OI</th>
+                <th className="!text-right">Vol</th>
+                {showGreeks && <th className="!text-right">IV %</th>}
+                {showGreeks && <th className="!text-right">Δ</th>}
+                {showGreeks && <th className="!text-right">Θ</th>}
+                <th className="!text-right">Bid / Ask</th>
+                <th className="!text-right">LTP</th>
                 <th className="!text-center">—</th>
                 <th className="text-left">LTP</th>
                 <th className="text-left">Bid / Ask</th>
@@ -270,9 +271,8 @@ export default function OptionChain() {
       ) : null}
 
       <p className="px-4 py-2.5 text-[11px] text-[var(--ink-3)] leading-relaxed border-t border-[var(--line)]">
-        Shaded cells are in-the-money. Bars behind open interest are scaled to the
-        largest position on either side. Greeks are computed from the current mark,
-        never read from storage.
+        Bars behind open interest are scaled to the largest position on either
+        side. Greeks are computed from the current mark, never read from storage.
       </p>
     </Card>
   );
@@ -318,26 +318,23 @@ function ChainRow({ row, maxOi, showGreeks, greeksOk }: {
   const rowStyle = atm
     ? { background: "var(--brand-wash)", outline: "1px solid var(--brand)" }
     : undefined;
-  const itm = { background: "var(--warn-wash)" };
   const dim = greeksOk ? "" : "opacity-40";
 
   return (
     <tr style={rowStyle}>
       {/* ── calls ── */}
-      <OiCell leg={row.ce} maxOi={maxOi} side="ce" itm={row.ce_itm} />
-      <td className="text-right tnum" style={row.ce_itm ? itm : undefined}>
+      <OiCell leg={row.ce} maxOi={maxOi} side="ce" />
+      <td className="text-right tnum">
         {compact(row.ce?.volume)}
       </td>
-      {showGreeks && <td className={`text-right tnum ${dim}`} style={row.ce_itm ? itm : undefined}>{num(row.ce?.iv, 1)}</td>}
-      {showGreeks && <td className={`text-right tnum ${dim}`} style={row.ce_itm ? itm : undefined}>{num(row.ce?.delta, 2)}</td>}
-      {showGreeks && <td className={`text-right tnum ${dim}`} style={row.ce_itm ? itm : undefined}>{num(row.ce?.theta, 1)}</td>}
+      {showGreeks && <td className={`text-right tnum ${dim}`}>{num(row.ce?.iv, 1)}</td>}
+      {showGreeks && <td className={`text-right tnum ${dim}`}>{num(row.ce?.delta, 2)}</td>}
+      {showGreeks && <td className={`text-right tnum ${dim}`}>{num(row.ce?.theta, 1)}</td>}
       <td className="text-right tnum text-[var(--ink-3)] whitespace-nowrap"
-          style={row.ce_itm ? itm : undefined}
           title={row.ce ? `spread ${pct(row.ce.spread_pct, 2)}` : undefined}>
         {row.ce ? `${num(row.ce.bid)} / ${num(row.ce.ask)}` : "—"}
       </td>
-      <td className="text-right font-semibold text-[var(--ink)]"
-          style={row.ce_itm ? itm : undefined}>
+      <td className="text-right font-semibold text-[var(--ink)]">
         <Px value={row.ce?.ltp} />
       </td>
 
@@ -349,29 +346,27 @@ function ChainRow({ row, maxOi, showGreeks, greeksOk }: {
       </td>
 
       {/* ── puts ── */}
-      <td className="text-left font-semibold text-[var(--ink)]"
-          style={row.pe_itm ? itm : undefined}>
+      <td className="text-left font-semibold text-[var(--ink)]">
         <Px value={row.pe?.ltp} />
       </td>
       <td className="text-left tnum text-[var(--ink-3)] whitespace-nowrap"
-          style={row.pe_itm ? itm : undefined}
           title={row.pe ? `spread ${pct(row.pe.spread_pct, 2)}` : undefined}>
         {row.pe ? `${num(row.pe.bid)} / ${num(row.pe.ask)}` : "—"}
       </td>
-      {showGreeks && <td className={`text-left tnum ${dim}`} style={row.pe_itm ? itm : undefined}>{num(row.pe?.theta, 1)}</td>}
-      {showGreeks && <td className={`text-left tnum ${dim}`} style={row.pe_itm ? itm : undefined}>{num(row.pe?.delta, 2)}</td>}
-      {showGreeks && <td className={`text-left tnum ${dim}`} style={row.pe_itm ? itm : undefined}>{num(row.pe?.iv, 1)}</td>}
-      <td className="text-left tnum" style={row.pe_itm ? itm : undefined}>
+      {showGreeks && <td className={`text-left tnum ${dim}`}>{num(row.pe?.theta, 1)}</td>}
+      {showGreeks && <td className={`text-left tnum ${dim}`}>{num(row.pe?.delta, 2)}</td>}
+      {showGreeks && <td className={`text-left tnum ${dim}`}>{num(row.pe?.iv, 1)}</td>}
+      <td className="text-left tnum">
         {compact(row.pe?.volume)}
       </td>
-      <OiCell leg={row.pe} maxOi={maxOi} side="pe" itm={row.pe_itm} />
+      <OiCell leg={row.pe} maxOi={maxOi} side="pe" />
     </tr>
   );
 }
 
 /** Open interest with a bar growing away from the strike column. */
-function OiCell({ leg, maxOi, side, itm }: {
-  leg: Leg; maxOi: number; side: "ce" | "pe"; itm: boolean;
+function OiCell({ leg, maxOi, side }: {
+  leg: Leg; maxOi: number; side: "ce" | "pe";
 }) {
   const oi = leg?.oi ?? 0;
   const w = Math.min(100, (oi / maxOi) * 100);
@@ -381,7 +376,6 @@ function OiCell({ leg, maxOi, side, itm }: {
 
   return (
     <td className={`relative tnum ${isCall ? "text-right" : "text-left"}`}
-        style={itm ? { background: "var(--warn-wash)" } : undefined}
         title={oi ? `OI ${oi.toLocaleString("en-IN")}${chg ? ` · ${chg > 0 ? "+" : "−"}${Math.abs(chg).toFixed(1)}%` : ""}` : undefined}>
       {/* Bar sits behind the digits and is decorative — the number is the data,
           so a screen reader gets the value either way. */}
