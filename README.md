@@ -1,165 +1,184 @@
 # AI Trading All-Time Record
 
-Production crypto-futures trading bot on **Delta Exchange India**.
+Research and execution platform for **NSE index options** (Angel One) and
+**crypto perpetual futures** (Delta Exchange India).
 
-## What this is
+> **No strategy is live on either venue.** `_get_strategies()` returns `{}`,
+> `ENABLE_CRYPTO_RUNNER=false`, `ENABLE_NSE_RUNNER=false`. Every strategy was
+> deleted in `62f89c9` after measurement killed it. The execution layer, the
+> data collectors and the research harness are intact and working.
+>
+> That is a deliberate state, not an outage. What this repo is good at is
+> **killing bad strategies cheaply**, and it has killed several.
 
-**Live trading surface:** **ETHUSD perpetual futures only**. BTCUSD is disabled.
+## The one idea
 
-The strategy is **Price-action S/R retest** — a pure perp price-action strategy
-decoded from a Hindi livestream. It trades at 4h S/R levels in the direction of
-the 24h trend, using tight stops and asymmetric targets, filtered by 24h
-realized volatility.
+Every strategy this project has run was profitable on paper and lost money
+when measured properly. The response was to build the measuring apparatus
+first and hold everything to it:
 
-**Data surface:** NIFTY / BANKNIFTY / FINNIFTY / SENSEX 5-min option-chain
-snapshots into MongoDB. Pure data collection. No NSE trading, no NSE bot,
-no NSE strategies.
+| Rule | Why |
+|---|---|
+| Fill at the bar's **close**, never its label | A 5-minute label/close mismatch was worth **+₹384,000** of imaginary profit |
+| Apply every declared cost | A `PERP_FEE_BPS` that existed but was never referenced turned **+23.89% into −8.21%** |
+| Measure the **entry** before tuning an exit | No exit rule harvests an edge the entry does not have |
+| Measure a quantity's **distribution** before gating on it | A 0.60% entry gate sat above the 0.404% maximum ever observed and fired **0 times in 1,869 observations** |
+| Score on **expectancy**, never win rate | A 50%-WR strategy with small wins loses to a 29%-WR one with big ones |
+| **TRAIN / VALIDATE / TEST**, and TEST is spent once | With ~23 hypotheses, one clears p<0.05 by chance |
+| A missing data point is a **counted miss**, not a dropped row | Silently dropping sessions where a strike vanished manufactured a **+19.67pt edge from nothing** |
+
+Full working, with the numbers, in [`docs/RESEARCH_LEARNINGS.md`](docs/RESEARCH_LEARNINGS.md).
+
+## What has been measured
+
+| Strategy | Verdict |
+|---|---|
+| Crypto price-action S/R | Real 9–12 bps edge, structurally **below** its ~14 bps cost floor |
+| NSE synthetic forward | Gate unreachable — never fired once in production |
+| Breakout-retest (index) | +165 / +259 / +320 pts — positive in all three splits |
+| Breakout-retest (options) | VALIDATE **−₹80,769** — the index edge did not survive the instrument |
+| Variance risk premium | Survives every split, but only in a **naked** structure that cannot be margined |
+| Greeks lens (25δ risk reversal) | No directional edge; negative in TRAIN and VALIDATE |
+| **Volume/OI lens** | **+1.80 / +1.62 bps, significant in both splits.** The first entry to survive a hold-out |
+| Liquidity sweeps (BTC/ETH 5m) | No edge — negative in all four cells, gross, before costs |
 
 ## Architecture
 
+Two venues, one research spine. Everything a lens reads is a `MarketSnapshot`,
+produced identically by the live path and the replay path — so a lens cannot
+tell which built it, and every lens is backtestable by construction.
+
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                           Delta India                               │
-│   WebSocket (ETH perp + ETH option marks)    REST (wallet, orders)  │
-└──────────────────┬──────────────────────────────┬───────────────────┘
-                   │                              │
-                   ▼                              ▼
-       ┌───────────────────────┐      ┌──────────────────────┐
-       │  core/ws/delta_stream │      │  core/brokers/       │
-       │  (ETH-only stream)    │      │  delta_crypto.py     │
-       └───────────┬───────────┘      └──────┬───────────────┘
-                   │                          │
-                   └────────────┬─────────────┘
-                                ▼
-       ┌─────────────────────────────────────────┐
-       │  strategies/price_action_sr.py          │
-       │  ETH S/R retest · 0.7% SL · 4.9% TP     │
-       │  24h vol filter ≤ 34%                   │
-       └─────────────┬───────────────────────────┘
-                     │
-                     ▼
-       ┌─────────────────────────────────────────┐
-       │  core/execution/crypto_runner.py        │
-       │  tick 2s · entry every 1m · 1:7 R:R     │
-       │  fixed Rs 50k capital per trade         │
-       └─────────────┬───────────────────────────┘
-                     │
-                     ▼
-       ┌─────────────────────────────────────────┐
-       │  Dashboard (Next.js, /)                 │
-       │  ETH signal radar + chart + KILL btn    │
-       └─────────────────────────────────────────┘
+  Angel One (NFO/BFO)                    Delta India
+  SmartWebSocketV2 ticks                 WS marks + REST
+  option chain, VIX, futures             perps: BTC / ETH / XAUT
+          │                                     │
+          └──────────────┬──────────────────────┘
+                         ▼
+                 MarketSnapshot                    ← one shared observation
+                         │
+        ┌────────────┬───┴────┬─────────────┬────────────┐
+        ▼            ▼        ▼             ▼            ▼
+     greeks      volume_oi   vwap        ict/smc      vision       ← lenses
+   (rejected)   (survives)  (unmeasured)  (todo)   (weight 0)        vote, never
+        └────────────┴────────┴─────────────┴────────────┘          read each other
+                         ▼
+                    Aggregator            weighted consensus; SHADOW lenses are
+                         │                heard and journaled but move no capital
+                         ▼
+              journal EVERY decision      including the ones voted down —
+                         │                attribution needs the control group
+                         ▼
+                 sentinel_client          the brain tier's ONLY route to an order
+                         │  signed intent
+                         ▼
+        ┌────────────────────────────────┐
+        │  SENTINEL  (VPS, static IP)    │  the only process holding order
+        │  AngelBroker + GTT OCO         │  credentials. Dead-man's switch
+        │  dead-man's switch             │  flattens if the brain goes dark.
+        └────────────────────────────────┘
 ```
 
-## Strategy: Price-action S/R retest (ETH-only)
+**The tier split is structural, not a convention.** Angel requires a whitelisted
+static IP for order placement and for nothing else — market data reads from
+anywhere. So the machine doing the thinking physically cannot place an order,
+holds no order credentials, and there is a test asserting it imports no
+order-placing symbol.
 
-1. **Trend filter**: only trade in the direction of the 24h moving average.
-2. **Levels**: enter only near the 4h range high/low; skip mid-range.
-3. **Aggression**: require a strong reversal candle (body ≥ 1.3× average, wick ≤ 45%).
-4. **Volatility filter**: skip if 24h realized vol > 34%.
-5. **Risk**: ETH 0.7% SL / 4.9% TP (1:7 R:R).
-6. **Exit regime**: pure SL/TP bracket — full close on stop or target (no trail).
+### Lens mortality
 
-| Parameter | Value |
-|---|---|
-| Asset | ETHUSD |
-| S/R lookback | 4h |
-| Trend lookback | 24h |
-| Stop loss ETH | -0.7% |
-| Target ETH | +4.9% |
-| Leverage | 15× |
-| Capital per trade | Fixed Rs 50,000 INR |
-| Vol filter | 24h realized vol ≤ 34% |
-| Max hold | 4h |
-| Daily kill | -5% of base equity |
+A lens is not a strategy; it is one perspective on a shared snapshot. Lenses
+have a measured lifecycle:
 
-Backtest validation (`delta_exchange/backtest_eth_live_config.py`,
-April–July 2026, fixed Rs 50k notional per trade, 15× leverage,
-vol filter ≤ 34%, `wick_touch` retest, **5 bps/side fee, 2 bps slippage**):
-- **ETHUSD**: 17 trades, **47.1% WR**, **+Rs 21,995 net**, **MaxDD Rs 8,656 (17.3%)**.
+```
+SHADOW ──> PROBATION ──> ACTIVE
+             ^              │
+             └── SUSPENDED <┘ ──> RETIRED
+```
 
-> ⚠️ The previous 82.4% / +Rs 39,708 number was from an optimistic backtest
-> that ignored fees, ignored exit slippage, and allowed entries on every minute.
-> The live bot now evaluates entries every minute (the strategy is 1m-based),
-> so the corrected numbers above are the realistic projection.
-
-Production dials are hardcoded in `core/risk_management.py` and
-`strategies/price_action_sr.py` (not `.env`) so every change is tracked in git.
+Scored on `E[pnl | voted FOR] − E[pnl | voted AGAINST]` in rupees. Minimum 30
+closed trades before a weight moves, rolling-window refit, frozen during market
+hours, and demotion deliberately faster than promotion. A lens that cannot read
+the snapshot is *absent*, not neutral — ten consecutive errors bench it even
+while profitable.
 
 ## Repo layout
 
 ```
-├── api/                       FastAPI app
-│   ├── server.py              Auth, health, /ws/crypto, lifespan
-│   └── routes_crypto.py       /api/crypto/* surfaces (signals, snapshot, kill)
-├── core/
-│   ├── bot_runner.py          APScheduler host (minimal stub)
-│   ├── brokers/
-│   │   └── delta_crypto.py    HMAC-signed REST + WS-first reads
-│   ├── execution/
-│   │   └── crypto_runner.py   Tick loop, entry/exit, kill switch, shadow trades
-│   ├── ws/
-│   │   └── delta_stream.py    Persistent Delta WebSocket client (ETH-only)
-│   ├── risk_management.py     Production dials (LEVERAGE, fixed capital, gates)
-│   ├── mongo.py               Mongo connection + collections
-│   ├── ipc.py                 NSE market-holiday helper (used by collectors)
-│   └── utils.py               Date/timezone helpers
-├── strategies/
-│   ├── crypto_base.py         CryptoStrategy base class
-│   └── price_action_sr.py     price-action S/R production dials
-├── scripts/
-│   └── collect_option_snapshots.py    NSE 5-min OI snapshot collector
-├── data/
-│   └── angel_fetcher.py       Angel One SmartAPI helper (used by collectors)
-├── delta_exchange/            Backtesting playground (CSVs + scripts)
-├── frontend/                  Next.js dashboard (Vercel)
-└── docker-compose.yml         api + 4 NSE collectors (gated behind 'nse' profile)
+core/
+  chart/            venue-neutral price-action: ATR-relative levels, liquidity
+                    sweeps, setups, risk sizing, OHLC cache, chart rendering
+  brokers/          delta_crypto.py — HMAC REST + WS-first reads
+  execution/        crypto_runner.py, sentinel_client.py
+  ws/               delta_stream.py
+  risk_management.py, sr_levels.py, mongo.py
+nse/
+  snapshot.py       the shared observation every lens reads
+  lenses/           greeks · volume_oi · vwap · vision  (+ base contract)
+  aggregator.py     weighted-consensus vote and the decision journal
+  brain.py          per-lens attribution, weights, lifecycle FSM
+  ws/               angel_stream.py — SmartWebSocketV2 feed
+  broker/           angel_broker.py — orders + GTT OCO brackets
+  backtest/         replay · lens_harness · options_harness · costs · loaders
+  quant/            black_scholes · expiry_calendar · volume_profile ·
+                    spread_study
+sentinel/           the VPS execution service + signed intent protocol
+api/                FastAPI: REST, /ws/crypto, /ws/nse/chain
+frontend/           Next.js dashboard (Vercel)
+scripts/            option-chain collectors
+docs/               RESEARCH_LEARNINGS.md — read this first
 ```
 
 ## Running
 
-**Trade live (production):**
 ```bash
-docker compose up -d              # crypto api only
+docker compose up -d                  # api only
+docker compose --profile nse up -d    # + the four option-chain collectors
+./deploy.sh                           # deploy
 ```
 
-**With NSE option-chain collectors:**
+The sentinel runs separately, on the static-IP VPS:
+
 ```bash
-docker compose --profile nse up -d
+uvicorn sentinel.main:app --host 0.0.0.0 --port 8090
 ```
 
-**Deploy manually:**
-```bash
-./deploy.sh
-```
+Order placement is **off by default** (`SENTINEL_LIVE_ORDERS=0`) so a fresh
+deploy cannot trade on a config nobody has reviewed.
 
-## Environment variables
+## Environment
 
-Create a `.env` file in the project root. Required:
+`.env` holds **secrets only**. Production dials (leverage, capital, stops, lens
+lifecycle thresholds) are hardcoded in `core/risk_management.py` and
+`nse/config.py` so every change to risk lands in a diff.
 
 | Variable | Purpose |
 |---|---|
-| `DELTA_API_KEY` / `DELTA_API_SECRET` | Delta India REST/WS HMAC auth |
-| `MONGODB_URL` / `MONGODB_DB_NAME` | MongoDB Atlas mirror |
-| `DASHBOARD_SECRET` / `DASHBOARD_USER` / `DASHBOARD_PASS` | JWT auth |
-| `ENABLE_CRYPTO_RUNNER` | `true` to start the bot |
-| `CRYPTO_TRADING_MODE` | `live` or `paper` |
+| `ANGEL_API_KEY` / `ANGEL_CLIENT_ID` / `ANGEL_PASSWORD` / `ANGEL_TOTP_TOKEN` | Angel One SmartAPI. Login is fully scriptable — no manual morning step |
+| `DELTA_API_KEY` / `DELTA_API_SECRET` | Delta India |
+| `MONGODB_URL` / `MONGODB_DB_NAME` | Atlas |
+| `DASHBOARD_SECRET` / `DASHBOARD_USER` / `DASHBOARD_PASS` | Dashboard JWT |
+| `SENTINEL_SECRET` | ≥32 chars, shared brain↔sentinel. Not the Angel key |
+| `SENTINEL_LIVE_ORDERS` | `1` to arm order placement |
+| `ENABLE_CRYPTO_RUNNER` / `ENABLE_NSE_RUNNER` | Both `false` |
 
-Production dials (leverage, capital, SL/TP, vol filter) are **hardcoded in code**,
-not in `.env`.
+`api/auth.py` reads `DASHBOARD_SECRET` at **import** time — the app needs `.env`
+in its environment before import, or it silently validates tokens against the
+placeholder secret and every WebSocket closes with a 1008.
 
 ## Dashboard
 
-Login at `/login`. The dashboard shows:
-- ETHUSD live signal radar (spot, 4h range, trend, state, SL/TP, 24h vol)
-- Warmup progress bar until 1,440 one-minute candles are collected
-- Live ETH chart with S/R zones
-- Portfolio: fixed Rs 50k budget badge, day P&L, open positions
-- Manual kill switch
+Live option chain in the classic calls / strike / puts layout — ITM shading,
+mirrored OI bars, PCR, max pain, VIX — pushed over a diffed WebSocket at a
+**median 191 ms**, against the 3 s poll it replaced. Greeks are computed from
+the current mark, never read from storage, and grey out inside 2 DTE where
+analytic values run up to 100% wrong.
 
-## Security
+## Safety
 
-- Live money is on the line in `live` mode.
-- `.env` is git-ignored and never committed.
-- Manual kill switch closes positions and halts new entries.
-- Daily-loss kill at -5% of base equity.
+- Nothing trades. Both runners are disabled and no strategy is registered.
+- The brain tier cannot place an order — enforced by a test, not a convention.
+- Exchange-side GTT OCO brackets survive the process dying; the dead-man's
+  switch covers the case they cannot, and latches until cleared by hand.
+- Daily-loss kill switch, plus a manual kill on the dashboard.
+- `.env` is git-ignored.
