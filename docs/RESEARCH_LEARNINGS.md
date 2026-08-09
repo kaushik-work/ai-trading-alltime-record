@@ -498,6 +498,79 @@ deliberately lowered to 1, which converts it into a single-lens system that
 happens to journal four opinions. That is a capital decision, not a config
 tidy-up, and it is left to explicit review.
 
+### 3.15 A rejected lens is not secretly a good filter
+
+The obvious way to give a measured-negative lens a job is to stop asking it
+*which way* and start asking it *whether* — let it gate the good lens instead of
+voting alongside it. Averaging cannot express that, so it was worth a real test:
+**18 gates**, each scored on the subset it admits, against two nulls — the
+ungated baseline, and **a random subset of the same size**. The second null is
+the one that matters. Any filter admitting fewer, higher-conviction bars shows a
+higher mean; the question is whether it beats coin-flipping its way to the same
+sample size.
+
+| gate | TRAIN | boot p | VALIDATE | boot p |
+|---|---|---|---|---|
+| `ict_smc` flipped-confirms | **+4.82** | **0.0010** | +0.55 | 0.7478 |
+| `vwap` flipped-confirms | +2.93 | 0.0168 | +1.01 | 0.7097 |
+| no lens contradicts | +2.36 | 0.0395 | +2.47 | 0.0703 |
+| **own confidence, top third** | **+2.42** | 0.1472 | **+3.87** | **0.0125** |
+
+`ict_smc` — the *worst* lens as a voter — looked like the best gate in the set at
+bootstrap p=0.0010, and **evaporated to +0.55 bps (p=0.75) on VALIDATE**. So did
+`vwap`. A lens with no measured edge does not secretly know when the good lens is
+wrong; it only looked that way on the split the rule was chosen from.
+
+The one rule that survived is the least interesting and the most robust: **trade
+only `volume_oi`'s top confidence tercile** (cut 0.414). Positive in both splits,
+signs agreeing, on 888 and 513 observations, and it is the lens's *own*
+confidence — no foreign lens, no fitted interaction, one parameter. It does not
+clear Bonferroni across 18 gates (p<0.00278), so it ships as a PROBATION-grade
+rule to be re-measured live, not as an established fact.
+
+**Selection criterion, disclosed:** picking by raw edge chose `ATR high tercile`
+(+8.76 bps) whose VALIDATE sample was **n=81** — the TRAIN-fitted ATR threshold
+kept 11% of TRAIN but only 6% of VALIDATE. Rather than quietly re-pick by a
+better criterion and present one clean shot, all 18 gates were then scored on
+VALIDATE and the whole table published. A criterion changed after seeing results
+is not a criterion.
+
+### 3.16 Deliberation and the journal did not beat trading fewer bars
+
+The council was built in four arms, each adding exactly one mechanism, all four
+driven from byte-identical inputs:
+
+| arm | TRAIN | VALIDATE | n (VALID) | vs its parent |
+|---|---|---|---|---|
+| A lead only | +1.66 | +1.49 | 1380 | — |
+| B + conviction gate | +2.60 | **+3.70** | 503 | **p=0.0203 SELECTS** |
+| C + deliberation | +2.43 | +4.14 | 450 | p=0.2125 |
+| D + journal | +2.61 | **+5.01** | 332 | p=0.1970 |
+
+Read the VALIDATE column alone and every mechanism pays, ending at +5.01 bps —
+**3.4× the ungated baseline**. That reading is wrong, and the way it is wrong is
+the point of this entry: *each arm also trades fewer bars.* Every arm is a strict
+subset of the one above it, so the parent is the exact null, and against a random
+subset of its parent of the same size **only the conviction gate clears**.
+Deliberation's +0.44 bps is what dropping 53 trades at random gives you; the
+journal's +0.86 is what dropping 118 gives you.
+
+Neither is *harmful* — and with n falling to 332, this is low power, so absence
+of evidence is weak evidence of absence. But neither has earned the right to move
+capital.
+
+**Disposition:** `COUNCIL_DELIBERATION_BINDING = False`. Round 1 still runs, is
+still journaled, and still renders the transcript the operator reads on the left
+panel — the lenses visibly argue — but the traded decision comes from the
+independent round plus the conviction gate. This is the SHADOW rule that governs
+*lenses* (§3.11) applied to a *mechanism*: present and auditable from day one,
+load-bearing only once live attribution earns it. Flip the flag when
+deliberation beats its parent on live closed trades.
+
+The end-of-day journal enforces its own no-lookahead rule in the loader
+(`for_session` is a strict `$lt`, and `ReplayJournals` mirrors it), because a
+session that can read its own summary is §1.2 wearing a different hat.
+
 ---
 
 ## 4. Data facts

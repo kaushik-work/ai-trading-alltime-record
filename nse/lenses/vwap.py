@@ -42,6 +42,16 @@ import numpy as np
 import pandas as pd
 
 from nse.lenses.base import BaseLens, Direction, LensVerdict, abstain
+
+#: Measured correlation with volume_oi's signed confidence, on TRAIN
+#: (RESEARCH_LEARNINGS section 3.12). Strongly negative: this lens and
+#: volume_oi's volume-profile component are largely the same read with opposite
+#: sign conventions, agreeing on only 18.4% of decisions.
+CORRELATION_WITH_VOLUME_OI: float = -0.769
+
+#: Above this magnitude, treat a peer as measuring the same thing we are and
+#: stand down rather than let the council hear one opinion twice.
+DUPLICATE_CORRELATION: float = 0.6
 from nse.snapshot import MarketSnapshot
 
 logger = logging.getLogger(__name__)
@@ -114,3 +124,29 @@ class VWAPLens(BaseLens):
                 "spot": round(snap.spot, 2),
             },
         )
+
+    def _deliberate(self, snap: MarketSnapshot, own: LensVerdict,
+                    peers: dict, journal) -> LensVerdict:
+        """Stand down when volume_oi has already read this.
+
+        This lens measured -0.769 correlated with volume_oi and agrees with it
+        on 18.4% of decisions: it is largely volume_oi's volume-profile
+        component with the opposite sign convention, not a second opinion. When
+        both speak, the council would be hearing one read twice — and because
+        the correlation is NEGATIVE, hearing it twice mostly means hearing it
+        argue with itself.
+
+        Deferring is the honest move, and it belongs here rather than in the
+        council: this lens is the one that knows what it measures. Note the
+        deferral does NOT cost it its track record — round 0 still stands and
+        attribution still scores it, so if this lens later proves the better
+        read of the two, the brain will see that and can promote it.
+        """
+        vo = peers.get("volume_oi")
+        if vo is not None and vo.speaks and vo.direction != Direction.NEUTRAL:
+            if abs(CORRELATION_WITH_VOLUME_OI) >= DUPLICATE_CORRELATION:
+                return own.defer(
+                    f"volume_oi already read this ({vo.direction.label} "
+                    f"{vo.confidence:.2f}); at {CORRELATION_WITH_VOLUME_OI:+.2f} "
+                    f"correlation my read is not independent of it")
+        return own

@@ -155,6 +155,49 @@ class VolumeOILens(BaseLens):
             },
         )
 
+    def _deliberate(self, snap: MarketSnapshot, own: LensVerdict,
+                    peers: dict, journal) -> LensVerdict:
+        """Listen, but only to things that should make this lens LESS sure.
+
+        This is the only lens with a measured edge, so it leads. That makes the
+        asymmetry here deliberate: a peer can lower its confidence and can never
+        raise it.
+
+        The reason is measured, not stylistic. Using the rejected lenses as
+        CONFIRMING filters looked outstanding on TRAIN — ict_smc's agreement
+        marked bars worth +4.82 bps against a +1.66 baseline, bootstrap
+        p=0.0010 — and collapsed to +0.55 bps (p=0.75) on VALIDATE
+        (RESEARCH_LEARNINGS section 3.15). Confirmation from a lens with no
+        measured edge is not evidence; it only looked like evidence.
+
+        Objection is treated differently from confirmation because the two fail
+        differently. Being wrongly talked out of a trade costs one trade's
+        expectancy. Being wrongly talked into one costs a position.
+        """
+        cut, notes = 1.0, []
+
+        # A structural peer sitting on the opposite side is a reason for pause.
+        ict = peers.get("ict_smc")
+        if (ict is not None and ict.speaks and ict.direction != Direction.NEUTRAL
+                and ict.direction != own.direction and ict.confidence >= 0.30):
+            cut *= 0.75
+            notes.append(f"ict_smc reads {ict.direction.label} against me "
+                         f"at {ict.confidence:.2f}")
+
+        # Yesterday. The journal RECORDS; this lens decides what it means — and
+        # what it means is caution, never extra size.
+        if journal is not None and journal.struggled(self.name):
+            day = journal.lens(self.name)
+            cut *= 0.75
+            notes.append(f"I lost {day.mean_outcome_bps:+.2f}bps on "
+                         f"{journal.session} ({journal.atr_regime}-ATR "
+                         f"{journal.trend})")
+
+        if cut >= 1.0:
+            return own
+        return own.revise(own.direction, own.confidence * cut,
+                          "; ".join(notes) + " — holding direction, cutting size")
+
 
 # ── components ───────────────────────────────────────────────────────────────
 def _wall_position(calls: pd.DataFrame, puts: pd.DataFrame,

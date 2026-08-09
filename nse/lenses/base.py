@@ -1,13 +1,28 @@
 """The lens contract: what a specialist reads, and what it is allowed to say.
 
-Every lens implements one method:
+A lens is polled in TWO rounds, and the split between them is the design:
 
-    evaluate(snapshot) -> LensVerdict
+    ROUND 0   evaluate(snapshot) -> LensVerdict
+              Independent. Cannot see any other lens. This is the round that
+              ATTRIBUTION SCORES.
 
-That signature is the whole point. A lens receives the shared observation and
-returns its own reading — it cannot see another lens's verdict, cannot fetch
-its own data, and cannot place an order. Independence is structural, not a
-convention someone has to remember.
+    ROUND 1   deliberate(snapshot, peers, journal) -> LensVerdict
+              Sees every peer's round-0 reading and yesterday's journal, and
+              may revise its own. This is where the lenses actually talk.
+
+WHY BOTH ROUNDS EXIST INSTEAD OF JUST THE SECOND
+
+Deliberation is what the operator asked for and it is the more powerful
+mechanism — but a purely deliberative council cannot be measured. Once lens B
+has heard lens A, B's opinion is partly A's, and "what is B worth?" stops having
+an answer. The brain's whole lifecycle — promote, suspend, retire — runs on
+per-lens attribution, so a council with no independent round is a council whose
+members can never be fired.
+
+Keeping round 0 independent and journaling it separately preserves attribution
+intact AND makes the interesting question measurable: does the post-discussion
+answer beat the pre-discussion one? That is a number, checked in
+`nse/council.py`, not an assumption.
 
 ABSTAIN is a first-class answer and is NOT the same as NEUTRAL:
 
@@ -17,6 +32,15 @@ ABSTAIN is a first-class answer and is NOT the same as NEUTRAL:
 Conflating them would quietly poison the brain: a lens that crashes on every
 expiry-day snapshot would otherwise accumulate a track record of NEUTRAL votes
 on exactly the sessions it never actually saw.
+
+DEFER is the third answer, and it only exists in round 1:
+
+    DEFER     "another lens already read this better than I can."
+
+A lens that knows it duplicates a peer says so instead of adding a second vote
+for one opinion. `vwap` does exactly this: it measured -0.769 correlated with
+`volume_oi` (RESEARCH_LEARNINGS section 3.12), so it stands down rather than
+letting the council mistake an echo for a confirmation.
 """
 
 from __future__ import annotations
@@ -68,6 +92,49 @@ class LensVerdict:
     error: Optional[str] = None
     ts: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
 
+    # ── set only in round 1, by deliberation ─────────────────────────────────
+    #: True when this lens stood down because a peer covers the same ground.
+    #: A deferral is NOT an abstention: the lens read the snapshot fine, so it
+    #: still counts for attribution on its round-0 opinion. It simply declines
+    #: to have that opinion counted twice by the council.
+    deferred: bool = False
+    #: What this verdict looked like before the lens heard its peers, as
+    #: (direction, confidence). None means the lens held its ground.
+    revised_from: Optional[tuple] = None
+    #: Why it moved. Reaches the dashboard's left panel verbatim.
+    revision_note: str = ""
+
+    @property
+    def revised(self) -> bool:
+        return self.revised_from is not None
+
+    @property
+    def speaks(self) -> bool:
+        """Does this verdict carry an opinion the council should hear?"""
+        return not self.abstained and not self.deferred
+
+    def revise(self, direction: Direction, confidence: float,
+               note: str) -> "LensVerdict":
+        """Return a revised copy, remembering what it used to say.
+
+        The original reading is preserved in `revised_from` rather than
+        overwritten, because a lens that changed its mind after hearing a peer
+        is exactly the event worth auditing after a bad trade.
+        """
+        from dataclasses import replace
+        return replace(
+            self,
+            direction=direction,
+            confidence=max(0.0, min(1.0, float(confidence))),
+            revised_from=(int(self.direction), round(self.confidence, 6)),
+            revision_note=note,
+        )
+
+    def defer(self, note: str) -> "LensVerdict":
+        """Stand down in favour of a peer covering the same ground."""
+        from dataclasses import replace
+        return replace(self, deferred=True, revision_note=note)
+
     def __post_init__(self):
         # Clamp rather than raise. A lens returning confidence 5.0 is a bug,
         # but killing the tick mid-session is worse than voting at 1.0 and
@@ -97,10 +164,10 @@ class LensVerdict:
     def signed_confidence(self) -> float:
         """Direction * confidence — the quantity the aggregator actually sums.
 
-        Always 0.0 for an abstention, so an unreadable snapshot cannot tug the
-        vote in either direction.
+        Always 0.0 for an abstention or a deferral, so neither an unreadable
+        snapshot nor a lens that deliberately stood down can tug the vote.
         """
-        if self.abstained:
+        if self.abstained or self.deferred:
             return 0.0
         return float(self.direction) * self.confidence
 
@@ -122,6 +189,9 @@ class LensVerdict:
             "abstained": self.abstained,
             "error": self.error,
             "ts": self.ts.isoformat(),
+            "deferred": self.deferred,
+            "revised_from": list(self.revised_from) if self.revised_from else None,
+            "revision_note": self.revision_note,
         }
 
 
@@ -139,11 +209,14 @@ def abstain(lens: str, why: str, error: Optional[str] = None) -> LensVerdict:
 
 @runtime_checkable
 class Lens(Protocol):
-    """Structural type for anything the aggregator will poll."""
+    """Structural type for anything the council will poll."""
 
     name: str
 
     def evaluate(self, snap: MarketSnapshot) -> LensVerdict: ...
+
+    def deliberate(self, snap: MarketSnapshot, own: LensVerdict,
+                   peers: dict, journal) -> LensVerdict: ...
 
 
 class BaseLens(ABC):
@@ -168,6 +241,59 @@ class BaseLens(ABC):
     @abstractmethod
     def _evaluate(self, snap: MarketSnapshot) -> LensVerdict:
         """Read the snapshot. Raise freely — safe_evaluate contains it."""
+
+    # ── round 1: the lens hears its peers ────────────────────────────────────
+    def _deliberate(self, snap: MarketSnapshot, own: LensVerdict,
+                    peers: dict, journal) -> LensVerdict:
+        """React to what the other lenses said. Default: hold your position.
+
+        `peers` maps lens name -> that lens's ROUND-0 verdict, excluding this
+        one. `journal` is yesterday's `DayJournal` (or None on the first
+        session ever, and on any day the previous journal is missing).
+
+        Override this to encode how YOUR specialism should respond to another's
+        — that is the per-lens brain the operator asked for, and it belongs in
+        the lens that owns the domain knowledge, not in a central rulebook.
+
+        Three moves are available, and holding is a real answer:
+
+            own                      hold — nothing a peer said changes my read
+            own.revise(d, c, note)   change direction and/or confidence
+            own.defer(note)          stand down; a peer covers this ground
+
+        HARD RULE: read `peers` and revise your own verdict. Do not reach into
+        the snapshot for anything you did not already look at in round 0. Round
+        1 is for reconciling opinions, not for a second bite at the data — a
+        lens that behaves differently across the two rounds for reasons
+        unrelated to its peers makes the "did talking help?" measurement
+        meaningless.
+        """
+        return own
+
+    def safe_deliberate(self, snap: MarketSnapshot, own: LensVerdict,
+                        peers: dict, journal=None) -> LensVerdict:
+        """Contained round-1 call. Falls back to the round-0 verdict.
+
+        A lens that crashes while deliberating keeps the opinion it already
+        formed rather than dropping out — its independent read was valid and
+        losing it would silently shrink the council.
+        """
+        if own.abstained:
+            return own
+        try:
+            revised = self._deliberate(snap, own, peers, journal)
+        except Exception as e:
+            logger.exception("lens %s raised while deliberating: %s", self.name, e)
+            return own
+        if revised is None or not isinstance(revised, LensVerdict):
+            logger.error("lens %s returned %r from _deliberate — holding round 0",
+                         self.name, revised)
+            return own
+        if revised.lens != self.name:
+            logger.error("lens %s deliberated into a verdict labelled %r",
+                         self.name, revised.lens)
+            object.__setattr__(revised, "lens", self.name)
+        return revised
 
     def safe_evaluate(self, snap: MarketSnapshot) -> LensVerdict:
         try:
