@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import NiftyChart from "./components/NiftyChart";
 import OptionChain from "./components/OptionChain";
 import { Banner, Card, CardHead, Empty, Pill, Stat } from "./components/ui";
 import { API, authHeaders, getToken, inr } from "./lib/format";
@@ -102,6 +103,8 @@ export default function NseView() {
         <Stat label="Utilised" value={inr(state?.broker_rms?.utiliseddebits)} loading={!state}
               footnote="Live Angel One RMS" />
       </div>
+
+      <NiftyChart symbol="NIFTY" />
 
       <OptionChain />
 

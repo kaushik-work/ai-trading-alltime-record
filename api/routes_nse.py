@@ -385,3 +385,106 @@ def nse_test_buy_ce(user: dict = Depends(_get_current_user)):
         "net": rms.get("net"),
         "order_response": result,
     }
+
+
+# ── chart + council transcript ───────────────────────────────────────────────
+# The bot does NOT read these endpoints. The vision lens renders its own chart
+# server-side (core/chart/render.py) into a PNG, which is what makes it
+# deterministic and replayable — a screen-scraped chart could never be
+# backtested. These routes exist for the human watching the session.
+
+@router.get("/candles")
+def nse_candles(symbol: str = Query("NIFTY"),
+                interval: str = Query("5m"),
+                user: dict = Depends(_get_current_user)):
+    """Index candles for the chart, newest last.
+
+    Live spot is overlaid separately by the client from /status, so a candle
+    that has not closed yet is never redrawn as if it had. That distinction is
+    the frontend mirror of the fill-at-close rule (RESEARCH_LEARNINGS 1.2):
+    the last bar on screen is still forming and must not be read as settled.
+    """
+    try:
+        cache = OptionChainCache.get()
+        df = cache.fetcher.fetch_intraday_df(symbol, interval)
+    except Exception as exc:
+        logger.warning("candles: fetch failed for %s %s: %s", symbol, interval, exc)
+        return {"symbol": symbol, "interval": interval, "candles": [],
+                "error": str(exc)}
+
+    if df is None or getattr(df, "empty", True):
+        return {"symbol": symbol, "interval": interval, "candles": [],
+                "error": "no intraday bars available"}
+
+    out = []
+    for _, r in df.iterrows():
+        ts = r.get("datetime") or r.get("timestamp")
+        if ts is None:
+            continue
+        try:
+            epoch = int(ts.timestamp())
+        except AttributeError:
+            continue
+        out.append({"time": epoch,
+                    "open": float(r["open"]), "high": float(r["high"]),
+                    "low": float(r["low"]), "close": float(r["close"]),
+                    "volume": float(r.get("volume") or 0)})
+    return {"symbol": symbol, "interval": interval, "candles": out,
+            "count": len(out)}
+
+
+@router.get("/council")
+def nse_council(limit: int = Query(40, ge=1, le=200),
+                user: dict = Depends(_get_current_user)):
+    """The council's recent decisions, executed and rejected alike.
+
+    Rejected decisions are returned too, and that is the point: they are the
+    control group attribution needs, and on screen they are the more
+    informative half — a session where the council stood aside 12 times out of
+    13 should LOOK like that, not like an idle system.
+    """
+    try:
+        from core.mongo import get_db
+        from nse.council import COUNCIL_COLLECTION
+        db = get_db()
+        if db is None:
+            return {"decisions": [], "error": "mongo unavailable"}
+        rows = list(db[COUNCIL_COLLECTION].find({}, {"_id": 0})
+                    .sort("ts", -1).limit(limit))
+        return {"decisions": rows, "count": len(rows)}
+    except Exception as exc:
+        logger.warning("council feed failed: %s", exc)
+        return {"decisions": [], "error": str(exc)}
+
+
+@router.get("/lenses")
+def nse_lenses(user: dict = Depends(_get_current_user)):
+    """Every lens, its brain state, and how close it is to dying.
+
+    Mortality is a first-class on-screen fact: a lens that is one bad review
+    from suspension should say so before it happens, not after.
+    """
+    from nse.brain import load as load_brain
+    from nse.lenses import ROSTER
+    from nse.lenses.bootstrap import MEASURED
+
+    out = []
+    for cls in ROSTER:
+        m = MEASURED.get(cls.name)
+        b = load_brain(cls.name,
+                       backtestable=(m.train_bps is not None) if m else True,
+                       bootstrap_weight=m.bootstrap_weight if m else 0.0)
+        out.append({
+            "lens": cls.name,
+            "lifecycle": b.lifecycle.value,
+            "weight": round(b.effective_weight(), 4),
+            "health": b.health,
+            "is_dying": b.is_dying,
+            "n_closed": b.n_closed,
+            "trades_until_review": b.trades_until_review,
+            "abstain_rate": round(b.abstain_rate, 4),
+            "train_bps": m.train_bps if m else None,
+            "validate_bps": m.validate_bps if m else None,
+            "note": (m.note if m else ""),
+        })
+    return {"lenses": out, "count": len(out)}
