@@ -122,6 +122,51 @@ MEASURED: dict[str, Measurement] = {
               "hold in 2024, so the lens is measuring the constant, not the "
               "skew."),
     ),
+    "smile": Measurement(
+        lens="smile",
+        train_bps=+0.53, train_p=0.6427,
+        validate_bps=+0.18, validate_p=0.8707,
+        lifecycle=Lifecycle.SHADOW,
+        bootstrap_weight=0.0,
+        note=("IV curvature (butterfly), orthogonal to the greeks lens's tilt "
+              "and uncorrelated with the whole roster (|r| <= 0.10). Signs "
+              "agree across splits but both edges are ~zero on n=815/743. "
+              "FIRST MEASUREMENT WAS INVALID: BUTTERFLY_NEUTRAL was hardcoded "
+              "0.0 when the TRAIN median is +0.0210, so the lens called wings "
+              "rich 97.7% of the time and produced n=34 across three years. "
+              "Same bug greeks fixed with SKEW_NEUTRAL. Also note long=2.5% on "
+              "TRAIN: the tilt is nearly always negative, so this may still be "
+              "measuring its own constant rather than the surface."),
+    ),
+    "momentum": Measurement(
+        lens="momentum",
+        train_bps=+1.38, train_p=0.4834,
+        validate_bps=-1.21, validate_p=0.7712,
+        lifecycle=Lifecycle.SHADOW,
+        bootstrap_weight=0.0,
+        note=("range breakout in ATR. No edge, signs disagree, on a real "
+              "sample (207 directional TRAIN verdicts). Its main value is a "
+              "CLEAN NEGATIVE: momentum is adjacent to inverting vwap's "
+              "significantly-negative mean-reversion result, and it does not "
+              "even show positive in-sample. That closes the "
+              "'trend was the right convention' hypothesis rather than leaving "
+              "it as an untested temptation."),
+    ),
+    "liquidity": Measurement(
+        lens="liquidity",
+        train_bps=None, train_p=None,
+        validate_bps=None, validate_p=None,
+        lifecycle=Lifecycle.SHADOW,
+        bootstrap_weight=0.0,
+        note=("CONTEXT lens — emits NEUTRAL by design, so the directional "
+              "harness scores it zero and that zero means nothing. Measured "
+              "instead as a gate on the lead lens, and the splits CONTRADICT: "
+              "TRAIN says the middle half is best (+2.05) while VALIDATE says "
+              "the top quartile is (+3.27, middle +1.34). Its own score "
+              "distribution also drifted (TRAIN top quartile >0.28 vs VALIDATE "
+              ">0.51), so even percentile thresholds fitted on TRAIN do not "
+              "transfer. No usable signal on this archive."),
+    ),
     "vision": Measurement(
         lens="vision",
         train_bps=None, train_p=None,

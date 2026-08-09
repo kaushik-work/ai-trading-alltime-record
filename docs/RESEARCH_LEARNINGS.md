@@ -571,6 +571,64 @@ The end-of-day journal enforces its own no-lookahead rule in the loader
 (`for_session` is a strict `$lt`, and `ReplayJournals` mirrors it), because a
 session that can read its own summary is §1.2 wearing a different hat.
 
+### 3.17 Roster expanded to 8 lenses: diversity achieved, edge not
+
+Three lenses were added on information no existing lens read — `smile` (IV
+curvature/butterfly), `momentum` (ATR range breakout), `liquidity` (`no_trade`
+density and volume concentration).
+
+| lens | TRAIN | VALIDATE | verdict |
+|---|---|---|---|
+| `smile` | +0.53 p=0.64 | +0.18 p=0.87 | no edge |
+| `momentum` | +1.38 p=0.48 | −1.21 p=0.77 | no edge |
+| `liquidity` | context lens | splits contradict | no signal |
+
+**The diversity is real.** `smile` and `momentum` correlate with the entire
+existing roster at |r| ≤ 0.29, and with each other at exactly 0.000 — genuinely
+independent readings, unlike `vwap`, which was a −0.769 echo of `volume_oi`.
+The architecture produces distinct opinions. Distinct opinions are not edge.
+
+**`momentum` is a valuable negative.** It is adjacent to inverting `vwap`'s
+significantly-negative mean-reversion result, and it does not show positive even
+in-sample. That closes the "trend was the right convention" hypothesis instead
+of leaving it as a standing temptation.
+
+#### The same calibration bug, twice, in two different lenses
+
+`smile`'s first measurement returned **n=34 directional verdicts across three
+years** and was not a measurement at all. `BUTTERFLY_NEUTRAL` was hardcoded to
+0.0 on the assumption that cheap wings means wings below ATM — but a normal
+equity smile has wings *above* ATM, and butterfly was positive in **97.7%** of
+TRAIN observations. The lens returned NEUTRAL almost always.
+
+That is precisely the bug `greeks` already hit and fixed with
+`SKEW_NEUTRAL = -0.2098` (rr_norm negative in 98.4% of observations, §3.5), in a
+file sitting next to it, with the fix documented. It was rebuilt anyway.
+
+`liquidity` failed the same way from the other direction: an absolute
+`CONCENTRATED_HHI = 0.25` against an archive whose p95 is 0.113, so breadth was
+pinned at 1.0 on every snapshot and 99.7% of the tape rated "liquid".
+
+**The rule, stated so a third lens does not pay for it: neutral is wherever the
+market actually sits, never zero, and it must be MEASURED before the pivot is
+chosen.** A normalised quantity being centred on zero is an assumption about the
+market, not a property of normalisation.
+
+Even after recalibrating `liquidity` to TRAIN percentiles the splits contradict
+each other — TRAIN favours the middle half (+2.05), VALIDATE the top quartile
+(+3.27) — and the lens's own score distribution drifted (TRAIN top quartile
+>0.28 vs VALIDATE >0.51). A percentile fitted on one period is still a constant
+in the next.
+
+#### Standing count
+
+**8 lenses built, 1 with a measured edge.** Adding lenses is cheap and the
+roster is designed to make it cheap — a new lens votes at weight 0 until
+attribution promotes it, so a bad idea costs a journal entry rather than money.
+But the cost of a *badly calibrated* lens is worse than zero: it produces a
+number that looks like a measurement and is not, which is how `smile` nearly
+entered the record as "tested, no edge" on n=34.
+
 ---
 
 ## 4. Data facts
