@@ -146,6 +146,76 @@ services:
     depends_on:
       - api
 
+  # ── EXECUTION SENTINEL (droplet only) ──────────────────────────────────────
+  # The ONLY service that talks to Angel's order API. It holds the credentials,
+  # the SEBI Algo-ID, and the dead-man's switch.
+  #
+  # NOT published to the host. `expose` makes it reachable on the compose
+  # network as http://sentinel:8090 and nowhere else. Publishing it with
+  # `ports:` would put an order API on the public internet behind nothing but a
+  # shared secret, on a droplet whose IP is whitelisted with the broker.
+  #
+  # SENTINEL_LIVE_ORDERS defaults to 0. It must be set to 1 deliberately, on the
+  # droplet, after the static IP is registered with Angel. A sentinel that
+  # starts hot on a fresh deploy trades on a config nobody reviewed.
+  sentinel:
+    build: .
+    profiles: ["council"]
+    command: >
+      python -m uvicorn sentinel.main:app --host 0.0.0.0 --port 8090
+    env_file: .env
+    environment:
+      SENTINEL_LIVE_ORDERS: "${SENTINEL_LIVE_ORDERS:-0}"
+      SENTINEL_DEADMAN_SEC: "${SENTINEL_DEADMAN_SEC:-30}"
+    expose:
+      - "8090"
+    volumes:
+      - ./.env:/app/.env
+      - app_logs:/app/logs
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8090/status',timeout=3).status==200 else 1)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  # ── THE COUNCIL (brain tier) ───────────────────────────────────────────────
+  # Eight lenses read the tape, deliberate, and emit signed intents. Reads
+  # market data directly from Angel; the only outbound TRADING path is the
+  # sentinel service above.
+  #
+  # brain_guard.py runs first and REFUSES TO START if this container can reach
+  # an order API. On the droplet that guard is the only remaining protection:
+  # the broker's IP whitelist covers this host, so unlike on a laptop, a
+  # mistaken import here really would place orders.
+  council:
+    build: .
+    profiles: ["council"]
+    command: >
+      sh -c '
+        python docker/brain_guard.py &&
+        python -m nse.execution.live_session --symbol ${COUNCIL_SYMBOL:-NIFTY} --every ${COUNCIL_EVERY:-60} ${COUNCIL_LIVE_FLAG:-}
+      '
+    env_file: .env
+    environment:
+      SENTINEL_URL: "http://sentinel:8090"
+      ENABLE_OPTIONS_RUNNER: "${ENABLE_OPTIONS_RUNNER:-false}"
+      # Never inherit the sentinel's arming flag. brain_guard fails the boot if
+      # this is 1, because its presence means the two services share an env file
+      # and the tier split is being kept by luck.
+      SENTINEL_LIVE_ORDERS: "0"
+    depends_on:
+      sentinel:
+        condition: service_healthy
+    volumes:
+      - ./.env:/app/.env
+      - app_data:/app/db
+      - app_logs:/app/logs
+      - app_journals:/app/journals
+    restart: unless-stopped
+
 # api handles crypto live trading via CryptoRunner.
 # collector captures historical option premium data for backtest realism.
 # nse-runner executes NSE synthetic-forward combos (live only).
