@@ -69,6 +69,23 @@ blind into a dead endpoint.
 and nowhere else. Publishing it would put an order API on the public internet
 behind one shared secret, on a host the broker trusts.
 
+## Preflight — run this first, every time
+
+```bash
+docker compose --profile council run --rm council   python docker/preflight.py --expect-ip <the IP you registered with Angel>
+```
+
+Exit 0 means ready. It checks, in order: the **egress IP Angel actually sees**
+against the one you registered, credentials, Mongo, sentinel reachability and
+latch state, the heartbeat-vs-deadman margin, the import boundary, which lenses
+carry weight, and whether a live snapshot builds.
+
+The IP check is first because a wrong one does not fail at deploy time — it
+fails as a rejected order at the moment a position needs to open or close, and
+reads in the logs like a broker problem. A droplet can egress from an address
+that is not the one in the control panel (floating IPs, NAT, VPC routing), so
+the address is observed from outside rather than read off a local interface.
+
 ## Going live, in order
 
 ```bash
