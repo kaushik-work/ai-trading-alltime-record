@@ -3,13 +3,17 @@
 Research and execution platform for **NSE index options** (Angel One) and
 **crypto perpetual futures** (Delta Exchange India).
 
-> **No strategy is live on either venue.** `_get_strategies()` returns `{}`,
-> `ENABLE_CRYPTO_RUNNER=false`, `ENABLE_NSE_RUNNER=false`. Every strategy was
-> deleted in `62f89c9` after measurement killed it. The execution layer, the
-> data collectors and the research harness are intact and working.
+> **NSE: the multi-lens council is LIVE and armed** on a whitelisted droplet —
+> NIFTY and SENSEX, one lens carrying weight, exits at the measured 60-minute
+> horizon. See [`docs/WORKFLOW.md`](docs/WORKFLOW.md).
+>
+> **Crypto: nothing trades.** `_get_strategies()` returns `{}` — every crypto
+> strategy was deleted in `62f89c9` once the declared-but-uncharged perp fee was
+> applied (BTC +23.89% → −8.21%). The council's bar-only lenses now read crypto
+> too, but none has earned a weight there, so it correctly refuses every entry.
 >
 > That is a deliberate state, not an outage. What this repo is good at is
-> **killing bad strategies cheaply**, and it has killed several.
+> **killing bad ideas cheaply**, and it has killed most of its own.
 
 ## The one idea
 
@@ -43,7 +47,7 @@ monitoring, and the bug behind every guard — in
 | Variance risk premium | Survives every split, but only in a **naked** structure that cannot be margined |
 | Liquidity sweeps (BTC/ETH 5m) | No edge — negative in all four cells, gross, before costs |
 
-### The lens roster: 8 built, 1 with a measured edge
+### The lens roster: 11 built, 1 with a measured edge
 
 390 NIFTY sessions, identical snapshots for every lens, TRAIN 2021–23 /
 VALIDATE 2024. TEST (2025–26) is **unspent**.
@@ -52,16 +56,19 @@ VALIDATE 2024. TEST (2025–26) is **unspent**.
 |---|---|---|---|---|
 | **`volume_oi`** | OI walls, volume profile, OI build | **+1.66** p=0.0012 | **+1.49** p=0.0527 | **PROBATION 0.50** |
 | `vwap` | session VWAP z-score | −2.31 p=0.0014 | −1.06 | SHADOW — and a −0.769 echo of `volume_oi` |
-| `ict_smc` | order blocks, FVG, sweeps | −4.25 p=0.0000 | −0.68 | SHADOW |
+| `ict_smc` | order blocks, FVG, sweeps | −1.41 p=0.0073 | −0.15 | SHADOW |
 | `greeks` | 25δ risk reversal (tilt) | −0.54 | −1.08 | SHADOW |
 | `smile` | IV curvature (butterfly) | +0.53 | +0.18 | SHADOW |
-| `momentum` | ATR range breakout | +1.38 | −1.21 | SHADOW |
+| `momentum` | ATR range breakout | −1.06 | −0.73 | SHADOW |
 | `liquidity` | `no_trade` density, volume HHI | context lens | splits contradict | SHADOW |
+| `composite_profile` | 7-day POC/VAH/VAL, naked POCs | −1.93 | −0.78 | SHADOW |
+| `gamma_exposure` | dealer GEX, gamma flip | — | — | **not measurable on ±10 strikes** |
+| `candle_flow` | wick rejection, effort vs result | built | unmeasured | SHADOW |
 | `vision` | renders the chart, asks a model | unmeasurable by replay | — | SHADOW, pinned 0 |
 
 Adding a lens is meant to be cheap — a new one votes at weight **0** until
 attribution promotes it, so a bad idea costs a journal entry rather than money.
-Seven lenses have cost exactly that.
+Ten lenses have cost exactly that.
 
 **What did *not* work, each properly tested:**
 
