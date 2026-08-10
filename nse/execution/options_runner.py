@@ -109,6 +109,8 @@ class OptionsRunner:
         self.paper = paper
         self.state = RunnerState()
         self._journal: Optional[DayJournal] = None
+        #: Set from the snapshots this runner actually sees.
+        self._source: str = "live"
 
     # ── session lifecycle ────────────────────────────────────────────────────
     def begin_session(self, session: date, symbol: str = "NIFTY") -> None:
@@ -152,6 +154,9 @@ class OptionsRunner:
             open_spot=self.state.first_spot, close_spot=self.state.last_spot,
             n_decisions=self.state.decisions, n_executed=self.state.executed,
             realised_pnl=realised_pnl,
+            # Tag replay-driven runs so they can never be read back as a live
+            # "yesterday". Paper mode over LIVE snapshots is still live data.
+            source=self._source,
             notes=f"paper={self.paper}; {self.state.summary()}")
         save_journal(j)
         logger.info("journal written:\n%s", j.summary())
@@ -164,6 +169,7 @@ class OptionsRunner:
             return None
 
         self.state.decisions += 1
+        self._source = getattr(snap, "source", "live")
         if self.state.first_spot is None:
             self.state.first_spot = snap.spot
         self.state.last_spot = snap.spot

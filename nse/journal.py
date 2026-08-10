@@ -87,6 +87,23 @@ class DayJournal:
     session: date
     symbol: str = "NIFTY"
 
+    #: "live" or "replay". Backtests and live trading share one Mongo
+    #: collection, and without this they contaminate each other: a paper run
+    #: over 2024 sessions wrote four journals into the production store, and the
+    #: live council on 2026-08-10 then read 2024-01-04 as "yesterday" — a
+    #: two-and-a-half-year-old backtest presented to a live deliberation as the
+    #: previous session.
+    #:
+    #: Benign that day only because those rows carried no measured outcomes, so
+    #: `struggled()` returned False. It would not stay benign: replay journals
+    #: DO carry outcomes once a harness records them, and a lens would then cut
+    #: its size today because of something that happened in a simulation of
+    #: January 2024.
+    #:
+    #: Reads filter on this. The tag is set from MarketSnapshot.source, which
+    #: already knows which path built the data.
+    source: str = "live"
+
     # Regime, coarse on purpose — see the module docstring.
     atr_regime: str = "unknown"        # low | mid | high
     iv_regime: str = "unknown"         # low | mid | high
@@ -124,6 +141,7 @@ class DayJournal:
     def to_doc(self) -> dict:
         return {
             "session": self.session.isoformat(), "symbol": self.symbol,
+            "source": self.source,
             "atr_regime": self.atr_regime, "iv_regime": self.iv_regime,
             "trend": self.trend, "open_spot": self.open_spot,
             "close_spot": self.close_spot,
@@ -139,6 +157,7 @@ class DayJournal:
         return cls(
             session=date.fromisoformat(d["session"]),
             symbol=d.get("symbol", "NIFTY"),
+            source=d.get("source", "live"),
             atr_regime=d.get("atr_regime", "unknown"),
             iv_regime=d.get("iv_regime", "unknown"),
             trend=d.get("trend", "unknown"),
@@ -179,7 +198,8 @@ def build(session: date, verdicts_by_lens: dict, *, symbol: str = "NIFTY",
           open_spot: Optional[float] = None, close_spot: Optional[float] = None,
           outcomes_by_lens: Optional[dict] = None,
           n_decisions: int = 0, n_executed: int = 0,
-          realised_pnl: Optional[float] = None, notes: str = "") -> DayJournal:
+          realised_pnl: Optional[float] = None, notes: str = "",
+          source: str = "live") -> DayJournal:
     """Assemble a journal from a session's verdicts.
 
     `verdicts_by_lens` maps lens name -> the session's list of LensVerdict.
@@ -197,6 +217,7 @@ def build(session: date, verdicts_by_lens: dict, *, symbol: str = "NIFTY",
         atr_regime=_tercile_label(atr_pct, *atr_terciles),
         iv_regime=_tercile_label(atm_iv, *iv_terciles),
         trend=trend, open_spot=open_spot, close_spot=close_spot,
+        source=source,
         n_decisions=n_decisions, n_executed=n_executed,
         realised_pnl=realised_pnl, notes=notes,
     )
@@ -252,8 +273,10 @@ def for_session(session: date, symbol: str = "NIFTY") -> Optional[DayJournal]:
         db = get_db()
         if db is None:
             return None
+        # Never hand a live council a replay journal. See DayJournal.source.
         doc = db[JOURNAL_COLLECTION].find_one(
-            {"symbol": symbol, "session": {"$lt": session.isoformat()}},
+            {"symbol": symbol, "session": {"$lt": session.isoformat()},
+             "source": {"$ne": "replay"}},
             {"_id": 0}, sort=[("session", -1)])
         return DayJournal.from_doc(doc) if doc else None
     except Exception as e:
@@ -270,7 +293,8 @@ def recent(before: date, symbol: str = "NIFTY",
         if db is None:
             return []
         cur = db[JOURNAL_COLLECTION].find(
-            {"symbol": symbol, "session": {"$lt": before.isoformat()}},
+            {"symbol": symbol, "session": {"$lt": before.isoformat()},
+             "source": {"$ne": "replay"}},
             {"_id": 0}, sort=[("session", -1)]).limit(limit)
         return [DayJournal.from_doc(d) for d in cur]
     except Exception as e:
