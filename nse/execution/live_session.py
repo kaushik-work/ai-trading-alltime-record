@@ -41,6 +41,36 @@ IST = timezone(timedelta(hours=5, minutes=30))
 REGIME_TRAIL_SESSIONS = 20
 REGIME_RANK_SESSIONS = 100
 
+#: Which symbols the council may trade, and why.
+#:
+#: Every lens weight in nse/lenses/bootstrap.py was measured on NIFTY ONLY --
+#: the 1m option archive is NIFTY, and nifty_loader is not a generic loader.
+#: Running another symbol applies a NIFTY-derived edge to an instrument where it
+#: was never tested. That is a real extrapolation, not a config change, and it
+#: is worth saying out loud rather than discovering from a P&L curve.
+#:
+#: Spread is the one cross-symbol thing that HAS been measured
+#: (RESEARCH_LEARNINGS section 3.10, Rs 120-190 premium band, median
+#: half-spread) against volume_oi's 0.70% break-even:
+#:
+#:     NIFTY      0.1230%   clears it with room
+#:     SENSEX     0.1423%   clears it with room
+#:     BANKNIFTY  not measured in that study
+#:     FINNIFTY   1.4760%   TWICE the break-even -- structurally unprofitable
+#:                          before the strategy does anything at all
+#:
+#: So FINNIFTY is excluded on evidence, not caution. BANKNIFTY is excluded
+#: because nobody has measured its spread, which is a different reason and
+#: fixable by running nse/quant/spread_study.py against it.
+TRADEABLE: dict[str, str] = {
+    "NIFTY":  "measured: p50 half-spread 0.1230% vs 0.70% break-even",
+    "SENSEX": "measured: p50 half-spread 0.1423% vs 0.70% break-even",
+}
+BLOCKED: dict[str, str] = {
+    "FINNIFTY":  "p50 half-spread 1.4760% -- twice the 0.70% break-even",
+    "BANKNIFTY": "spread never measured; run nse/quant/spread_study.py first",
+}
+
 _stop = False
 
 
@@ -128,14 +158,31 @@ def _start_heartbeat(runner) -> "threading.Thread":
     return t
 
 
-def run(symbol: str = "NIFTY", every: int = 60, paper: bool = True,
+def run(symbols=("NIFTY",), every: int = 60, paper: bool = True,
         once: bool = False, ignore_hours: bool = False) -> int:
     from nse.council import assert_deliberation_monotone
     from nse.execution.options_runner import OptionsRunner
     from nse.snapshot import build_live
     from nse.ws.angel_stream import ensure_subscribed
 
-    runner = OptionsRunner(paper=paper)
+    symbols = [s.upper() for s in symbols]
+    for sym in list(symbols):
+        if sym in BLOCKED:
+            logger.error("refusing %s: %s", sym, BLOCKED[sym])
+            symbols.remove(sym)
+        elif sym not in TRADEABLE:
+            logger.error("refusing %s: no measured spread for it", sym)
+            symbols.remove(sym)
+    if not symbols:
+        logger.error("no tradeable symbols left — nothing to do")
+        return 2
+    logger.info("trading %s", ", ".join(f"{s} ({TRADEABLE[s]})" for s in symbols))
+
+    # One runner PER SYMBOL. Sharing one would make the position cap and the
+    # "already holding" guard collide across instruments, and a NIFTY position
+    # would silently block a SENSEX entry.
+    runners = {s: OptionsRunner(paper=paper) for s in symbols}
+    runner = runners[symbols[0]]
 
     # Deliberation binds, and it is only safe to bind because every lens's
     # round-1 logic can lower conviction but never raise it. Prove that on the
@@ -145,12 +192,12 @@ def run(symbol: str = "NIFTY", every: int = 60, paper: bool = True,
     session = datetime.now(IST).date()
     runner.begin_session(session, symbol)
 
-    logger.info("subscribing to %s option chain", symbol)
-    try:
-        ensure_subscribed(symbol, strikes_around=10)
-    except Exception as e:
-        logger.error("could not subscribe: %s", e)
-        return 2
+    for sym in symbols:
+        logger.info("subscribing to %s option chain", sym)
+        try:
+            ensure_subscribed(sym, strikes_around=10)
+        except Exception as e:
+            logger.error("could not subscribe %s: %s", sym, e)
 
     # Liveness runs on its own clock. See _start_heartbeat.
     if not paper:
@@ -170,11 +217,12 @@ def run(symbol: str = "NIFTY", every: int = 60, paper: bool = True,
         #
         # A daily service should sleep through the night, not die every evening
         # and be resurrected by the supervisor.
-        if not ignore_hours and not market_open(symbol=symbol):
-            if runner.state.decisions and runner.state.session is not None:
-                logger.info("market closed — writing the journal and idling")
-                runner.end_session(symbol)
-                runner.state.session = None
+        if not ignore_hours and not any(market_open(symbol=s) for s in symbols):
+            for sym, rn in runners.items():
+                if rn.state.decisions and rn.state.session is not None:
+                    logger.info("market closed — writing %s journal", sym)
+                    rn.end_session(sym)
+                    rn.state.session = None
             if not idle_logged:
                 logger.info("outside market hours — idling until the next open")
                 idle_logged = True
@@ -185,31 +233,34 @@ def run(symbol: str = "NIFTY", every: int = 60, paper: bool = True,
 
         # A new trading day: reload yesterday's journal and reset counters.
         today = datetime.now(IST).date()
-        if runner.state.session != today:
-            logger.info("session %s starting", today)
-            runner.begin_session(today, symbol)
-            idle_logged = False
+        for sym, rn in runners.items():
+            if rn.state.session != today:
+                logger.info("session %s starting for %s", today, sym)
+                rn.begin_session(today, sym)
+                idle_logged = False
 
-        snap = None
-        try:
-            ensure_subscribed(symbol, strikes_around=10)
-            snap = build_live(symbol, strikes_around=10)
-        except Exception as e:
-            logger.error("snapshot failed: %s", e)
+        for sym in symbols:
+          runner = runners[sym]
+          snap = None
+          try:
+            ensure_subscribed(sym, strikes_around=10)
+            snap = build_live(sym, strikes_around=10)
+          except Exception as e:
+            logger.error("%s snapshot failed: %s", sym, e)
 
-        if snap is None:
-            logger.warning("no snapshot this cycle")
-        else:
+          if snap is None:
+            logger.warning("no %s snapshot this cycle", sym)
+          else:
             if not checked_monotone:
                 tally = assert_deliberation_monotone(runner.council.lenses, [snap])
                 logger.info("deliberation monotone check on live data: %s", tally)
                 checked_monotone = True
 
             decision = runner.council.deliberate(
-                snap, runner._journal, regime_pct=regime_percentile(symbol))
+                snap, runner._journal, regime_pct=regime_percentile(sym))
             from nse.council import journal_decision
             journal_decision(decision)
-            print(decision.transcript(), flush=True)
+            print(f"[{sym}] " + decision.transcript(), flush=True)
 
             for v in decision.round1:
                 runner.state.verdicts_by_lens.setdefault(v.lens, []).append(v)
@@ -240,7 +291,8 @@ def run(symbol: str = "NIFTY", every: int = 60, paper: bool = True,
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    p.add_argument("--symbol", default="NIFTY")
+    p.add_argument("--symbol", default="NIFTY",
+                   help="comma-separated, e.g. NIFTY,SENSEX")
     p.add_argument("--every", type=int, default=60, help="seconds between decisions")
     p.add_argument("--once", action="store_true", help="one decision, then exit")
     p.add_argument("--ignore-hours", action="store_true",
@@ -264,7 +316,8 @@ def main(argv=None) -> int:
 
     signal.signal(signal.SIGINT, _handle_signal)
     signal.signal(signal.SIGTERM, _handle_signal)
-    return run(symbol=a.symbol, every=a.every, paper=paper, once=a.once,
+    return run(symbols=[x.strip() for x in a.symbol.split(",") if x.strip()],
+               every=a.every, paper=paper, once=a.once,
                ignore_hours=a.ignore_hours)
 
 

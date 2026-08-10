@@ -196,7 +196,7 @@ services:
     command: >
       sh -c '
         python docker/brain_guard.py &&
-        python -m nse.execution.live_session --symbol ${COUNCIL_SYMBOL:-NIFTY} --every ${COUNCIL_EVERY:-60} ${COUNCIL_LIVE_FLAG:-}
+        python -m nse.execution.live_session --symbol ${COUNCIL_SYMBOLS:-NIFTY,SENSEX} --every ${COUNCIL_EVERY:-60} ${COUNCIL_LIVE_FLAG:-}
       '
     env_file: .env
     environment:
