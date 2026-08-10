@@ -836,4 +836,43 @@ def nse_markers(symbol: str = Query("NIFTY"),
             "reason": (r.get("reason") or "")[:120],
         })
     out.sort(key=lambda m: m["time"])
-    return {"symbol": symbol, "markers": out, "count": len(out)}
+
+    # What the council EXPECTS from the newest live decision, drawn as a box on
+    # the chart: entry, the horizon it must resolve by, and the range the
+    # MEASURED edge implies.
+    #
+    # This is an expectation, NOT a forecast path. The system produces a
+    # direction, a conviction and a 60-minute horizon; it does not produce a
+    # trajectory. Drawing a zig-zag to a target would imply a precision that
+    # nothing here measured -- and would be the single easiest way to make an
+    # unproven system look authoritative.
+    #
+    # The band is volume_oi's measured VALIDATE edge (+1.49 bps) applied to
+    # spot, with the observed dispersion as the width. It is deliberately
+    # small, because the measured edge IS small: 1.49 bps on 24,600 is under
+    # four points. An honest expectation box looks unexciting, and that is the
+    # information.
+    expectation = None
+    live = [m for m in out if m["executed"]]
+    if live:
+        m = live[-1]
+        spot = m.get("spot")
+        if spot:
+            from nse.execution.options_runner import HOLD_MINUTES
+            edge_bps, sd_bps = 1.49, 21.0      # measured VALIDATE mean and sd
+            d = m["direction"]
+            expectation = {
+                "from_time": m["time"],
+                "to_time": m["time"] + HOLD_MINUTES * 60,
+                "entry": round(float(spot), 2),
+                "direction": d,
+                "horizon_min": HOLD_MINUTES,
+                "target": round(float(spot) * (1 + d * edge_bps / 10_000), 2),
+                "band_high": round(float(spot) * (1 + (edge_bps + sd_bps) / 10_000), 2),
+                "band_low": round(float(spot) * (1 - (sd_bps - edge_bps) / 10_000), 2),
+                "basis": (f"volume_oi measured VALIDATE edge {edge_bps:+.2f} bps "
+                          f"over {HOLD_MINUTES}m, sd {sd_bps:.0f} bps"),
+            }
+
+    return {"symbol": symbol, "markers": out, "count": len(out),
+            "expectation": expectation}

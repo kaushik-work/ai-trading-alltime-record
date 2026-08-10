@@ -31,6 +31,11 @@ type Marker = {
   time: number; executed: boolean; direction: number; conviction: number;
   lead?: string | null; text: string; reason: string;
 };
+type Expectation = {
+  from_time: number; to_time: number; entry: number; direction: number;
+  horizon_min: number; target: number; band_high: number; band_low: number;
+  basis: string;
+};
 
 /* What the council is reading, drawn where it is reading it.
  *
@@ -93,6 +98,7 @@ export default function NiftyChart({ symbol = "NIFTY" }: { symbol?: string }) {
   const [decisions, setDecisions] = useState<Decision[]>([]);
   const [levels, setLevels] = useState<Levels | null>(null);
   const [markers, setMarkers] = useState<Marker[]>([]);
+  const [expect, setExpect] = useState<Expectation | null>(null);
   const priceLinesRef = useRef<any[]>([]);
   const [err, setErr] = useState<string | null>(null);
 
@@ -143,6 +149,7 @@ export default function NiftyChart({ symbol = "NIFTY" }: { symbol?: string }) {
         if (stop) return;
         setLevels(lj);
         setMarkers(mj.markers ?? []);
+        setExpect(mj.expectation ?? null);
       } catch { /* overlays are non-critical; the chart stays up without them */ }
     };
     pull();
@@ -239,6 +246,35 @@ export default function NiftyChart({ symbol = "NIFTY" }: { symbol?: string }) {
     }
   }, [levels]);
 
+  // The expectation band, drawn on the price axis. Three lines rather than a
+  // shaded box: lightweight-charts has no rectangle primitive, and three
+  // labelled levels carry the same information without a custom plugin.
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series || !expect) return;
+    const made: any[] = [];
+    const spec = [
+      { p: expect.entry, c: CHROME.dim, t: "entry", w: 1, dash: 0 },
+      { p: expect.target, c: expect.direction > 0 ? CHROME.up : CHROME.down,
+        t: `target (${expect.horizon_min}m)`, w: 2, dash: 0 },
+      { p: expect.band_high, c: "#8b949e", t: "band +1sd", w: 1, dash: 2 },
+      { p: expect.band_low, c: "#8b949e", t: "band -1sd", w: 1, dash: 2 },
+    ];
+    for (const s of spec) {
+      try {
+        made.push(series.createPriceLine({
+          price: s.p, color: s.c, lineWidth: s.w, lineStyle: s.dash,
+          axisLabelVisible: true, title: s.t,
+        }));
+      } catch { /* ignore */ }
+    }
+    return () => {
+      for (const pl of made) {
+        try { series.removePriceLine(pl); } catch { /* disposed */ }
+      }
+    };
+  }, [expect]);
+
   // Decision markers, EXECUTED AND DECLINED. The declined ones are the point:
   // seeing where the council stood aside against what price then did is how you
   // judge whether the conviction gate is protecting you or costing you. A chart
@@ -299,6 +335,37 @@ export default function NiftyChart({ symbol = "NIFTY" }: { symbol?: string }) {
             {levels?.structure?.trend && (
               <span>· structure: {levels.structure.trend}</span>
             )}
+          </div>
+        )}
+
+        {expect && (
+          <div style={{
+            marginTop: 8, padding: "8px 10px", borderRadius: 6,
+            border: `1px solid ${expect.direction > 0 ? CHROME.up : CHROME.down}33`,
+            background: expect.direction > 0
+              ? "rgba(63,185,80,0.06)" : "rgba(248,81,73,0.06)",
+            fontSize: 12,
+          }}>
+            <div style={{ display: "flex", gap: 10, flexWrap: "wrap",
+                          alignItems: "baseline" }}>
+              <strong style={{ color: expect.direction > 0 ? CHROME.up : CHROME.down }}>
+                Expectation
+              </strong>
+              <span style={{ fontVariantNumeric: "tabular-nums" }}>
+                {expect.entry.toFixed(1)} → {expect.target.toFixed(1)}
+                {"  "}({(expect.target - expect.entry >= 0 ? "+" : "")}
+                {(expect.target - expect.entry).toFixed(1)} pts)
+              </span>
+              <span style={{ color: CHROME.dim }}>
+                over {expect.horizon_min}m · band {expect.band_low.toFixed(0)}–
+                {expect.band_high.toFixed(0)}
+              </span>
+            </div>
+            <div style={{ color: CHROME.dim, marginTop: 3 }}>
+              {expect.basis}. This is the MEASURED expectation, not a forecast
+              path — the system produces a direction and a horizon, not a
+              trajectory.
+            </div>
           </div>
         )}
 
