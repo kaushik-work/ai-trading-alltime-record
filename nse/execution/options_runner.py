@@ -119,6 +119,23 @@ class OptionsRunner:
         round-trip per decision against a value that is constant all day.
         """
         self.state = RunnerState(session=session)
+
+        # Say so LOUDLY when there is no database. Every persistence path in
+        # this system degrades quietly by design — the mirror must never break
+        # live trading — but the sum of those quiet degradations is a council
+        # that journals to nothing, never learns, and looks healthy doing it.
+        # That already happened once: brain seeding wrote to a disabled mirror
+        # for an entire session because the entry point never loaded .env.
+        try:
+            from core.mongo import get_db
+            if get_db() is None:
+                logger.warning(
+                    "NO DATABASE: decisions, journals and brain state will not "
+                    "persist. The council cannot read yesterday and attribution "
+                    "cannot score anything. Set MONGODB_URL / MONGODB_DB_NAME.")
+        except Exception as e:
+            logger.warning("database check failed: %s", e)
+
         self._journal = for_session(session, symbol)
         if self._journal is not None:
             logger.info("council reads yesterday: %s", self._journal.summary())

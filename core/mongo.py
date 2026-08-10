@@ -37,6 +37,20 @@ from typing import Any, Optional
 
 logger = logging.getLogger(__name__)
 
+# Load .env HERE rather than relying on someone having imported root config.py
+# first. That indirection silently disabled Mongo for every entry point under
+# nse/ — those modules import `nse.config`, never root `config`, so the mirror
+# no-opped and brains, journals and council decisions were written to nothing.
+# The failure was invisible because this module is designed to degrade quietly.
+#
+# A module that reads env vars should be responsible for loading them. Import
+# order is not a dependency anyone can see.
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except Exception:                                   # pragma: no cover
+    pass                                            # env may be set externally
+
 _client_lock = threading.Lock()
 _client = None       # lazy-initialised pymongo.MongoClient
 _db = None           # lazy-initialised database handle
@@ -131,13 +145,42 @@ def _ensure_indexes(db) -> None:
         db.nse_lens_brains.create_index([("lens", ASCENDING)], unique=True)
         db.nse_lens_reviews.create_index([("ts", DESCENDING)])
         db.nse_lens_reviews.create_index([("lens", ASCENDING), ("ts", DESCENDING)])
-        # Every aggregator decision, including the ones voted down. Attribution
+        # Every council decision, including the ones it declined. Attribution
         # trains on this, so rejected decisions are as load-bearing as filled
         # ones and must never be pruned by outcome.
+        #
+        # `nse_decisions` is the retired aggregator's collection, kept indexed
+        # because the historical rows are still readable and deleting measured
+        # history to tidy a schema is not a trade worth making.
         db.nse_decisions.create_index([("decision_id", ASCENDING)], unique=True)
         db.nse_decisions.create_index([("ts", DESCENDING)])
         db.nse_decisions.create_index([("symbol", ASCENDING), ("ts", DESCENDING)])
         db.nse_decisions.create_index([("executed", ASCENDING), ("status", ASCENDING)])
+
+        db.nse_council_decisions.create_index([("decision_id", ASCENDING)],
+                                              unique=True)
+        db.nse_council_decisions.create_index([("ts", DESCENDING)])
+        db.nse_council_decisions.create_index([("symbol", ASCENDING),
+                                               ("ts", DESCENDING)])
+        db.nse_council_decisions.create_index([("executed", ASCENDING),
+                                               ("ts", DESCENDING)])
+        # Attribution looks up "what did lens X say on this decision", so the
+        # lead lens is indexed directly rather than scanned out of round1.
+        db.nse_council_decisions.create_index([("lead", ASCENDING),
+                                               ("ts", DESCENDING)])
+
+        # One journal per session per symbol. The unique index is what makes
+        # `for_session`'s strict-$lt lookup safe: two journals for one date
+        # would make "the previous session" ambiguous, and the council would
+        # silently read whichever Mongo returned first.
+        db.nse_day_journal.create_index([("session", ASCENDING),
+                                         ("symbol", ASCENDING)], unique=True)
+        db.nse_day_journal.create_index([("session", DESCENDING)])
+
+        # Self-tuned parameters. Unique per (lens, parameter) so a recalibration
+        # updates in place instead of accumulating one row per session.
+        db.nse_lens_tuning.create_index([("lens", ASCENDING),
+                                         ("name", ASCENDING)], unique=True)
     except Exception as e:
         logger.warning("Mongo index creation failed (non-fatal): %s", e)
 
