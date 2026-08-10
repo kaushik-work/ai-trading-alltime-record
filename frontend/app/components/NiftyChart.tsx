@@ -20,6 +20,37 @@ import { Card, Pill } from "./ui";
 
 type Candle = { time: number; open: number; high: number; low: number; close: number; volume?: number };
 
+type Level = { price: number; label: string; kind: string };
+type Levels = {
+  as_of?: string; spot?: number; direction?: string; executed?: boolean;
+  levels: Level[];
+  structure?: { trend?: string | null; order_block?: number | null;
+                fvg?: number | null; sweep?: number | null };
+};
+type Marker = {
+  time: number; executed: boolean; direction: number; conviction: number;
+  lead?: string | null; text: string; reason: string;
+};
+
+/* What the council is reading, drawn where it is reading it.
+ *
+ * Every one of these levels is already computed on every decision and journaled
+ * — OI walls, composite POC/VAH/VAL, naked POCs, the gamma flip, range extremes.
+ * None of it reached the screen, so the chart showed price while the council
+ * reasoned about structure the operator could not see.
+ *
+ * Colours carry MEANING, not decoration: supply above, demand below, magnets
+ * (untested POCs) dashed because price has unfinished business there rather
+ * than support that has held.
+ */
+const LEVEL_STYLE: Record<string, { color: string; dashed: boolean }> = {
+  supply: { color: "#f85149", dashed: false },
+  demand: { color: "#3fb950", dashed: false },
+  value:  { color: "#58a6ff", dashed: false },
+  magnet: { color: "#d29922", dashed: true },
+  pivot:  { color: "#bc8cff", dashed: true },
+};
+
 type Verdict = {
   lens: string;
   direction_label: string;
@@ -60,6 +91,9 @@ export default function NiftyChart({ symbol = "NIFTY" }: { symbol?: string }) {
   const [interval, setInterval_] = useState<Interval>("5m");
   const [candles, setCandles] = useState<Candle[]>([]);
   const [decisions, setDecisions] = useState<Decision[]>([]);
+  const [levels, setLevels] = useState<Levels | null>(null);
+  const [markers, setMarkers] = useState<Marker[]>([]);
+  const priceLinesRef = useRef<any[]>([]);
   const [err, setErr] = useState<string | null>(null);
 
   /* ── data ─────────────────────────────────────────────────────────────── */
@@ -95,6 +129,26 @@ export default function NiftyChart({ symbol = "NIFTY" }: { symbol?: string }) {
     const t = window.setInterval(pull, 5000);
     return () => { stop = true; window.clearInterval(t); };
   }, []);
+
+  useEffect(() => {
+    let stop = false;
+    const pull = async () => {
+      try {
+        const [l, m] = await Promise.all([
+          fetch(`${API}/api/nse/levels?symbol=${symbol}`, { headers: authHeaders() }),
+          fetch(`${API}/api/nse/markers?symbol=${symbol}&limit=200`, { headers: authHeaders() }),
+        ]);
+        const lj = await l.json();
+        const mj = await m.json();
+        if (stop) return;
+        setLevels(lj);
+        setMarkers(mj.markers ?? []);
+      } catch { /* overlays are non-critical; the chart stays up without them */ }
+    };
+    pull();
+    const t = window.setInterval(pull, 10000);
+    return () => { stop = true; window.clearInterval(t); };
+  }, [symbol]);
 
   useEffect(() => { didFit.current = false; }, [interval]);
 
@@ -160,6 +214,52 @@ export default function NiftyChart({ symbol = "NIFTY" }: { symbol?: string }) {
     }
   }, [candles]);
 
+  // Horizontal levels. Removed and redrawn wholesale rather than diffed: there
+  // are a dozen of them and a stale line showing a level the council has since
+  // moved off is worse than a redraw flicker.
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series) return;
+    for (const pl of priceLinesRef.current) {
+      try { series.removePriceLine(pl); } catch { /* series may be disposed */ }
+    }
+    priceLinesRef.current = [];
+    for (const lv of levels?.levels ?? []) {
+      const st = LEVEL_STYLE[lv.kind] ?? { color: "#7d8896", dashed: true };
+      try {
+        priceLinesRef.current.push(series.createPriceLine({
+          price: lv.price,
+          color: st.color,
+          lineWidth: 1,
+          lineStyle: st.dashed ? 2 : 0,
+          axisLabelVisible: true,
+          title: lv.label,
+        }));
+      } catch { /* ignore a level the chart rejects */ }
+    }
+  }, [levels]);
+
+  // Decision markers, EXECUTED AND DECLINED. The declined ones are the point:
+  // seeing where the council stood aside against what price then did is how you
+  // judge whether the conviction gate is protecting you or costing you. A chart
+  // showing only fills would make the system look far more active, and far more
+  // right, than it is.
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series || markers.length === 0) return;
+    try {
+      series.setMarkers(markers.map((m) => ({
+        time: m.time,
+        position: m.direction > 0 ? "belowBar" : "aboveBar",
+        shape: m.direction > 0 ? "arrowUp" : "arrowDown",
+        color: m.executed
+          ? (m.direction > 0 ? CHROME.up : CHROME.down)
+          : CHROME.dim,
+        text: m.executed ? m.text : "",
+      })));
+    } catch { /* marker times outside the loaded range */ }
+  }, [markers]);
+
   const last = candles.length ? candles[candles.length - 1] : null;
   const forming = last ? new Date(last.time * 1000) : null;
 
@@ -181,6 +281,33 @@ export default function NiftyChart({ symbol = "NIFTY" }: { symbol?: string }) {
         </div>
 
         <div ref={containerRef} style={{ width: "100%", height: 420 }} />
+
+        {(levels?.levels?.length ?? 0) > 0 && (
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 8,
+                        fontSize: 11, color: CHROME.dim }}>
+            {levels!.levels.map((lv) => {
+              const st = LEVEL_STYLE[lv.kind] ?? { color: "#7d8896", dashed: true };
+              return (
+                <span key={`${lv.label}-${lv.price}`}
+                      style={{ display: "inline-flex", alignItems: "center", gap: 4 }}>
+                  <span style={{ width: 14, height: 0,
+                                 borderTop: `2px ${st.dashed ? "dashed" : "solid"} ${st.color}` }} />
+                  {lv.label} {lv.price.toFixed(0)}
+                </span>
+              );
+            })}
+            {levels?.structure?.trend && (
+              <span>· structure: {levels.structure.trend}</span>
+            )}
+          </div>
+        )}
+
+        {markers.length > 0 && (
+          <div style={{ marginTop: 4, fontSize: 11, color: CHROME.dim }}>
+            {markers.filter((m) => m.executed).length} executed ·{" "}
+            {markers.filter((m) => !m.executed).length} stood aside (grey arrows)
+          </div>
+        )}
 
         {forming && (
           <div style={{ marginTop: 6, fontSize: 11, color: CHROME.dim }}>

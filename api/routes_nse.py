@@ -16,6 +16,7 @@ from nse.snapshot import _cached_bars, _normalise_bars
 from nse.config import STEP_SIZES, LOT_SIZES, EXCHANGE
 
 logger = logging.getLogger(__name__)
+from datetime import datetime as _dt
 from datetime import timedelta as _td, timezone as _tz
 IST_TZ = _tz(_td(hours=5, minutes=30))
 
@@ -692,3 +693,147 @@ def nse_health(user: dict = Depends(_get_current_user)):
         "market_open": trading_now,
         "checks": checks,
     }
+
+
+@router.get("/levels")
+def nse_levels(symbol: str = Query("NIFTY"),
+               user: dict = Depends(_get_current_user)):
+    """The structural levels the lenses are actually reading, for the chart.
+
+    Every number here is already computed on every decision and journaled in
+    the lens `features` — order blocks and fair-value gaps from ict_smc,
+    composite POC/VAH/VAL and naked POCs from composite_profile, the gamma flip
+    from gamma_exposure. Until now none of it reached the screen, so the chart
+    showed price while the council reasoned about levels the operator could not
+    see.
+
+    Read from the LATEST DECISION rather than recomputed here. Recomputing
+    would produce numbers that drift from the ones the council actually used —
+    the chart would show a level the lens never saw, which is worse than
+    showing nothing because it looks authoritative.
+    """
+    try:
+        from core.mongo import get_db
+        from nse.council import COUNCIL_COLLECTION
+        db = get_db()
+        if db is None:
+            return {"levels": [], "zones": [], "error": "mongo unavailable"}
+        doc = db[COUNCIL_COLLECTION].find_one(
+            {"symbol": symbol}, {"_id": 0, "ts": 1, "spot": 1, "round1": 1,
+                                 "direction_label": 1, "executed": 1},
+            sort=[("ts", -1)])
+    except Exception as exc:
+        return {"levels": [], "zones": [], "error": str(exc)[:120]}
+
+    if not doc:
+        return {"levels": [], "zones": [], "error": "no decision yet"}
+
+    feats = {v.get("lens"): (v.get("features") or {})
+             for v in (doc.get("round1") or [])}
+    levels: list[dict] = []
+    zones: list[dict] = []
+
+    def lvl(price, label, kind):
+        if price is None:
+            return
+        try:
+            p = float(price)
+        except (TypeError, ValueError):
+            return
+        if p > 0:
+            levels.append({"price": round(p, 2), "label": label, "kind": kind})
+
+    cp = feats.get("composite_profile", {})
+    lvl(cp.get("poc"), "Composite POC", "value")
+    lvl(cp.get("vah"), "VAH", "value")
+    lvl(cp.get("val"), "VAL", "value")
+    lvl(cp.get("naked_poc"), "Naked POC (untested)", "magnet")
+
+    vo = feats.get("volume_oi", {})
+    lvl(vo.get("call_wall"), "Call wall (OI)", "supply")
+    lvl(vo.get("put_wall"), "Put wall (OI)", "demand")
+    lvl(vo.get("poc"), "Session POC", "value")
+    lvl(vo.get("vah"), "Session VAH", "value")
+    lvl(vo.get("val"), "Session VAL", "value")
+
+    lvl(feats.get("gamma_exposure", {}).get("gamma_flip"), "Gamma flip", "pivot")
+
+    vw = feats.get("vwap", {})
+    lvl(vw.get("vwap"), "Session VWAP", "value")
+
+    mo = feats.get("momentum", {})
+    lvl(mo.get("window_high"), "Range high", "supply")
+    lvl(mo.get("window_low"), "Range low", "demand")
+
+    # ict_smc reports its structure in prose; the numeric zone edges are not in
+    # `features` today. Surfaced as the rationale so the panel can show WHAT it
+    # saw even before the coordinates exist, rather than silently omitting the
+    # one lens that reads structure.
+    ict = feats.get("ict_smc", {})
+    return {
+        "symbol": symbol,
+        "as_of": doc.get("ts"),
+        "spot": doc.get("spot"),
+        "direction": doc.get("direction_label"),
+        "executed": bool(doc.get("executed")),
+        "levels": levels,
+        "zones": zones,
+        "structure": {
+            "trend": ict.get("trend"),
+            "order_block": ict.get("order_block"),
+            "fvg": ict.get("fvg"),
+            "sweep": ict.get("sweep"),
+            "atr_pct": ict.get("atr_pct"),
+        },
+    }
+
+
+@router.get("/markers")
+def nse_markers(symbol: str = Query("NIFTY"),
+                limit: int = Query(120, ge=1, le=500),
+                user: dict = Depends(_get_current_user)):
+    """Every council decision as a chart marker, executed AND declined.
+
+    The declined ones matter most on a chart: seeing WHERE the council stood
+    aside, against the price action that followed, is how you judge whether the
+    conviction gate is protecting you or costing you. A chart showing only
+    fills would make the system look far more active — and far more right —
+    than it is.
+    """
+    try:
+        from core.mongo import get_db
+        from nse.council import COUNCIL_COLLECTION
+        db = get_db()
+        if db is None:
+            return {"markers": [], "error": "mongo unavailable"}
+        rows = list(db[COUNCIL_COLLECTION]
+                    .find({"symbol": symbol},
+                          {"_id": 0, "ts": 1, "direction": 1, "executed": 1,
+                           "conviction": 1, "lead": 1, "reason": 1, "spot": 1})
+                    .sort("ts", -1).limit(limit))
+    except Exception as exc:
+        return {"markers": [], "error": str(exc)[:120]}
+
+    out = []
+    for r in rows:
+        ts = r.get("ts")
+        if not ts:
+            continue
+        try:
+            t = int(_dt.fromisoformat(ts).timestamp())
+        except Exception:
+            continue
+        d = int(r.get("direction") or 0)
+        out.append({
+            "time": t,
+            "executed": bool(r.get("executed")),
+            "direction": d,
+            "conviction": round(float(r.get("conviction") or 0.0), 3),
+            "lead": r.get("lead"),
+            "spot": r.get("spot"),
+            "text": (f"{'LONG' if d > 0 else 'SHORT' if d < 0 else 'FLAT'} "
+                     f"{abs(float(r.get('conviction') or 0)):.2f}"),
+            "reason": (r.get("reason") or "")[:120],
+        })
+    out.sort(key=lambda m: m["time"])
+    return {"symbol": symbol, "markers": out, "count": len(out)}
