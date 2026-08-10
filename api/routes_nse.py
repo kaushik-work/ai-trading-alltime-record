@@ -676,9 +676,19 @@ def nse_health(user: dict = Depends(_get_current_user)):
 
     worst = ("fail" if any(c["state"] == "fail" for c in checks)
              else "warn" if any(c["state"] == "warn" for c in checks) else "ok")
+    try:
+        from nse.execution.live_session import market_open as _mo
+        trading_now = _mo()
+    except Exception:
+        trading_now = True
+
     return {
         "overall": worst,
         "checked_at": now.isoformat(),
         "last_decision_at": last_ts.isoformat() if last_ts else None,
+        # The UI cannot decide on its own whether a rising decision age is bad;
+        # that depends on whether the market is open. Sending the answer stops
+        # the panel's headline contradicting the row directly beneath it.
+        "market_open": trading_now,
         "checks": checks,
     }

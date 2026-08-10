@@ -106,6 +106,9 @@ class RunnerState:
     rejected: int = 0
     errors: int = 0
     last_reason: str = ""
+    #: Spot of the last snapshot we actually decided on, per symbol. Used to
+    #: detect a frozen feed — see OptionsRunner._blocked.
+    last_spot_decided: dict = field(default_factory=dict)
     #: False when the sentinel could not be asked what it holds.
     reconciled: bool = True
     verdicts_by_lens: dict = field(default_factory=dict)
@@ -399,6 +402,27 @@ class OptionsRunner:
         """Risk and hygiene checks, each named so a refusal is diagnosable."""
         if snap.is_stale(MAX_SNAPSHOT_AGE_SEC):
             return f"snapshot is stale (> {MAX_SNAPSHOT_AGE_SEC:.0f}s old)"
+        # A FROZEN FEED IS NOT A SIGNAL, IT IS THE ABSENCE OF ONE.
+        #
+        # On 2026-08-10 the cash index stopped ticking at 15:30 while NFO stayed
+        # open until 15:40. build_live kept returning snapshots stamped
+        # `datetime.now()` — so they always looked fresh — carrying a spot
+        # frozen at 24583.8. The council re-derived the SAME verdict from the
+        # SAME numbers once a minute and logged ten identical
+        # "EXECUTE SHORT -0.879 spot 24583.8" decisions in ten minutes. Armed,
+        # that is ten orders on one setup.
+        #
+        # is_stale() could not catch it: it compares the chain's exch_feed_time
+        # against the snapshot's own ts, and both keep advancing when the
+        # OPTIONS feed is alive but the UNDERLYING has stopped moving.
+        #
+        # Identical spot means no new information since the last decision.
+        # Whatever the lenses conclude, they concluded it already.
+        prev = self.state.last_spot_decided.get(snap.symbol)
+        if prev is not None and abs(float(snap.spot) - float(prev)) < 1e-9:
+            return (f"spot has not moved since the last decision "
+                    f"({snap.spot:.2f}) — the feed is frozen, not signalling")
+
         if not self.state.reconciled:
             return ("position book is unreconciled - refusing to open anything "
                     "until the sentinel can be reached")
@@ -419,6 +443,7 @@ class OptionsRunner:
         — the premium — which is what makes a fixed ₹50k risk budget honest.
         Selling would make the loss unbounded and the sizing arithmetic a lie.
         """
+        self.state.last_spot_decided[snap.symbol] = float(snap.spot)
         option_type = "CE" if decision.direction is Direction.LONG else "PE"
         strike = snap.atm
         row = snap.at(strike, option_type)

@@ -22,6 +22,7 @@ type Health = {
   overall: "ok" | "warn" | "fail";
   checked_at: string;
   last_decision_at: string | null;
+  market_open?: boolean;
   checks: Check[];
 };
 
@@ -67,7 +68,12 @@ export default function SystemHealth() {
   }, []);
 
   const secs = age(h?.last_decision_at ?? null, now);
-  const stale = secs === null ? true : secs >= 120;
+  // Outside market hours the council idles BY DESIGN, so a rising decision age
+  // is correct. The panel used to shout "3028s — the council may have stopped"
+  // in warning yellow directly above a row reading "idle — market closed",
+  // which is the panel arguing with itself and teaching you to trust neither.
+  const trading = h?.market_open !== false;
+  const stale = trading && (secs === null ? true : secs >= 120);
   const overall: "ok" | "warn" | "fail" =
     err || !h ? "fail" : stale && h.overall === "ok" ? "warn" : h.overall;
   const tone = TONE[overall];
@@ -102,7 +108,9 @@ export default function SystemHealth() {
         </span>
         <span style={{ fontSize: 12, color: "#c9d3e0" }}>
           since the last decision
-          {secs !== null && secs >= 120 && " — the council may have stopped"}
+          {!trading && " — idle, market closed"}
+          {trading && secs !== null && secs >= 120 &&
+            " — the council may have stopped"}
         </span>
       </div>
 
