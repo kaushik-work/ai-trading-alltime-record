@@ -42,6 +42,7 @@ import asyncio
 import logging
 import os
 import time
+import uuid
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Optional
@@ -127,6 +128,16 @@ def _flatten_all(reason: str) -> None:
     """Close every open position with bounded limit orders. Never raises."""
     from nse.config import EXCHANGE, LOT_SIZES, gtt_limit_through
 
+    # Paper positions are dropped without touching a broker. Handled BEFORE the
+    # broker is constructed, so a rehearsal never needs Angel credentials and a
+    # credential failure below cannot mask whether the switch fired.
+    for pid, pos in list(STATE.positions.items()):
+        if pos.get("paper"):
+            STATE.positions.pop(pid, None)
+            logger.critical("FLATTEN (paper) %s — %s", pid, reason)
+    if not STATE.positions:
+        return
+
     try:
         from data.angel_fetcher import AngelFetcher
         from nse.broker.angel_broker import AngelBroker
@@ -210,6 +221,37 @@ async def intent(request: Request):
     if not LIVE_ORDERS:
         STATE.intents_accepted += 1
         logger.info("sentinel: PAPER accept %s", body)
+        # Register a PAPER position so the dead-man's switch has something to
+        # guard. It previously returned here without touching STATE.positions,
+        # and the deadman loop skips whenever `not STATE.positions` — so the
+        # single most safety-critical component in this system could not be
+        # exercised at all without arming real orders against a live account.
+        #
+        # A safety mechanism with no rehearsal path is a safety mechanism you
+        # find out about during the incident. These positions carry
+        # `paper: True` and `_flatten_all` drops them without calling a broker,
+        # so the timing, arming and firing logic is exercised end to end while
+        # the order path stays cold.
+        if body.get("type") == "OPEN":
+            pid = f"paper_{body.get('decision_id', uuid.uuid4().hex[:8])}"
+            STATE.positions[pid] = {
+                "paper": True,
+                "symbol": body.get("symbol"),
+                "side": body.get("side"),
+                "option_type": body.get("option_type"),
+                "strike": body.get("strike"),
+                "lots": body.get("lots"),
+                "tradingsymbol": f"PAPER-{body.get('symbol')}-{body.get('strike')}"
+                                 f"{body.get('option_type')}",
+                "token": None,
+                "opened_at": datetime.now(timezone.utc).isoformat(),
+            }
+            return {"ok": True, "paper": True, "position_id": pid,
+                    "intent": body}
+        if body.get("type") == "CLOSE":
+            pid = body.get("position_id")
+            STATE.positions.pop(pid, None)
+            return {"ok": True, "paper": True, "position_id": pid}
         return {"ok": True, "paper": True, "intent": body}
 
     STATE.intents_accepted += 1
