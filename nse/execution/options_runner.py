@@ -106,6 +106,8 @@ class RunnerState:
     rejected: int = 0
     errors: int = 0
     last_reason: str = ""
+    #: False when the sentinel could not be asked what it holds.
+    reconciled: bool = True
     verdicts_by_lens: dict = field(default_factory=dict)
     first_spot: Optional[float] = None
     last_spot: Optional[float] = None
@@ -159,6 +161,16 @@ class OptionsRunner:
                     "cannot score anything. Set MONGODB_URL / MONGODB_DB_NAME.")
         except Exception as e:
             logger.warning("database check failed: %s", e)
+
+        # ADOPT WHATEVER THE SENTINEL ALREADY HOLDS before deciding anything.
+        #
+        # open_positions lived only in memory, so every container restart wiped
+        # the "already holding this symbol" guard and the council happily
+        # re-entered a setup it was already in -- the same structure, ordered
+        # again, once per restart. The sentinel is the only process that places
+        # orders and therefore the only one that knows what actually filled, so
+        # its view wins over the brain's recollection.
+        self.reconcile()
 
         self._journal = for_session(session, symbol)
         if self._journal is not None:
@@ -224,6 +236,95 @@ class OptionsRunner:
 
         return self._submit(snap, decision)
 
+    def reconcile(self) -> int:
+        """Replace the in-memory position book with the sentinel's."""
+        if self.paper:
+            return len(self.state.open_positions)
+        resp = self.client.positions()
+        if resp.get("indeterminate") or resp.get("error"):
+            # Could not ask. Keep what we have and REFUSE to widen the book --
+            # trading blind on an unknown position count is how you end up
+            # doubled up.
+            logger.error("reconcile failed (%s) - keeping the in-memory book "
+                         "and blocking new entries", resp.get("error"))
+            self.state.reconciled = False
+            return len(self.state.open_positions)
+
+        book: dict = {}
+        for p in resp.get("positions", []):
+            sym = p.get("symbol")
+            if not sym:
+                continue
+            opened = p.get("opened_at")
+            opened_dt = None
+            if isinstance(opened, str):
+                try:
+                    opened_dt = datetime.fromisoformat(opened)
+                except ValueError:
+                    opened_dt = None
+            book[sym] = {
+                "position_id": p.get("position_id"),
+                # An adopted position with no parseable timestamp is treated as
+                # opened NOW, so it gets a full horizon rather than being
+                # closed instantly by a parse failure.
+                "opened_at": opened_dt or datetime.now(timezone.utc),
+                "strike": p.get("strike"),
+                "option_type": p.get("option_type"),
+                "symbol": sym,
+                "lots": p.get("lots"),
+                "entry_premium": p.get("entry_premium"),
+                "decision_id": p.get("decision_id"),
+            }
+        if set(book) != set(self.state.open_positions):
+            logger.warning("reconciled: sentinel holds %d position(s) %s",
+                           len(book), list(book))
+        self.state.open_positions = book
+        self.state.reconciled = True
+        return len(book)
+
+    def record_outcome(self, pos: dict, exit_premium, reason: str) -> None:
+        """Write what the trade was WORTH back onto its decision.
+
+        Without this the brains never learn. `compute_attribution` scores a
+        lens over "decision documents that resulted in a filled, closed
+        position, each carrying the realised pnl" -- and nothing wrote that
+        field, so every brain sat at n_closed=0 forever. Promotion needs 30
+        closed trades; at zero, no lens could ever be promoted OR suspended and
+        the whole lifecycle was decorative.
+
+        Recorded on the DECISION rather than only the position, because
+        attribution needs what every lens said at entry -- including the ones
+        that were overruled. Those are the control group.
+        """
+        did = pos.get("decision_id")
+        entry = pos.get("entry_premium")
+        if not did or entry is None or exit_premium is None:
+            logger.warning("no outcome recorded for %s: decision=%s entry=%s "
+                           "exit=%s", pos.get("position_id"), did, entry,
+                           exit_premium)
+            return
+        lot = LOT_SIZES.get(pos.get("symbol") or "", 0)
+        qty = int(pos.get("lots") or 0) * lot
+        pnl = (float(exit_premium) - float(entry)) * qty
+        try:
+            from core.mongo import get_db
+            from nse.council import COUNCIL_COLLECTION
+            db = get_db()
+            if db is None:
+                return
+            db[COUNCIL_COLLECTION].update_one(
+                {"decision_id": did},
+                {"$set": {"status": "CLOSED",
+                          "entry_premium": float(entry),
+                          "exit_premium": float(exit_premium),
+                          "qty": qty, "pnl": round(pnl, 2),
+                          "exit_reason": reason,
+                          "closed_at": datetime.now(timezone.utc).isoformat()}})
+            logger.info("outcome %s: entry %.2f exit %.2f qty %d pnl %+.0f (%s)",
+                        did, float(entry), float(exit_premium), qty, pnl, reason)
+        except Exception as e:
+            logger.error("could not record outcome for %s: %s", did, e)
+
     def manage_exits(self, snap: MarketSnapshot) -> list:
         """Close anything past its measured horizon, or near the close.
 
@@ -258,15 +359,26 @@ class OptionsRunner:
                 continue
 
             pid = pos.get("position_id")
+            exit_px = None
+            row = snap.at(pos.get("strike"), pos.get("option_type") or "")
+            if row is not None:
+                px = row.get("ltp")
+                try:
+                    exit_px = float(px) if px is not None and float(px) > 0 else None
+                except (TypeError, ValueError):
+                    exit_px = None
+
             if self.paper:
-                logger.info("[PAPER] CLOSE %s %s — %s", symbol, pid, reason)
+                logger.info("[PAPER] CLOSE %s %s - %s", symbol, pid, reason)
+                self.record_outcome(pos, exit_px, reason)
                 self.state.open_positions.pop(symbol, None)
                 closed.append({"symbol": symbol, "reason": reason, "paper": True})
                 continue
 
             resp = self.client.close_position(pid, reason=reason)
             if resp.get("ok"):
-                logger.info("CLOSED %s %s — %s", symbol, pid, reason)
+                logger.info("CLOSED %s %s - %s", symbol, pid, reason)
+                self.record_outcome(pos, exit_px, reason)
                 self.state.open_positions.pop(symbol, None)
             elif resp.get("indeterminate"):
                 # Do NOT drop it from state on an indeterminate close. Forgetting
@@ -287,6 +399,9 @@ class OptionsRunner:
         """Risk and hygiene checks, each named so a refusal is diagnosable."""
         if snap.is_stale(MAX_SNAPSHOT_AGE_SEC):
             return f"snapshot is stale (> {MAX_SNAPSHOT_AGE_SEC:.0f}s old)"
+        if not self.state.reconciled:
+            return ("position book is unreconciled - refusing to open anything "
+                    "until the sentinel can be reached")
         if snap.symbol in self.state.open_positions:
             return f"already holding {snap.symbol}"
         if self.state.capacity <= 0:
@@ -328,7 +443,9 @@ class OptionsRunner:
             self.state.open_positions[snap.symbol] = {
                 "position_id": f"paper_{decision.decision_id}",
                 "opened_at": snap.ts, "strike": strike,
-                "option_type": option_type}
+                "option_type": option_type, "symbol": snap.symbol,
+                "lots": lots, "entry_premium": premium,
+                "decision_id": decision.decision_id}
             return {"ok": True, "paper": True, "decision_id": decision.decision_id,
                     "option_type": option_type, "strike": strike, "lots": lots}
 
@@ -342,7 +459,10 @@ class OptionsRunner:
             if pid:
                 self.state.open_positions[snap.symbol] = {
                     "position_id": pid, "opened_at": snap.ts,
-                    "strike": strike, "option_type": option_type}
+                    "strike": strike, "option_type": option_type,
+                    "symbol": snap.symbol, "lots": lots,
+                    "entry_premium": premium,
+                    "decision_id": decision.decision_id}
         elif resp.get("indeterminate"):
             # The intent may or may not have landed. Do NOT retry and do NOT
             # assume it failed — either guess can double a position. Mark the

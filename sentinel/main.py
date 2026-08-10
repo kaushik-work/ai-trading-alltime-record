@@ -338,3 +338,27 @@ def clear_deadman():
     STATE.deadman_fired_at = None
     logger.warning("sentinel: dead-man's switch cleared manually (was %s)", was)
     return {"ok": True, "was_fired": was}
+
+
+@app.get("/positions")
+def positions():
+    """Every position the sentinel believes it holds, in detail.
+
+    The brain tier tracks open positions in MEMORY. That is fine until the
+    process restarts — at which point it forgets what it holds, the
+    "already holding this symbol" guard evaporates, and the council re-enters a
+    setup it is already in. The same structure, ordered twice.
+
+    Memory is the wrong place for that truth. THIS is the truth: the sentinel is
+    the only process that places orders, so it is the only one that knows what
+    was actually filled. The brain reconciles against this on every session
+    start rather than trusting its own recollection.
+    """
+    return {
+        "positions": [
+            {"position_id": pid, **{k: v for k, v in pos.items()
+                                    if k not in ("raw",)}}
+            for pid, pos in STATE.positions.items()
+        ],
+        "count": len(STATE.positions),
+    }

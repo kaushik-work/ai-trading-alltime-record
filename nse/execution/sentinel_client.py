@@ -86,6 +86,22 @@ class SentinelClient:
                                       "position_id": position_id,
                                       "reason": reason})
 
+    def positions(self) -> dict:
+        """What the SENTINEL believes it holds — the authoritative answer.
+
+        The brain's in-memory view is lost on restart; this is not. See
+        sentinel.main.positions.
+        """
+        import requests
+        try:
+            r = requests.get(f"{self.url.rstrip('/')}/positions",
+                             timeout=REQUEST_TIMEOUT_SEC)
+            return r.json()
+        except Exception as e:
+            logger.error("sentinel client: positions failed: %s", e)
+            return {"positions": [], "count": 0, "error": str(e),
+                    "indeterminate": True}
+
     def heartbeat(self) -> dict:
         """Tell the sentinel the brain is alive. Silence arms the dead-man's switch."""
         return self._post("/heartbeat", {"type": "HEARTBEAT"})
