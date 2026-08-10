@@ -53,22 +53,33 @@ REGIME_RANK_SESSIONS = 100
 #: (RESEARCH_LEARNINGS section 3.10, Rs 120-190 premium band, median
 #: half-spread) against volume_oi's 0.70% break-even:
 #:
-#:     NIFTY      0.1230%   clears it with room
-#:     SENSEX     0.1423%   clears it with room
-#:     BANKNIFTY  not measured in that study
-#:     FINNIFTY   1.4760%   TWICE the break-even -- structurally unprofitable
-#:                          before the strategy does anything at all
+#: Measured 2026-08-10 from live bid/ask in option_snapshots, near-ATM, each
+#: symbol in the premium band matching its own floor:
 #:
-#: So FINNIFTY is excluded on evidence, not caution. BANKNIFTY is excluded
-#: because nobody has measured its spread, which is a different reason and
-#: fixable by running nse/quant/spread_study.py against it.
+#:     NIFTY      p50 0.1221%   n=2299   clears
+#:     BANKNIFTY  p50 0.1359%   n= 637   clears
+#:     SENSEX     p50 0.1438%   n= 413   clears
+#:     FINNIFTY   p50 1.7896%   n=  38   FAILS -- 2.5x the break-even
+#:
+#: BANKNIFTY was previously blocked for a REASON THAT NO LONGER HOLDS: nobody
+#: had measured it. Measured, it sits alongside NIFTY, so it is enabled.
+#: FINNIFTY is confirmed worse than the earlier 1.4760% reading, on a small
+#: sample (n=38) that is itself evidence -- barely anything quotes a two-sided
+#: book there in the tradeable premium band.
+#:
+#: SPREAD CLEARING IS NOT THE SAME AS HAVING AN EDGE. Every lens weight in
+#: bootstrap.py was measured on NIFTY, because the 1m option archive is NIFTY.
+#: Enabling a symbol means its COSTS do not disqualify it; the edge is still
+#: extrapolated from another instrument, and that is a weaker claim than the
+#: NIFTY numbers support. Trading BANKNIFTY and SENSEX is a decision to test
+#: that extrapolation with real money, and should be sized accordingly.
 TRADEABLE: dict[str, str] = {
-    "NIFTY":  "measured: p50 half-spread 0.1230% vs 0.70% break-even",
-    "SENSEX": "measured: p50 half-spread 0.1423% vs 0.70% break-even",
+    "NIFTY":     "p50 half-spread 0.1221% vs 0.70% break-even",
+    "BANKNIFTY": "p50 half-spread 0.1359% (edge extrapolated from NIFTY)",
+    "SENSEX":    "p50 half-spread 0.1438% (edge extrapolated from NIFTY)",
 }
 BLOCKED: dict[str, str] = {
-    "FINNIFTY":  "p50 half-spread 1.4760% -- twice the 0.70% break-even",
-    "BANKNIFTY": "spread never measured; run nse/quant/spread_study.py first",
+    "FINNIFTY": "p50 half-spread 1.7896% -- 2.5x the 0.70% break-even",
 }
 
 _stop = False

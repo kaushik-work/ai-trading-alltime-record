@@ -153,7 +153,7 @@ export default function CryptoHome() {
         </div>
 
         <div className="flex-1 min-w-0">
-        {tab === "BANKNIFTY" || tab === "FINNIFTY" || tab === "BTC" || tab === "ETH" || tab === "XAUT" ? (
+        {tab === "FINNIFTY" || tab === "BTC" || tab === "ETH" || tab === "XAUT" ? (
           /* An instrument with nothing behind it gets an honest empty state
              rather than a chart of a bot that is not running. Saying WHY it is
              not trading, with the measured number, is more useful than a blank
@@ -164,14 +164,10 @@ export default function CryptoHome() {
             </div>
             <div style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.6 }}>
               {tab === "FINNIFTY" && (
-                <>Refused on measured evidence: median half-spread <b>1.4760%</b> against
-                volume_oi&apos;s <b>0.70%</b> break-even. Section 3.10 calls it effectively
-                untradeable at these premiums.</>
-              )}
-              {tab === "BANKNIFTY" && (
-                <>Refused because its spread has never been measured — a different
-                reason from FINNIFTY, and a fixable one. Run the spread study
-                against it and it can be enabled.</>
+                <>Refused on measured evidence: median half-spread <b>1.7896%</b> against
+                volume_oi&apos;s <b>0.70%</b> break-even — 2.5x. The sample is small
+                (n=38), which is itself the finding: barely anything quotes a
+                two-sided book there in the tradeable premium band.</>
               )}
               {tab === "XAUT" && (
                 <>Tether Gold perp. Listed 2026-04-17, so it has <b>zero bars</b> in
@@ -189,7 +185,7 @@ export default function CryptoHome() {
               )}
             </div>
           </div>
-        ) : tab === "NIFTY" || tab === "SENSEX" ? (
+        ) : tab === "NIFTY" || tab === "SENSEX" || tab === "BANKNIFTY" ? (
           <NseView symbol={tab} />
         ) : viewMode === "nse" ? <NseView /> : (
           <>

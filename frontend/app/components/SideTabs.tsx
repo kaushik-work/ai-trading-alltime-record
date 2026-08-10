@@ -41,8 +41,8 @@ const ENTRIES: Entry[] = [
 
   { key: "NIFTY",     label: "NIFTY",     group: "NSE / BSE", status: "live",    note: "measured" },
   { key: "SENSEX",    label: "SENSEX",    group: "NSE / BSE", status: "live",    note: "spread ok" },
-  { key: "BANKNIFTY", label: "BANKNIFTY", group: "NSE / BSE", status: "blocked", note: "spread unmeasured" },
-  { key: "FINNIFTY",  label: "FINNIFTY",  group: "NSE / BSE", status: "blocked", note: "1.48% spread" },
+  { key: "BANKNIFTY", label: "BANKNIFTY", group: "NSE / BSE", status: "live",    note: "spread ok" },
+  { key: "FINNIFTY",  label: "FINNIFTY",  group: "NSE / BSE", status: "blocked", note: "1.79% spread" },
 
   { key: "BTC",  label: "BTC",  group: "Crypto", status: "none", note: "measuring" },
   { key: "ETH",  label: "ETH",  group: "Crypto", status: "none", note: "measuring" },
