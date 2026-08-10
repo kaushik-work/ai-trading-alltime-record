@@ -136,11 +136,50 @@ def normalise_day(day_df: pd.DataFrame, session: date,
     return df
 
 
+def prior_session_bars(session: date, symbol: str = "NIFTY",
+                       bar_minutes: int = 5) -> pd.DataFrame:
+    """The previous trading session's bars, for `MarketSnapshot.prior_bars`.
+
+    The live path supplies these so that momentum/ict_smc are not blind for the
+    first half of every session. Replay MUST supply them too: a lens that sees
+    yesterday live but not in backtest is a lens whose measured record describes
+    a different system from the one trading, which is the whole failure mode the
+    shared-MarketSnapshot design exists to prevent.
+
+    Returns empty when the previous session is missing from the archive, which
+    is the honest answer — never silently reaches further back, because a
+    "previous session" three weeks stale is not the level anyone is watching.
+    """
+    from nse.backtest.nifty_loader import load_option_day
+
+    prev = [d for d in available_sessions() if d < session]
+    if not prev:
+        return pd.DataFrame()
+    try:
+        pdf = load_option_day(max(prev).isoformat())
+    except FileNotFoundError:
+        return pd.DataFrame()
+    if pdf is None or pdf.empty:
+        return pd.DataFrame()
+
+    df = normalise_day(pdf, max(prev), symbol)
+    per_minute = (df.groupby("datetime", as_index=False)
+                    .agg(close=("spot", "first"), volume=("volume", "sum"))
+                    .sort_values("datetime")
+                    .set_index("datetime"))
+    return (per_minute.resample(f"{bar_minutes}min")
+                      .agg(close=("close", "last"), high=("close", "max"),
+                           low=("close", "min"), open=("close", "first"),
+                           volume=("volume", "sum"))
+                      .dropna().reset_index())
+
+
 def snapshots_for_day(session: date, symbol: str = "NIFTY",
                       every_minutes: int = 5,
                       strikes_around: int = 10,
                       bar_minutes: int = 5,
                       day_df: Optional[pd.DataFrame] = None,
+                      with_prior: bool = True,
                       ) -> Iterator[MarketSnapshot]:
     """Emit one MarketSnapshot per sampled minute of a session.
 
@@ -191,6 +230,9 @@ def snapshots_for_day(session: date, symbol: str = "NIFTY",
                              .dropna()
                              .reset_index())
 
+    prior = (prior_session_bars(session, symbol, bar_minutes)
+             if with_prior else pd.DataFrame())
+
     for ts, bar in df.groupby("datetime", sort=True):
         if not isinstance(ts, pd.Timestamp):
             continue
@@ -237,6 +279,7 @@ def snapshots_for_day(session: date, symbol: str = "NIFTY",
             atm=atm,
             chain=chain.reset_index(drop=True),
             bars=bars.reset_index(drop=True),
+            prior_bars=prior,
             vix=None,                      # not in the archive; never faked
             source="replay",
         ), missing

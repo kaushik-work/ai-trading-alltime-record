@@ -65,7 +65,12 @@ class MomentumLens(BaseLens):
     backtestable = True
 
     def _evaluate(self, snap: MarketSnapshot) -> LensVerdict:
-        bars = snap.bars
+        # Continuous structure: a 20-bar range and an order block do not
+        # reset at 09:15. Without yesterday's tail this lens was silent
+        # until ~11:45 IST every session. `continuous_bars` prepends only
+        # as many prior bars as are missing, so by midday the window is
+        # pure session data and behaviour is unchanged.
+        bars = snap.continuous_bars(MIN_BARS)
         if bars is None or len(bars) < MIN_BARS:
             return abstain(self.name,
                            f"{0 if bars is None else len(bars)} bars — too few for a range")

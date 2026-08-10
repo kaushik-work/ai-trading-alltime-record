@@ -78,11 +78,58 @@ class MarketSnapshot:
     atm: int
     chain: pd.DataFrame
     bars: pd.DataFrame = field(default_factory=pd.DataFrame)
+
+    #: The PREVIOUS session's bars, for lenses that read continuous structure.
+    #: Kept separate from `bars` rather than concatenated into it, because the
+    #: two are not interchangeable and the difference is not cosmetic:
+    #:
+    #:   vwap      is SESSION-ANCHORED by definition. Feeding it yesterday's
+    #:             prints would compute a two-day VWAP and call it a session
+    #:             anchor — a different indicator wearing the same name.
+    #:   momentum  a 20-bar range does not reset at 09:15. Yesterday's high is
+    #:             the level traders are watching at the open.
+    #:   ict_smc   order blocks and fair-value gaps are MORE valid the older
+    #:             they are, up to a point. Discarding them nightly discards
+    #:             the structure the lens exists to read.
+    #:
+    #: So the lens decides, via `continuous_bars`. Concatenating centrally would
+    #: silently redefine VWAP; leaving it out entirely leaves three lenses blind
+    #: until midday. See `continuous_bars` for the warm-up arithmetic.
+    prior_bars: pd.DataFrame = field(default_factory=pd.DataFrame)
+
     vix: Optional[float] = None
     futures_basis: Optional[float] = None
     source: str = "live"              # "live" | "replay"
 
     # ── derived ──────────────────────────────────────────────────────────────
+    def continuous_bars(self, min_bars: int = 40) -> pd.DataFrame:
+        """Session bars, extended backwards with yesterday's only if needed.
+
+        THE PROBLEM THIS SOLVES. On 5-minute bars a session starts with zero
+        history and accumulates twelve bars an hour. `momentum` and `vwap` need
+        30 (≈11:45 IST) and `ict_smc` needs 40 (≈12:35 IST) — so three of eight
+        lenses were structurally silent through the entire first half of every
+        session, including the open, which is where the day's range is usually
+        set. That is not a tuning preference; it is a third of the roster
+        switched off during the most active hours.
+
+        Only as many prior bars as are actually needed are prepended, so by
+        midday the window is pure session data and behaves exactly as it did
+        before. The overnight gap is real and is NOT smoothed over — a gap
+        through yesterday's range is a genuine breakout and momentum should see
+        it as one.
+
+        Callers that must not cross the session boundary use `bars` directly.
+        """
+        if self.bars is None or len(self.bars) >= min_bars:
+            return self.bars if self.bars is not None else pd.DataFrame()
+        if self.prior_bars is None or self.prior_bars.empty:
+            return self.bars
+        need = min_bars - len(self.bars)
+        tail = self.prior_bars.tail(need)
+        cols = [c for c in self.bars.columns if c in tail.columns] or list(tail.columns)
+        return pd.concat([tail[cols], self.bars[cols]], ignore_index=True)
+
     @property
     def dte(self) -> float:
         """Days to expiry as a float, against the real exchange close."""
@@ -253,6 +300,47 @@ def _cached_bars(fetcher, symbol: str, interval: str):
     return pd.DataFrame()
 
 
+#: Prior-session bars change once a day, so they are cached for the session.
+_prior_cache: dict = {}
+
+
+def _cached_prior_bars(fetcher, symbol: str, interval: str, today):
+    """The previous session's bars, fetched once per day.
+
+    Only the rows STRICTLY BEFORE today's first bar are kept. Angel's
+    multi-day endpoint returns a window that includes today, and letting those
+    rows through would duplicate the session's own bars inside `prior_bars`,
+    quietly double-counting the morning in any lens that concatenates.
+    """
+    import datetime as _dt
+
+    key = (symbol, interval, _dt.date.today())
+    if key in _prior_cache:
+        return _prior_cache[key]
+
+    out = pd.DataFrame()
+    try:
+        hist = fetcher.fetch_historical_df(symbol, interval, days=5)
+        if hist is not None and not hist.empty:
+            hist = hist.rename(columns={c: c.lower() for c in hist.columns})
+            if "datetime" in hist.columns:
+                hist["datetime"] = pd.to_datetime(hist["datetime"])
+                if today is not None and not today.empty and "datetime" in today.columns:
+                    first = pd.to_datetime(today["datetime"]).min()
+                    hist = hist[hist["datetime"] < first]
+                else:
+                    cutoff = pd.Timestamp(_dt.date.today())
+                    if hist["datetime"].dt.tz is not None:
+                        cutoff = cutoff.tz_localize(hist["datetime"].dt.tz)
+                    hist = hist[hist["datetime"] < cutoff]
+            out = hist.reset_index(drop=True)
+    except Exception as e:
+        logger.debug("build_live: prior bars unavailable for %s: %s", symbol, e)
+
+    _prior_cache[key] = out
+    return out
+
+
 def build_live(symbol: str, fetcher=None, strikes_around: int = 8,
                bars_interval: str = "5m") -> Optional[MarketSnapshot]:
     """Build a snapshot from Angel SmartAPI. Returns None if the market is unreadable.
@@ -283,6 +371,7 @@ def build_live(symbol: str, fetcher=None, strikes_around: int = 8,
             return None
 
         bars = _cached_bars(cache.fetcher, symbol, bars_interval)
+        prior = _cached_prior_bars(cache.fetcher, symbol, bars_interval, bars)
 
         vix = None
         try:
@@ -298,6 +387,7 @@ def build_live(symbol: str, fetcher=None, strikes_around: int = 8,
             atm=atm,
             chain=chain,
             bars=bars if bars is not None else pd.DataFrame(),
+            prior_bars=prior if prior is not None else pd.DataFrame(),
             vix=vix,
             source="live",
         )
