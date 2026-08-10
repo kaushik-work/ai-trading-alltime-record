@@ -14,12 +14,18 @@ PROTOCOL EVERY ROW BELOW WENT THROUGH
     TEST (2025-26) IS UNSPENT and stays that way until one assembled candidate
     is ready. See RESEARCH_LEARNINGS section 2.1.
 
-WHAT THE MEASUREMENT SAID: ONE LENS OF FOUR SURVIVED
+WHAT THE MEASUREMENT SAID: ONE LENS OF EIGHT SURVIVED
 
-Three of the four numeric lenses measured NEGATIVE, and the combined vote did
-not beat the survivor alone. The roster stays in the code — a lens costs
-microseconds and journals its opinion whether or not it can trade — but only
-volume_oi carries weight, and only on PROBATION.
+Six of the seven backtestable lenses measured negative or flat, the eighth
+(vision) cannot be replayed at all, and the combined vote did not beat the
+survivor alone. The roster stays in the code — a lens costs microseconds and
+journals its opinion whether or not it can trade — but only volume_oi carries
+weight, and only on PROBATION.
+
+Adding a lens is meant to be cheap and it is: a new one votes at weight 0 until
+attribution promotes it, so a bad idea costs a journal entry rather than money.
+Seven lenses have now cost exactly that, and the roster is more valuable for
+having them measured and benched than it would be for never having tried.
 
 DO NOT FLIP A NEGATIVE LENS'S SIGN TO RESCUE IT
 
@@ -71,7 +77,9 @@ class Measurement:
         return (self.train_bps > 0) == (self.validate_bps > 0)
 
 
-#: Measured 2026-08-08. Re-run nse/backtest/lens_harness.py to refresh, and
+#: Measured 2026-08-08; momentum and ict_smc re-measured 2026-08-10 after
+#: prior-session bars changed what they can see. Re-run
+#: nse/backtest/lens_harness.py to refresh, and
 #: change these numbers ONLY from a run, never from an expectation.
 MEASURED: dict[str, Measurement] = {
     "volume_oi": Measurement(
@@ -100,15 +108,20 @@ MEASURED: dict[str, Measurement] = {
     ),
     "ict_smc": Measurement(
         lens="ict_smc",
-        train_bps=-4.25, train_p=0.0000,
-        validate_bps=-0.68, validate_p=0.5609,
+        train_bps=-1.41, train_p=0.0073,
+        validate_bps=-0.15, validate_p=0.8546,
         lifecycle=Lifecycle.SHADOW,
         bootstrap_weight=0.0,
-        note=("significantly negative on TRAIN and abstaining on 57% of "
-              "snapshots. The pre-registered caveat — archived wicks are "
-              "extremes of one-minute CLOSES, so this lens under-fires on "
-              "replay — would make a WEAK result ambiguous, but this result is "
-              "not weak-ambiguous: where it fired, it lost. Re-measure if a "
+        note=("negative on TRAIN, near-zero on VALIDATE, signs disagree. The "
+              "pre-registered caveat — archived wicks are extremes of "
+              "one-minute CLOSES, so this lens under-fires on replay — would "
+              "make a WEAK result ambiguous, but where it fires, it loses. "
+              "RE-MEASURED with "
+              "prior-session bars, which cut abstentions from 2,781 to 137 and "
+              "raised TRAIN n from 828 to 2,532. On that much larger sample it "
+              "is less bad (TRAIN -4.25 -> -1.41, VALIDATE -0.68 -> -0.15) but "
+              "still negative and still sign-disagreeing, so the earlier result "
+              "was not merely a small-sample artefact. Re-measure again if a "
               "true-OHLC spot series ever lands."),
     ),
     "greeks": Measurement(
@@ -140,17 +153,21 @@ MEASURED: dict[str, Measurement] = {
     ),
     "momentum": Measurement(
         lens="momentum",
-        train_bps=+1.38, train_p=0.4834,
-        validate_bps=-1.21, validate_p=0.7712,
+        train_bps=-1.06, train_p=0.5150,
+        validate_bps=-0.73, validate_p=0.8163,
         lifecycle=Lifecycle.SHADOW,
         bootstrap_weight=0.0,
-        note=("range breakout in ATR. No edge, signs disagree, on a real "
-              "sample (207 directional TRAIN verdicts). Its main value is a "
-              "CLEAN NEGATIVE: momentum is adjacent to inverting vwap's "
+        note=("range breakout in ATR. No edge, signs disagree. Its main value "
+              "is a CLEAN NEGATIVE: momentum is adjacent to inverting vwap's "
               "significantly-negative mean-reversion result, and it does not "
               "even show positive in-sample. That closes the "
               "'trend was the right convention' hypothesis rather than leaving "
-              "it as an untested temptation."),
+              "it as an untested temptation. RE-MEASURED after prior-session "
+              "bars removed the warm-up blindness: TRAIN n went 163 -> 305 and "
+              "the edge went +1.38 -> -1.06, so the early-session breakouts it "
+              "can now see are if anything worse than the midday ones it "
+              "already saw. The warm-up fix was still right — a lens should be "
+              "judged on the whole session — it simply did not rescue this one."),
     ),
     "liquidity": Measurement(
         lens="liquidity",
