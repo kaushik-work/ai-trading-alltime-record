@@ -118,12 +118,20 @@ def regime_percentile(symbol: str = "NIFTY") -> Optional[float]:
 
 
 def market_open(now: Optional[datetime] = None, symbol: str = "NIFTY") -> bool:
+    """Is the council awake? True from the WARM-UP time, not the bell.
+
+    Deciding starts at 09:00 so the structural lenses have bars and the journal
+    is loaded before anything matters. TRADING is gated separately at 09:30 by
+    OptionsRunner -- being awake and being allowed to buy are different
+    questions, and conflating them is what left three lenses mute through the
+    open.
+    """
     now = (now or datetime.now(timezone.utc)).astimezone(IST)
     if now.weekday() >= 5:
         return False
-    from nse.config import market_close_for
+    from nse.config import COUNCIL_WARMUP_FROM, market_close_for
     close_t = market_close_for(symbol, now.date())
-    return now.time() >= __import__("datetime").time(9, 15) and now.time() <= close_t
+    return COUNCIL_WARMUP_FROM <= now.time() <= close_t
 
 
 def _start_heartbeat(runner) -> "threading.Thread":

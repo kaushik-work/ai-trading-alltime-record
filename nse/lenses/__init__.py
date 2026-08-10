@@ -17,6 +17,8 @@ from nse.lenses.base import (
     LensVerdict,
     abstain,
 )
+from nse.lenses.composite_profile import CompositeProfileLens
+from nse.lenses.gamma_exposure import GammaExposureLens
 from nse.lenses.greeks import GreeksLens
 from nse.lenses.ict_smc import ICTSMCLens
 from nse.lenses.liquidity import LiquidityLens
@@ -34,7 +36,8 @@ from nse.lenses.vision import VisionLens
 #: attribution promotes it, so adding one here is free and is meant to be — the
 #: cost of a bad idea should be a journal entry, not a loss.
 ROSTER = [GreeksLens, VolumeOILens, VWAPLens, ICTSMCLens,
-          SmileLens, MomentumLens, LiquidityLens, VisionLens]
+          SmileLens, MomentumLens, LiquidityLens,
+          CompositeProfileLens, GammaExposureLens, VisionLens]
 
 #: Lenses that report CONTEXT rather than direction. They emit NEUTRAL by
 #: design, so the directional entry harness scores them at exactly zero and that
@@ -44,5 +47,6 @@ CONTEXT_LENSES = {"liquidity"}
 
 __all__ = ["BaseLens", "Direction", "Lens", "LensVerdict", "abstain",
            "GreeksLens", "VolumeOILens", "VWAPLens", "ICTSMCLens",
-           "SmileLens", "MomentumLens", "LiquidityLens", "VisionLens",
+           "SmileLens", "MomentumLens", "LiquidityLens",
+           "CompositeProfileLens", "GammaExposureLens", "VisionLens",
            "ROSTER", "CONTEXT_LENSES"]

@@ -1,8 +1,21 @@
-"""NSE production dials — hardcoded, not .env."""
+"""NSE production dials.
+
+MEASURED parameters are hardcoded here on purpose — a lens weight or a measured
+horizon that an env var can change is a strategy that can drift away from the
+numbers in RESEARCH_LEARNINGS without anyone noticing.
+
+OPERATIONAL knobs (session times, premium floors) accept an env override with
+the reviewed value as the default, because those are deployment choices a human
+may legitimately need to change without a code review.
+"""
 
 from __future__ import annotations
 
+import logging
+import os
 from datetime import date, time
+
+logger = logging.getLogger(__name__)
 
 # Supported underlyings and their option chain step sizes / lot sizes.
 SYMBOLS = ("NIFTY", "BANKNIFTY", "FINNIFTY", "SENSEX")
@@ -37,6 +50,84 @@ EXCHANGE: dict[str, str] = {
 # its final settlement still uses the 15:00-15:30 VWAP window. Flip the BFO
 # entry to time(15, 40) when BSE announces.
 MARKET_OPEN = time(9, 15)
+
+# ── The council's own session schedule ───────────────────────────────────────
+#
+# WHAT IS ENV-TUNABLE HERE AND WHAT DELIBERATELY IS NOT.
+#
+# Operational knobs -- when to wake up, when to start trading, what premium is
+# too thin -- are env-overridable, because they are deployment choices that a
+# human may need to change on a Friday without a code review.
+#
+# MEASURED parameters are NOT env-tunable and live in the module that owns
+# them. `OptionsRunner.HOLD_MINUTES` is 60 because that is the horizon the
+# +1.66/+1.49 bps edge was measured at; letting an env var change it would let
+# a deploy silently trade a strategy nobody measured while every number in
+# RESEARCH_LEARNINGS still claimed to describe it. Same for the lens weights
+# (nse/lenses/bootstrap.py) and the conviction gate.
+#
+# This mirrors the CLAUDE.md rule that risk dials live in code, not .env --
+# reviewed, not edited in an SSH session at 15:20.
+
+
+def _env_time(name: str, default: time) -> time:
+    """HH:MM from the environment, falling back to the reviewed default."""
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        hh, mm = raw.split(":")
+        return time(int(hh), int(mm))
+    except Exception:
+        logger.warning("%s=%r is not HH:MM — using %s", name, raw, default)
+        return default
+
+
+def _env_premium_floors(default: dict) -> dict:
+    """COUNCIL_MIN_PREMIUM="NIFTY:150,BANKNIFTY:400" overrides per symbol."""
+    raw = os.environ.get("COUNCIL_MIN_PREMIUM", "").strip()
+    if not raw:
+        return dict(default)
+    out = dict(default)
+    for part in raw.split(","):
+        if ":" not in part:
+            continue
+        sym, _, val = part.partition(":")
+        try:
+            out[sym.strip().upper()] = float(val)
+        except ValueError:
+            logger.warning("COUNCIL_MIN_PREMIUM: cannot parse %r", part)
+    return out
+
+
+#: WARM UP from here: subscribe, build bars, let the lenses read and journal.
+#: The structural lenses need history before they can say anything, and starting
+#: cold at the bell leaves momentum/ict_smc/composite mute through the most
+#: active part of the day.
+COUNCIL_WARMUP_FROM = _env_time("COUNCIL_WARMUP_FROM", time(9, 0))
+
+#: DO NOT TRADE UNTIL HERE, even with a signal.
+#:
+#: The first fifteen minutes of an options session is price discovery, not
+#: price. RESEARCH_LEARNINGS section 3.10 measured the "open 09:15-09:30" bucket
+#: SEPARATELY from midday precisely because it behaves differently, and
+#: volume_oi's 0.70% break-even was computed against the calmer distribution.
+#: Trading the open is trading outside the regime the edge was measured in.
+COUNCIL_TRADE_FROM = _env_time("COUNCIL_TRADE_FROM", time(9, 30))
+
+#: Minimum option premium the council will BUY, per symbol.
+#:
+#: Cheap options are where percentage spread explodes: section 3.10 measured
+#: half-spread against the Rs 120-190 band and deep-OTM p90 reached 2.13% --
+#: three times the 0.70% break-even. A Rs 5 option quoted 4.75/5.25 is a 5%
+#: half-spread, and the cheapness is exactly what makes it look attractive.
+MIN_OPTION_PREMIUM: dict[str, float] = _env_premium_floors({
+    "NIFTY": 150.0,
+    "BANKNIFTY": 400.0,
+    "SENSEX": 150.0,
+    "FINNIFTY": 150.0,
+})
+
 MARKET_CLOSE_BY_EXCHANGE: dict[str, time] = {
     "NFO": time(15, 40),
     "BFO": time(15, 30),

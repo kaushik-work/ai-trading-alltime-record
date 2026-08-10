@@ -41,7 +41,8 @@ from datetime import date, datetime, time, timezone
 from typing import Optional
 
 from nse.brain import BrainState
-from nse.config import LOT_SIZES, TOTAL_CAPITAL_INR, market_close_for
+from nse.config import (COUNCIL_TRADE_FROM, LOT_SIZES, MIN_OPTION_PREMIUM,
+                        TOTAL_CAPITAL_INR, market_close_for)
 from nse.council import Council, journal_decision
 from nse.execution.sentinel_client import SentinelClient
 from nse.journal import DayJournal, build as build_journal, for_session, save as save_journal
@@ -402,6 +403,12 @@ class OptionsRunner:
         """Risk and hygiene checks, each named so a refusal is diagnosable."""
         if snap.is_stale(MAX_SNAPSHOT_AGE_SEC):
             return f"snapshot is stale (> {MAX_SNAPSHOT_AGE_SEC:.0f}s old)"
+        # Price discovery is not price. See COUNCIL_TRADE_FROM.
+        ist_now = snap.ts.astimezone(_IST).time()
+        if ist_now < COUNCIL_TRADE_FROM:
+            return (f"{ist_now:%H:%M} IST — holding until "
+                    f"{COUNCIL_TRADE_FROM:%H:%M} while opening spreads settle")
+
         # A FROZEN FEED IS NOT A SIGNAL, IT IS THE ABSENCE OF ONE.
         #
         # On 2026-08-10 the cash index stopped ticking at 15:30 while NFO stayed
@@ -453,6 +460,23 @@ class OptionsRunner:
             return None
 
         premium = row.get("ltp")
+
+        # Reject cheap contracts. Percentage spread explodes as premium falls,
+        # and a Rs 5 option quoted 4.75/5.25 carries a 5% half-spread against a
+        # 0.70% break-even. See MIN_OPTION_PREMIUM.
+        floor = MIN_OPTION_PREMIUM.get(snap.symbol, 0.0)
+        try:
+            prem_f = float(premium)
+        except (TypeError, ValueError):
+            prem_f = 0.0
+        if prem_f < floor:
+            self.state.rejected += 1
+            self.state.last_reason = (
+                f"ATM {strike}{option_type} at {prem_f:.2f} is below the "
+                f"{snap.symbol} floor of {floor:.0f} — spread would eat it")
+            logger.info("%s", self.state.last_reason)
+            return None
+
         lots = _size(premium, snap.symbol)
         if lots < 1:
             self.state.rejected += 1
