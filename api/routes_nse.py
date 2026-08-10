@@ -570,14 +570,49 @@ def nse_health(user: dict = Depends(_get_current_user)):
         add("sentinel", "fail", f"unreachable — {str(e)[:80]}")
 
     # 3. Is the feed actually live?
+    #
+    # This CANNOT be answered by calling get_stream().diagnostics() here. That
+    # is a per-process singleton and the socket belongs to the COUNCIL process,
+    # not to whichever worker serves this request. Asking locally returns
+    # "socket down" on a perfectly healthy system, permanently — the exact
+    # cry-wolf failure that makes people stop reading a status page.
+    #
+    # So it is inferred from shared state instead: the council cannot build a
+    # snapshot at all without a live chain, so a RECENT decision carrying a
+    # plausible spot is positive evidence the feed is up, and it is evidence
+    # that crosses process boundaries.
+    try:
+        from core.mongo import get_db
+        from nse.council import COUNCIL_COLLECTION
+        db = get_db()
+        doc = (db[COUNCIL_COLLECTION].find_one({}, {"_id": 0, "ts": 1, "spot": 1},
+                                               sort=[("ts", -1)])
+               if db is not None else None)
+        if not doc or not doc.get("spot"):
+            add("market feed", "warn",
+                "no decision carrying a spot yet — cannot infer feed state")
+        else:
+            fts = datetime.fromisoformat(doc["ts"])
+            if fts.tzinfo is None:
+                fts = fts.replace(tzinfo=timezone.utc)
+            fage = (now - fts).total_seconds()
+            add("market feed", "ok" if fage < 300 else "warn",
+                f"spot {doc['spot']:.1f} seen {int(fage)}s ago",
+                round(doc["spot"], 2))
+    except Exception as e:
+        add("market feed", "warn", str(e)[:80])
+
+    # In-process socket diagnostics, when this worker happens to own one.
+    # Reported separately and never as a failure, precisely because its absence
+    # means "not observable from here", not "broken".
     try:
         from nse.ws.angel_stream import get_stream
         d = get_stream().diagnostics()
-        add("market feed", "ok" if d.get("connected") else "fail",
-            f"{d.get('fresh_contracts', '?')} fresh contracts"
-            if d.get("connected") else "socket down")
-    except Exception as e:
-        add("market feed", "warn", str(e)[:80])
+        if d.get("connected"):
+            add("socket (this process)", "ok",
+                f"{d.get('fresh_contracts', '?')} fresh contracts")
+    except Exception:
+        pass
 
     # 4. Who can actually move capital, and is anything dying?
     try:
