@@ -98,6 +98,43 @@ COUNCIL_MIN_OBJECTION_CONFIDENCE: float = 0.30
 #: Flip to True when deliberation beats its parent on live closed trades.
 COUNCIL_DELIBERATION_BINDING: bool = False
 
+#: The conviction gate is the one thing here that self-tunes. It is expressed as
+#: a TARGET PERCENTILE of the lead lens's own recent confidence distribution —
+#: "trade the top third" — rather than as the value 0.414, which is merely what
+#: the top third worked out to on TRAIN.
+#:
+#: This is the difference that makes it survive a regime change. An absolute cut
+#: means a different thing in every regime: the ATR gate in section 3.15 was
+#: fitted on TRAIN, kept 11% of TRAIN, and kept 6% of VALIDATE. A percentile
+#: keeps the same fraction of the tape by construction. See nse/selftune.py.
+COUNCIL_LEAD_TARGET_PERCENTILE: float = 0.67
+
+#: Is the ADAPTIVE QUORUM allowed to change the traded decision?
+#:
+#: False. The operator's rule — demand more agreement when the tape is hard,
+#: let one good lens through when it is easy — measured POSITIVE IN BOTH SPLITS
+#: (+0.67 TRAIN, +1.27 VALIDATE bps against the conviction-gated arm) and
+#: reached significance in NEITHER (p=0.145, p=0.153).
+#:
+#: Consistent-but-not-significant is exactly the state that deserves shadow
+#: rather than a coin flip: it is too plausible to discard and too weak to fund.
+#: It runs, it is journaled, the dashboard shows what it WOULD have done, and it
+#: moves no capital until live attribution separates it from noise.
+#:
+#: Note the near-miss it protects against: `uncontested only` scored VALIDATE
+#: +10.52 bps at bootstrap p=0.0010 and was worth NOTHING on TRAIN (p=0.62).
+#: One spectacular split is what an artefact looks like.
+COUNCIL_ADAPTIVE_QUORUM_BINDING: bool = False
+
+#: Below this regime percentile the tape is "hard" — chop, where the lead lens
+#: measured worst (ATR bottom tercile: TRAIN +0.79, VALIDATE -1.35).
+COUNCIL_HARD_REGIME_PCT: float = 0.33
+
+#: In a hard regime, this fraction of the roster must have been able to READ the
+#: snapshot before the council acts on it. A snapshot most lenses abstain on is,
+#: by direct evidence, hard to read.
+COUNCIL_HARD_MIN_READABILITY: float = 0.75
+
 #: How much a live objection cuts conviction. Deliberately not a veto: a lens
 #: with zero measured edge should be able to give the council pause, not the
 #: power to overrule the one lens that has been shown to work.
@@ -127,6 +164,11 @@ class CouncilDecision:
     weights: dict = field(default_factory=dict)
     journal_session: Optional[str] = None      # which journal informed this
 
+    #: What the shadow mechanisms WOULD have done. Journaled on every decision
+    #: so their live track record accrues from day one — a mechanism cannot earn
+    #: its way out of shadow if nobody recorded what it advised while in it.
+    shadow: dict = field(default_factory=dict)
+
     n_spoke: int = 0
     n_deferred: int = 0
     n_revised: int = 0
@@ -149,6 +191,7 @@ class CouncilDecision:
             "objections": self.objections,
             "weights": self.weights,
             "journal_session": self.journal_session,
+            "shadow": self.shadow,
             "n_spoke": self.n_spoke, "n_deferred": self.n_deferred,
             "n_revised": self.n_revised, "n_abstained": self.n_abstained,
         }
@@ -179,24 +222,109 @@ class Council:
 
     def __init__(self, lenses: Sequence, brains: Optional[dict] = None,
                  threshold: float = VOTE_THRESHOLD,
-                 min_lead_confidence: float = COUNCIL_MIN_LEAD_CONFIDENCE,
-                 deliberation_binding: bool = COUNCIL_DELIBERATION_BINDING):
+                 min_lead_confidence: Optional[float] = None,
+                 deliberation_binding: bool = COUNCIL_DELIBERATION_BINDING,
+                 adaptive_quorum_binding: bool = COUNCIL_ADAPTIVE_QUORUM_BINDING,
+                 self_tune: bool = True):
         self.lenses = list(lenses)
         self.threshold = threshold
-        self.min_lead_confidence = min_lead_confidence
         self.deliberation_binding = deliberation_binding
+        self.adaptive_quorum_binding = adaptive_quorum_binding
+        self._regime_pct: Optional[float] = None
         self.brains: dict = brains if brains is not None else {
             l.name: load_brain(l.name, backtestable=getattr(l, "backtestable", True))
             for l in self.lenses}
+
+        # The conviction gate is self-tuning: it tracks a PERCENTILE of the lead
+        # lens's own recent confidence, not a frozen number. An explicit
+        # `min_lead_confidence` overrides that and pins it — used by the
+        # measurement harness, where a moving threshold would make two arms
+        # incomparable.
+        if min_lead_confidence is not None:
+            self.gate = None
+            self.min_lead_confidence = float(min_lead_confidence)
+        elif self_tune:
+            from nse.selftune import load as load_tunable
+            self.gate = load_tunable("council", "min_lead_confidence",
+                                     bootstrap=COUNCIL_MIN_LEAD_CONFIDENCE,
+                                     target_percentile=COUNCIL_LEAD_TARGET_PERCENTILE)
+            self.min_lead_confidence = self.gate.value
+        else:
+            self.gate = None
+            self.min_lead_confidence = COUNCIL_MIN_LEAD_CONFIDENCE
+
+    def retune_gate(self, confidences_by_session: dict, as_of) -> Optional[str]:
+        """Move the conviction gate to its target percentile of recent history.
+
+        Call this ONCE per session, out of market hours. Retuning intraday would
+        mean two snapshots an hour apart were judged against different bars,
+        which makes the session's decisions incomparable with each other and the
+        day's attribution meaningless.
+        """
+        if self.gate is None:
+            return None
+        from nse.selftune import recalibrate_lens, save as save_tunable
+        self.gate, note = recalibrate_lens("council", self.gate,
+                                           confidences_by_session, as_of)
+        self.min_lead_confidence = self.gate.value
+        save_tunable("council", self.gate)
+        logger.info("council gate retuned: %s", note)
+        return note
 
     def weight_of(self, name: str) -> float:
         b = self.brains.get(name)
         return float(b.effective_weight()) if isinstance(b, BrainState) else 0.0
 
+    # ── how hard is this tape? ───────────────────────────────────────────────
+    def difficulty(self, round1: list,
+                   regime_pct: Optional[float] = None) -> dict:
+        """Read the council's own difficulty off the verdicts it just produced.
+
+        `readability` is the signal worth having: a snapshot most lenses ABSTAIN
+        on is, by direct evidence, hard to read. That is the council measuring
+        its own footing rather than being told about it by an external indicator.
+
+        `regime_pct` is a CAUSAL ROLLING PERCENTILE supplied by the caller (where
+        today's realised vol sits in the trailing distribution), or None when
+        there is not enough history. Never an absolute volatility level — see
+        COUNCIL_HARD_REGIME_PCT.
+        """
+        total = len(round1) or 1
+        spoke = [v for v in round1
+                 if v.speaks and v.direction != Direction.NEUTRAL]
+        readability = len(spoke) / total
+        if len(spoke) >= 2:
+            dirs = [int(v.direction) for v in spoke]
+            contest = 1.0 - abs(sum(dirs)) / len(dirs)   # 0 unanimous, 1 split
+        else:
+            contest = 0.0
+        hard = ((regime_pct is not None and regime_pct < COUNCIL_HARD_REGIME_PCT)
+                or contest > 0.0)
+        return {"regime_pct": regime_pct, "readability": round(readability, 4),
+                "contest": round(contest, 4), "hard": hard}
+
+    def quorum_ok(self, diff: dict) -> tuple[bool, str]:
+        """The operator's adaptive rule: easy tape needs one lens, hard needs more.
+
+        Returns (allowed, why) and is ADVISORY unless
+        COUNCIL_ADAPTIVE_QUORUM_BINDING — see that flag for the measurement.
+        """
+        if not diff["hard"]:
+            return True, "tape is easy — the lead alone is enough"
+        if diff["readability"] >= COUNCIL_HARD_MIN_READABILITY:
+            return True, (f"hard tape but {diff['readability']:.0%} of the roster "
+                          f"could read it")
+        return False, (f"hard tape and only {diff['readability']:.0%} of the "
+                       f"roster could read it "
+                       f"(contest {diff['contest']:.2f}, "
+                       f"regime {diff['regime_pct']})")
+
     # ── the three rounds ─────────────────────────────────────────────────────
-    def deliberate(self, snap: MarketSnapshot, journal=None) -> CouncilDecision:
+    def deliberate(self, snap: MarketSnapshot, journal=None,
+                   regime_pct: Optional[float] = None) -> CouncilDecision:
         round0 = [l.safe_evaluate(snap) for l in self.lenses]
         by_name = {v.lens: v for v in round0}
+        self._regime_pct = regime_pct
 
         # Round 1. Every lens sees the same round-0 map minus itself, so the
         # order lenses are polled in cannot change the outcome — a council
@@ -279,11 +407,32 @@ class Council:
             return build(direction, signed, False, why, lead=lead.lens,
                          objections=objections)
 
+        # The adaptive quorum. Advisory unless the flag says otherwise, but
+        # journaled either way so its live record accrues while it is in shadow.
+        diff = self.difficulty(deciding, getattr(self, "_regime_pct", None))
+        allowed, why = self.quorum_ok(diff)
+
         reason = f"{lead.lens} leads {direction.label} at {lead.confidence:.3f}"
         if objections:
             reason += f", {len(objections)} objection(s) noted and discounted"
-        return build(direction, signed, True, reason, lead=lead.lens,
-                     objections=objections)
+
+        if not allowed and self.adaptive_quorum_binding:
+            d = build(direction, signed, False, f"adaptive quorum: {why}",
+                      lead=lead.lens, objections=objections)
+            d.shadow = {"difficulty": diff, "quorum_allowed": False,
+                        "quorum_why": why, "quorum_binding": True}
+            return d
+
+        d = build(direction, signed, True, reason, lead=lead.lens,
+                  objections=objections)
+        d.shadow = {"difficulty": diff, "quorum_allowed": allowed,
+                    "quorum_why": why,
+                    "quorum_binding": self.adaptive_quorum_binding,
+                    # What the shadow rule WOULD have changed. Explicit, so the
+                    # comparison is a stored fact rather than a later
+                    # reconstruction from two columns nobody kept.
+                    "quorum_would_have_blocked": (not allowed)}
+        return d
 
 
 # ── persistence ──────────────────────────────────────────────────────────────
