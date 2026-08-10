@@ -158,10 +158,37 @@ def run(symbol: str = "NIFTY", every: int = 60, paper: bool = True,
 
     checked_monotone = False
     cycles = 0
+    idle_logged = False
     while not _stop:
+        # WAIT for the next session rather than exiting at the close.
+        #
+        # Exiting looked tidy and was wrong: compose restarts the container
+        # (restart: unless-stopped), which immediately exits again, so the
+        # service spends every night in a restart loop -- `docker compose exec`
+        # fails against a perpetually-restarting container, and the 09:15 open
+        # arrives with the process mid-cycle rather than subscribed and warm.
+        #
+        # A daily service should sleep through the night, not die every evening
+        # and be resurrected by the supervisor.
         if not ignore_hours and not market_open(symbol=symbol):
-            logger.info("market closed — stopping")
-            break
+            if runner.state.decisions and runner.state.session is not None:
+                logger.info("market closed — writing the journal and idling")
+                runner.end_session(symbol)
+                runner.state.session = None
+            if not idle_logged:
+                logger.info("outside market hours — idling until the next open")
+                idle_logged = True
+            if once:
+                break
+            time.sleep(60)
+            continue
+
+        # A new trading day: reload yesterday's journal and reset counters.
+        today = datetime.now(IST).date()
+        if runner.state.session != today:
+            logger.info("session %s starting", today)
+            runner.begin_session(today, symbol)
+            idle_logged = False
 
         snap = None
         try:
