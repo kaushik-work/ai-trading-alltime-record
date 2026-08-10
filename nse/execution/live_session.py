@@ -189,9 +189,9 @@ def run(symbols=("NIFTY",), every: int = 60, paper: bool = True,
     # first real snapshot before trading a single decision — this is the
     # invariant the binding rests on, so it is checked at startup rather than
     # trusted from a backtest run weeks ago.
-    session = datetime.now(IST).date()
-    runner.begin_session(session, symbol)
-
+    # Sessions are begun per symbol inside the loop, which also handles the
+    # day rolling over without a process restart. Doing it here as well would
+    # call begin_session twice on the first day and reconcile twice.
     for sym in symbols:
         logger.info("subscribing to %s option chain", sym)
         try:
@@ -284,8 +284,9 @@ def run(symbols=("NIFTY",), every: int = 60, paper: bool = True,
             break
         time.sleep(max(1, every))
 
-    logger.info("session over: %s", runner.state.summary())
-    runner.end_session(symbol)
+    for sym, rn in runners.items():
+        logger.info("session over %s: %s", sym, rn.state.summary())
+        rn.end_session(sym)
     return 0
 
 
