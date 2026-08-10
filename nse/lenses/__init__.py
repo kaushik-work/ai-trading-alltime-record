@@ -19,6 +19,7 @@ from nse.lenses.base import (
 )
 from nse.lenses.candle_flow import CandleFlowLens
 from nse.lenses.composite_profile import CompositeProfileLens
+from nse.lenses.extension import ExtensionLens
 from nse.lenses.gamma_exposure import GammaExposureLens
 from nse.lenses.greeks import GreeksLens
 from nse.lenses.ict_smc import ICTSMCLens
@@ -39,17 +40,18 @@ from nse.lenses.vision import VisionLens
 ROSTER = [GreeksLens, VolumeOILens, VWAPLens, ICTSMCLens,
           SmileLens, MomentumLens, LiquidityLens,
           CompositeProfileLens, GammaExposureLens, CandleFlowLens,
-          VisionLens]
+          ExtensionLens, VisionLens]
 
 #: Lenses that report CONTEXT rather than direction. They emit NEUTRAL by
 #: design, so the directional entry harness scores them at exactly zero and that
 #: zero means nothing. They are measured by whether the lead lens does better on
 #: the bars they favour — see nse/lenses/liquidity.py.
-CONTEXT_LENSES = {"liquidity"}
+CONTEXT_LENSES = {"liquidity", "extension"}
 
 __all__ = ["BaseLens", "Direction", "Lens", "LensVerdict", "abstain",
            "GreeksLens", "VolumeOILens", "VWAPLens", "ICTSMCLens",
            "SmileLens", "MomentumLens", "LiquidityLens",
            "CompositeProfileLens", "GammaExposureLens", "CandleFlowLens",
+           "ExtensionLens",
            "VisionLens",
            "ROSTER", "CONTEXT_LENSES"]
