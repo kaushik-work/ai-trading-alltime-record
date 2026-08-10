@@ -17,7 +17,8 @@ import { API, authHeaders } from "../lib/format";
 
 export type TabKey =
   | "crypto" | "nse"
-  | "NIFTY" | "BANKNIFTY" | "SENSEX" | "FINNIFTY" | "BTC" | "ETH";
+  | "NIFTY" | "BANKNIFTY" | "SENSEX" | "FINNIFTY"
+  | "BTC" | "ETH" | "XAUT";
 
 type Status = "live" | "blocked" | "none";
 
@@ -43,8 +44,9 @@ const ENTRIES: Entry[] = [
   { key: "BANKNIFTY", label: "BANKNIFTY", group: "NSE / BSE", status: "blocked", note: "spread unmeasured" },
   { key: "FINNIFTY",  label: "FINNIFTY",  group: "NSE / BSE", status: "blocked", note: "1.48% spread" },
 
-  { key: "BTC", label: "BTC", group: "Crypto", status: "none", note: "no strategy" },
-  { key: "ETH", label: "ETH", group: "Crypto", status: "none", note: "no strategy" },
+  { key: "BTC",  label: "BTC",  group: "Crypto", status: "none", note: "measuring" },
+  { key: "ETH",  label: "ETH",  group: "Crypto", status: "none", note: "measuring" },
+  { key: "XAUT", label: "XAUT", group: "Crypto", status: "none", note: "4mo history" },
 ];
 
 const DOT: Record<Status, string> = {

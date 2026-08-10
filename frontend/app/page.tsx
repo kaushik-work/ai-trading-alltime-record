@@ -153,7 +153,7 @@ export default function CryptoHome() {
         </div>
 
         <div className="flex-1 min-w-0">
-        {tab === "BANKNIFTY" || tab === "FINNIFTY" || tab === "BTC" || tab === "ETH" ? (
+        {tab === "BANKNIFTY" || tab === "FINNIFTY" || tab === "BTC" || tab === "ETH" || tab === "XAUT" ? (
           /* An instrument with nothing behind it gets an honest empty state
              rather than a chart of a bot that is not running. Saying WHY it is
              not trading, with the measured number, is more useful than a blank
@@ -172,6 +172,13 @@ export default function CryptoHome() {
                 <>Refused because its spread has never been measured — a different
                 reason from FINNIFTY, and a fixable one. Run the spread study
                 against it and it can be enabled.</>
+              )}
+              {tab === "XAUT" && (
+                <>Tether Gold perp. Listed 2026-04-17, so it has <b>zero bars</b> in
+                the shared crypto TRAIN window and gets its own split carved from
+                its own coverage. Four months spans <b>one regime</b> — any result
+                here reads as &quot;held in this period&quot;, not &quot;holds&quot;,
+                and is weaker evidence than ETH&apos;s thirteen months.</>
               )}
               {(tab === "BTC" || tab === "ETH") && (
                 <>No signal source. Every crypto strategy was deleted once the

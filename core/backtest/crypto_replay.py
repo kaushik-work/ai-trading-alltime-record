@@ -56,13 +56,39 @@ CRYPTO_SPLITS: dict[str, tuple[date, date]] = {
     "TEST":     (date(2026, 7, 1), date(2026, 12, 31)),
 }
 
+#: PER-SYMBOL splits, for instruments whose history does not cover the default.
+#:
+#: XAUTUSD lists from 2026-04-17 and has ZERO bars in the shared TRAIN window.
+#: Measuring it on the default split would mean calibrating on VALIDATE and
+#: TEST -- i.e. spending both hold-outs on the first look, which is precisely
+#: what section 2.1 exists to prevent. It gets its own three-way split carved
+#: from its own coverage instead.
+#:
+#: THE SAMPLE IS THIN AND SPANS ONE REGIME. Four months of one instrument is
+#: not four months of evidence about all regimes, and any XAUT result should be
+#: read as "held in this period" rather than "holds". Stated here so a positive
+#: number is not mistaken for the same grade of evidence as ETH's thirteen
+#: months.
+SYMBOL_SPLITS: dict[str, dict[str, tuple[date, date]]] = {
+    "XAUTUSD": {
+        "TRAIN":    (date(2026, 4, 17), date(2026, 6, 30)),
+        "VALIDATE": (date(2026, 7, 1), date(2026, 7, 31)),
+        "TEST":     (date(2026, 8, 1), date(2026, 12, 31)),
+    },
+}
+
 #: Bars handed to a lens as its "recent" window, and as prior history.
 WINDOW_BARS = 400
 PRIOR_BARS = 7 * 24 * 12          # seven days of 5-minute bars
 
 
-def split_of(d: date) -> Optional[str]:
-    for name, (lo, hi) in CRYPTO_SPLITS.items():
+def splits_for(symbol: str) -> dict:
+    """The three-way split this symbol is measured on."""
+    return SYMBOL_SPLITS.get(symbol.upper(), CRYPTO_SPLITS)
+
+
+def split_of(d: date, symbol: str = "") -> Optional[str]:
+    for name, (lo, hi) in splits_for(symbol).items():
         if lo <= d <= hi:
             return name
     return None
@@ -114,7 +140,7 @@ def snapshots(symbol: str = "ETHUSD", interval: str = "5m",
         ts = pd.Timestamp(times[i]).to_pydatetime()
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
-        sp = split_of(ts.date())
+        sp = split_of(ts.date(), symbol)
         if sp is None:
             continue
 
