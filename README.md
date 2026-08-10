@@ -38,9 +38,41 @@ Full working, with the numbers, in [`docs/RESEARCH_LEARNINGS.md`](docs/RESEARCH_
 | Breakout-retest (index) | +165 / +259 / +320 pts — positive in all three splits |
 | Breakout-retest (options) | VALIDATE **−₹80,769** — the index edge did not survive the instrument |
 | Variance risk premium | Survives every split, but only in a **naked** structure that cannot be margined |
-| Greeks lens (25δ risk reversal) | No directional edge; negative in TRAIN and VALIDATE |
-| **Volume/OI lens** | **+1.80 / +1.62 bps, significant in both splits.** The first entry to survive a hold-out |
 | Liquidity sweeps (BTC/ETH 5m) | No edge — negative in all four cells, gross, before costs |
+
+### The lens roster: 8 built, 1 with a measured edge
+
+390 NIFTY sessions, identical snapshots for every lens, TRAIN 2021–23 /
+VALIDATE 2024. TEST (2025–26) is **unspent**.
+
+| lens | reads | TRAIN | VALIDATE | state |
+|---|---|---|---|---|
+| **`volume_oi`** | OI walls, volume profile, OI build | **+1.66** p=0.0012 | **+1.49** p=0.0527 | **PROBATION 0.50** |
+| `vwap` | session VWAP z-score | −2.31 p=0.0014 | −1.06 | SHADOW — and a −0.769 echo of `volume_oi` |
+| `ict_smc` | order blocks, FVG, sweeps | −4.25 p=0.0000 | −0.68 | SHADOW |
+| `greeks` | 25δ risk reversal (tilt) | −0.54 | −1.08 | SHADOW |
+| `smile` | IV curvature (butterfly) | +0.53 | +0.18 | SHADOW |
+| `momentum` | ATR range breakout | +1.38 | −1.21 | SHADOW |
+| `liquidity` | `no_trade` density, volume HHI | context lens | splits contradict | SHADOW |
+| `vision` | renders the chart, asks a model | unmeasurable by replay | — | SHADOW, pinned 0 |
+
+Adding a lens is meant to be cheap — a new one votes at weight **0** until
+attribution promotes it, so a bad idea costs a journal entry rather than money.
+Seven lenses have cost exactly that.
+
+**What did *not* work, each properly tested:**
+
+- **Combining them.** Equal weighting scored VALIDATE +0.22 bps against
+  `volume_oi`'s +1.49 alone — three negative lenses outvote one positive one.
+- **A rejected lens as a *filter*.** `ict_smc`, the worst voter, was the best
+  gate on TRAIN (+4.82, bootstrap p=0.0010) and collapsed to +0.55 (p=0.75) on
+  VALIDATE.
+- **Deliberation and the journal.** Both looked like they paid (+4.14, +5.01 bps)
+  until controlled against a random subset of the same size — each arm also
+  trades *fewer bars*. Only the conviction gate survived that control (p=0.0203).
+
+**What did:** trade only `volume_oi`'s top confidence tercile. VALIDATE +3.70 bps
+on n=503. One parameter, the lens's own confidence, no fitted interaction.
 
 ## Architecture
 
@@ -57,16 +89,23 @@ tell which built it, and every lens is backtestable by construction.
                          ▼
                  MarketSnapshot                    ← one shared observation
                          │
-        ┌────────────┬───┴────┬─────────────┬────────────┐
-        ▼            ▼        ▼             ▼            ▼
-     greeks      volume_oi   vwap        ict/smc      vision       ← lenses
-   (rejected)   (survives)  (unmeasured)  (todo)   (weight 0)        vote, never
-        └────────────┴────────┴─────────────┴────────────┘          read each other
+                         │
+      ROUND 0 ── every lens reads it ALONE ──────────────────────────┐
+        ┌──────┬──────┬──────┬───────┬────────┬─────────┬────────┐   │  attribution
+        ▼      ▼      ▼      ▼       ▼        ▼         ▼        ▼   │  scores THIS
+    volume_oi vwap ict_smc greeks  smile  momentum liquidity vision  │  round only
+        └──────┴──────┴──────┴───────┴────────┴─────────┴────────┘   │
+                         │                                           │
+      ROUND 1 ── now they hear each other ─────────────────────────  ┘
+                         │      hold · revise · defer
+                         │      (vwap defers to volume_oi: at −0.769
+                         │       correlation it is an echo, not a second vote)
                          ▼
-                    Aggregator            weighted consensus; SHADOW lenses are
-                         │                heard and journaled but move no capital
+      ROUND 2 ── the council resolves ONE call
+                         │      lead lens · objections · stand aside
+                         │      peers may OBJECT, never CONFIRM
                          ▼
-              journal EVERY decision      including the ones voted down —
+              journal EVERY decision      including the ones it declined —
                          │                attribution needs the control group
                          ▼
                  sentinel_client          the brain tier's ONLY route to an order
@@ -102,6 +141,38 @@ hours, and demotion deliberately faster than promotion. A lens that cannot read
 the snapshot is *absent*, not neutral — ten consecutive errors bench it even
 while profitable.
 
+**Round 0 stays independent so this remains computable.** Once a lens has heard
+its peers, "what is that lens worth?" has no answer, and the whole promote /
+suspend / retire machinery runs on exactly that number. A purely deliberative
+council is one whose members can never be fired.
+
+### Two mechanisms that run but cannot yet trade
+
+Both are built, journaled, and visible on the dashboard — and both are pinned
+off, because measurement did not clear them:
+
+- `COUNCIL_DELIBERATION_BINDING = False` — round 1 annotates the decision but
+  the traded call comes from round 0 plus the conviction gate.
+- The **adaptive quorum** (demand more agreement when the tape is hard) measured
+  consistently positive in both splits, +0.67 and +1.27 bps, and reached
+  significance in neither.
+
+This is the SHADOW rule that governs lenses, applied to mechanisms. Present and
+auditable from day one; load-bearing only once live attribution earns it.
+
+### Lenses that re-tune themselves
+
+`nse/selftune.py`. A lens learns a **percentile** — "trade the top third" — never
+a value; the value is recomputed from its own recent distribution. That is what
+makes a threshold survive a regime change, and its absence is why an ATR gate
+fitted on TRAIN kept 11% of TRAIN and 6% of VALIDATE.
+
+Guards, because this is an overfitting engine wearing the costume of
+adaptiveness: causal window only (asserted), 200-observation minimum, shrinkage
+toward the measured prior, and a hard `[0.5×, 2×]` band that logs a **warning**
+when hit — "the data wants more than allowed" is a finding for a human, not
+something to absorb. Self-tuning may never flip a direction convention.
+
 ## Repo layout
 
 ```
@@ -114,11 +185,16 @@ core/
   risk_management.py, sr_levels.py, mongo.py
 nse/
   snapshot.py       the shared observation every lens reads
-  lenses/           greeks · volume_oi · vwap · vision  (+ base contract)
-  aggregator.py     weighted-consensus vote and the decision journal
+  lenses/           volume_oi · vwap · ict_smc · greeks · smile · momentum ·
+                    liquidity · vision  (+ base contract, + bootstrap.py which
+                    records what each one measured and the weight it earned)
+  council.py        two-round deliberation, then one resolved call
+  journal.py        end-of-day record; strict $lt so a session cannot read itself
   brain.py          per-lens attribution, weights, lifecycle FSM
+  selftune.py       percentile-targeted recalibration, banded and causal
+  execution/        options_runner.py (brain tier) · sentinel_client.py
   ws/               angel_stream.py — SmartWebSocketV2 feed
-  broker/           angel_broker.py — orders + GTT OCO brackets
+  broker/           angel_broker.py — orders + GTT OCO brackets (SENTINEL ONLY)
   backtest/         replay · lens_harness · options_harness · costs · loaders
   quant/            black_scholes · expiry_calendar · volume_profile ·
                     spread_study
