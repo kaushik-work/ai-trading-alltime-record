@@ -105,9 +105,25 @@ def check_secrets() -> None:
         record(PASS if os.environ.get(k) else FAIL, k,
                "present" if os.environ.get(k) else "missing")
 
+    # NOT a readiness failure, and the earlier wording here was wrong.
+    #
+    # This check originally said the Algo-ID was "required by SEBI for algo
+    # order tagging", implying a missing payload field. Angel's actual
+    # implementation of the SEBI retail-algo circular (live 1 Aug 2025) is
+    # STATIC IP REGISTRATION, a 10 orders/sec throttle, and OAuth — see
+    # smartapi.angelone.in forum topic 5254. No per-order algoid field is
+    # documented in the Orders API, and nse/broker/angel_broker.py accordingly
+    # sends none.
+    #
+    # Left as informational rather than removed: if Angel later adds a payload
+    # field, this is where its absence should surface. Reporting an unverified
+    # requirement as a failure trains people to ignore the whole check.
     algo = os.environ.get("ANGEL_ALGO_ID") or os.environ.get("SEBI_ALGO_ID")
-    record(PASS if algo else WARN, "SEBI Algo-ID",
-           algo if algo else "not set — required by SEBI for algo order tagging")
+    record(PASS, "SEBI Algo-ID",
+           f"{algo} (informational — not sent in the order payload; Angel's "
+           f"compliance is IP-based)" if algo else
+           "not set — no per-order algoid field is documented by Angel; "
+           "compliance is via the registered static IP")
 
 
 def check_mongo() -> None:

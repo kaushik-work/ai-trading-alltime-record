@@ -30,6 +30,26 @@ the council container's entrypoint and **refuses to boot** if:
 
 Verified exit codes: good config `0`, loopback `1`, unset `1`, flag leak `1`.
 
+## What SEBI compliance actually requires here
+
+Angel's implementation of the SEBI retail-algo circular went live 1 Aug 2025
+and consists of three things — none of which is a payload field:
+
+1. **Static IP registration.** Only orders from a registered IP execute; the
+   rest are blocked. Up to five IPs per API key.
+2. **10 orders/sec throttle** on place/modify/cancel and all GTT APIs. The
+   council places at most one order per decision cycle (default 60s), so this
+   is not close to binding.
+3. **OAuth login** for authentication.
+
+There is **no documented per-order `algoid` field**, and `angel_broker.py`
+sends none. An `ANGEL_ALGO_ID` env var is informational only — do not add an
+unverified key to the order payload, because an unrecognised field either gets
+ignored (giving false confidence the order is tagged) or gets the order
+rejected at the moment it matters.
+
+Source: smartapi.angelone.in forum topic 5254.
+
 ## One-time, before anything trades
 
 1. Create the droplet and note its **static IP** (reserved IP, not ephemeral).
