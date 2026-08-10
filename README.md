@@ -28,6 +28,9 @@ first and hold everything to it:
 | A missing data point is a **counted miss**, not a dropped row | Silently dropping sessions where a strike vanished manufactured a **+19.67pt edge from nothing** |
 
 Full working, with the numbers, in [`docs/RESEARCH_LEARNINGS.md`](docs/RESEARCH_LEARNINGS.md).
+How the system runs day to day — architecture, the daily loop, deployment,
+monitoring, and the bug behind every guard — in
+[`docs/WORKFLOW.md`](docs/WORKFLOW.md).
 
 ## What has been measured
 
