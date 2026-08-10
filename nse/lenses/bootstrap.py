@@ -184,6 +184,36 @@ MEASURED: dict[str, Measurement] = {
               ">0.51), so even percentile thresholds fitted on TRAIN do not "
               "transfer. No usable signal on this archive."),
     ),
+    "composite_profile": Measurement(
+        lens="composite_profile",
+        train_bps=-1.93, train_p=0.0074,
+        validate_bps=-0.78, validate_p=0.5729,
+        lifecycle=Lifecycle.SHADOW,
+        bootstrap_weight=0.0,
+        note=("7-session composite POC/VAH/VAL plus naked POCs. Negative on "
+              "TRAIN, near-zero on VALIDATE, signs disagree, on a real sample "
+              "(n=1394/604 with only 24 abstentions). Correlates -0.395 with "
+              "volume_oi -- related but not a duplicate, so this is a genuine "
+              "independent read that simply does not predict. The mean-reversion "
+              "convention was declared before measuring and is NOT to be "
+              "flipped now."),
+    ),
+    "gamma_exposure": Measurement(
+        lens="gamma_exposure",
+        train_bps=None, train_p=None,
+        validate_bps=None, validate_p=None,
+        lifecycle=Lifecycle.SHADOW,
+        bootstrap_weight=0.0,
+        note=("NOT VALIDLY MEASURABLE on this data. Two implementations were "
+              "degenerate in OPPOSITE directions -- v1 returned LONG on 97.8% "
+              "of verdicts, v2 SHORT on 100% -- which is a constant, not a "
+              "signal. Cause is the +/-10 strike window (21 strikes, ~3.6% of "
+              "spot): a zero-gamma level is anchored by OI in the far wings, "
+              "which the window excludes, so any crossing inside it reflects "
+              "where the window was cut. Needs a wider chain, not a third "
+              "formula. Its measured +0.26/+0.30 bps is discarded as noise "
+              "rather than recorded as a weak positive."),
+    ),
     "vision": Measurement(
         lens="vision",
         train_bps=None, train_p=None,

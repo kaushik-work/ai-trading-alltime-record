@@ -52,6 +52,30 @@ is backwards and the lens measures the negative of what it claims. That is a
 one-bit error, discoverable by measurement, and it must NOT be fixed by
 flipping the sign after seeing the result (section 3.13).
 
+STATUS: NOT VALIDLY MEASURABLE ON THIS DATA. DO NOT GIVE IT WEIGHT.
+
+Two implementations were measured and both were degenerate, in opposite
+directions, which is the signature of a constant rather than a signal:
+
+    v1  accumulated gamma*OI across STRIKES. GEX read positive on 100.0% of
+        observations and the "flip" sat above spot on 100.0%, so the lens
+        returned LONG on 97.8% of TRAIN verdicts. Its +0.26 bps was noise.
+
+    v2  computed the flip properly on the SPOT AXIS (re-pricing gamma at
+        candidate spots, which is the correct definition). The flip then sat
+        BELOW spot on 100.0% of observations and the lens returned SHORT on
+        100% of them.
+
+The cause is the data, not the arithmetic. A MarketSnapshot carries +/-10
+strikes -- 21 strikes spanning about 3.6% of spot. A zero-gamma level is
+anchored by the OI sitting in the FAR WINGS, which is exactly what this window
+excludes, so the crossing found inside it is an artefact of where the window
+was cut rather than a property of the book.
+
+Fixing this needs a wider chain, not a third attempt at the formula. Two
+attempts is already the limit before tuning becomes fitting. If the collector
+is ever widened to the full chain, delete this notice and measure it once.
+
 Greeks are not trusted under 2 DTE (OPTIONS_GREEKS_LEARNINGS section 3), and
 gamma is the worst-behaved of them near expiry — it is precisely the Greek that
 explodes as T goes to zero. This lens abstains there rather than reading a
@@ -141,7 +165,7 @@ class GammaExposureLens(BaseLens):
             return abstain(self.name, "zero gamma exposure across the chain")
         gex_norm = gex / gross                       # in [-1, 1]
 
-        flip = _gamma_flip(df, float(snap.spot), k)
+        flip = _gamma_flip(df, float(snap.spot), k, snap.T)
 
         if abs(gex_norm) < GEX_NEUTRAL_BAND:
             return LensVerdict(
@@ -189,30 +213,88 @@ class GammaExposureLens(BaseLens):
                                dist_atr))
 
 
-def _gamma_flip(df: pd.DataFrame, spot: float, k: float) -> Optional[float]:
-    """Strike where cumulative dealer gamma crosses zero.
+def _gamma_flip(df: pd.DataFrame, spot: float, k: float,
+                snap_T: float = 0.0) -> Optional[float]:
+    """The spot price at which total dealer gamma would flip sign.
 
-    Walked across strikes rather than solved, because the chain is a coarse
-    ladder and a solved root between two strikes implies a precision the data
-    does not have.
+    THE FIRST VERSION OF THIS WAS WRONG AND ITS MEASUREMENT WAS INVALID.
+
+    It accumulated gamma * OI ACROSS STRIKES and looked for a sign change in the
+    running total. That is a different quantity from the zero-gamma level and
+    has no reason to cross zero: gamma is positive for calls and puts alike, so
+    the per-strike term is dominated by whichever side carries more OI and the
+    cumulative sum simply drifts. Measured consequence -- GEX read positive on
+    100.0% of observations and the "flip" sat above spot on 100.0%, so the lens
+    returned LONG on 97.8% of TRAIN verdicts. It was a constant wearing a
+    verdict's clothes, and its +0.26 bps meant nothing.
+
+    The zero-gamma level is a property of the SPOT AXIS, not the strike axis:
+    the price at which dealers' net gamma changes sign, found by re-evaluating
+    total exposure at candidate spots. Gamma is re-priced at each candidate
+    rather than reused, because a strike's gamma is a function of moneyness and
+    the whole question is what happens as spot moves.
+
+    Returns None when no sign change exists in the searched band -- which is a
+    real and common state, and far better than inventing a level.
     """
+    from nse.quant.black_scholes import greeks as bs_greeks
+
     rows = []
     for strike, grp in df.groupby("strike"):
         c = grp[grp["_t"] == "C"]
         p = grp[grp["_t"] == "P"]
-        g = (float((c["gamma"] * c["oi"]).sum())
-             - float((p["gamma"] * p["oi"]).sum())) * k
-        rows.append((float(strike), g))
-    if len(rows) < 3:
+        # grp.get(col) returns a SCALAR when the column is absent, so wrap in
+        # a Series before any pandas method. This raised
+        # "'numpy.float64' object has no attribute 'dropna'" and the guard
+        # swallowed it into an abstention -- a silent lens, not a crash.
+        iv = pd.to_numeric(pd.Series(grp["iv"] if "iv" in grp else []),
+                           errors="coerce").dropna()
+        T = pd.to_numeric(pd.Series(grp["T"] if "T" in grp else []),
+                          errors="coerce").dropna()
+        rows.append((float(strike),
+                     float(c["oi"].sum()), float(p["oi"].sum()),
+                     float(iv.mean()) if len(iv) else None,
+                     float(T.mean()) if len(T) else None))
+    if len(rows) < 5:
         return None
-    rows.sort()
-    cum = 0.0
-    prev_strike, prev_cum = rows[0][0], 0.0
-    for strike, g in rows:
-        cum += g
-        if prev_cum != 0.0 and (cum > 0) != (prev_cum > 0):
-            return (prev_strike + strike) / 2.0
-        prev_strike, prev_cum = strike, cum
+
+    ivs = [r[3] for r in rows if r[3] and 0 < r[3] < 5]
+    Ts = [r[4] for r in rows if r[4] and r[4] > 0]
+    if not ivs:
+        return None
+    iv_m = float(np.median(ivs))
+    # The chain does not always carry T; the snapshot always knows it.
+    T_m = float(np.median(Ts)) if Ts else float(snap_T)
+    if T_m <= 0:
+        return None
+
+    def net_gamma(candidate: float) -> float:
+        tot = 0.0
+        for strike, oi_c, oi_p, _iv, _T in rows:
+            try:
+                # Gamma is identical for a call and a put at the same strike,
+                # so one evaluation serves both sides of the ladder.
+                g = bs_greeks(candidate, strike, T_m, 0.065, iv_m, "C").gamma
+            except Exception:
+                continue
+            if not np.isfinite(g):
+                continue
+            tot += g * (oi_c - oi_p)
+        return tot * candidate ** 2 * 0.01
+
+    lo, hi = min(r[0] for r in rows), max(r[0] for r in rows)
+    grid = np.linspace(lo, hi, 41)
+    vals = [net_gamma(float(x)) for x in grid]
+    for i in range(1, len(vals)):
+        if vals[i - 1] == 0:
+            return float(grid[i - 1])
+        if (vals[i] > 0) != (vals[i - 1] > 0):
+            # Linear interpolation between the bracketing grid points. The
+            # ladder is coarse, so this is already more precision than the data
+            # supports -- it is here so the level does not jump by a whole grid
+            # step as spot drifts.
+            x0, x1, y0, y1 = grid[i - 1], grid[i], vals[i - 1], vals[i]
+            return float(x0 + (x1 - x0) * (0 - y0) / (y1 - y0))
     return None
 
 
