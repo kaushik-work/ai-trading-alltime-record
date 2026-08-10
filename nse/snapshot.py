@@ -74,9 +74,16 @@ class MarketSnapshot:
     symbol: str
     ts: datetime                      # UTC, when we observed
     spot: float
-    expiry: datetime                  # UTC, at that contract's exchange close
-    atm: int
-    chain: pd.DataFrame
+
+    #: UTC, at that contract's exchange close. None for a PERPETUAL, which has
+    #: no expiry — and that absence does useful work rather than needing a
+    #: special case. `dte` returns 0.0, so `greeks_trustworthy` is False, so
+    #: every option lens abstains on its own. Combined with an empty `chain`,
+    #: the five option lenses stand down for crypto without a single
+    #: venue check anywhere in the lens code.
+    expiry: Optional[datetime] = None
+    atm: int = 0
+    chain: pd.DataFrame = field(default_factory=pd.DataFrame)
     bars: pd.DataFrame = field(default_factory=pd.DataFrame)
 
     #: The PREVIOUS session's bars, for lenses that read continuous structure.
@@ -132,8 +139,14 @@ class MarketSnapshot:
 
     @property
     def dte(self) -> float:
-        """Days to expiry as a float, against the real exchange close."""
+        """Days to expiry. 0.0 for a perpetual, which has none."""
+        if self.expiry is None:
+            return 0.0
         return max(0.0, (self.expiry - self.ts).total_seconds() / 86400.0)
+
+    @property
+    def is_perp(self) -> bool:
+        return self.expiry is None
 
     @property
     def T(self) -> float:
