@@ -65,9 +65,11 @@ def check() -> int:
     import importlib
 
     before = set(sys.modules)
+    imported_ok = 0
     for m in BRAIN_MODULES:
         try:
             importlib.import_module(m)
+            imported_ok += 1
         except Exception as e:
             failures.append(f"{m} failed to import: {e}")
     pulled = set(sys.modules) - before
@@ -79,9 +81,18 @@ def check() -> int:
         failures.append(
             "importing the brain tier pulled in order-placing modules: "
             + ", ".join(leaked))
+    elif imported_ok == 0:
+        # "Nothing imported, therefore nothing forbidden was imported" is
+        # vacuously true and reads on screen as a pass. It caught nobody out
+        # here only because the import errors were reported separately — but a
+        # security check whose happy path fires when the check did not run is
+        # one refactor away from being the only thing left saying "ok".
+        failures.append(
+            "could not import ANY brain module, so the leak check proved "
+            "nothing — this is not a pass")
     else:
-        print(f"  ok   brain tier imported {len(pulled)} modules, none of them "
-              f"order-placing")
+        print(f"  ok   brain tier imported {imported_ok}/{len(BRAIN_MODULES)} "
+              f"modules ({len(pulled)} total), none of them order-placing")
 
     # 3. The sentinel must be reachable and must NOT be this process.
     import os
