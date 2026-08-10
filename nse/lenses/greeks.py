@@ -239,6 +239,40 @@ class GreeksLens(BaseLens):
         atm_iv = _atm_iv(calls, puts, snap.atm)
         return calls, puts, atm_iv
 
+    def _deliberate(self, snap: MarketSnapshot, own: LensVerdict,
+                    peers: dict, journal) -> LensVerdict:
+        """Skew says where protection is BID. Walls say where dealers SIT.
+
+        When those two disagree the surface and the positioning are telling
+        different stories, and this lens is the one with the weaker measured
+        record (no edge in either split, section 3.5) — so it yields.
+
+        Only ever downward. Confirmation from a peer cannot raise confidence
+        here, because using peers as confirming evidence was measured and failed:
+        ict_smc looked like a superb confirming filter on TRAIN at bootstrap
+        p=0.0010 and was worth nothing on VALIDATE (section 3.15).
+        """
+        cut, notes = 1.0, []
+
+        vo = peers.get("volume_oi")
+        if (vo is not None and vo.speaks and vo.direction != Direction.NEUTRAL
+                and vo.direction != own.direction and vo.confidence >= 0.30):
+            cut *= 0.6
+            notes.append(f"volume_oi reads {vo.direction.label} from the OI "
+                         f"walls against my skew")
+
+        # smile reads the SAME iv column. If it could not trust the surface,
+        # neither can I — the disagreement is about data, not opinion.
+        sm = peers.get("smile")
+        if sm is not None and sm.abstained:
+            cut *= 0.7
+            notes.append("smile could not read this surface either")
+
+        if cut >= 1.0:
+            return own
+        return own.revise(own.direction, own.confidence * cut,
+                          "; ".join(notes) + " — cutting size, holding direction")
+
 
 # ── helpers ──────────────────────────────────────────────────────────────────
 def _mark_series(df: pd.DataFrame) -> pd.Series:

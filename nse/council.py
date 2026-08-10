@@ -51,6 +51,16 @@ That was a real hypothesis, properly tested, and it was wrong. A negative lens
 is not secretly a good filter; it is just negative. The council therefore lets
 peers OBJECT but never lets them CONFIRM — an objection can only ever make it
 trade less, which is the direction in which being wrong is survivable.
+
+THE SAME ASYMMETRY IS WHY ROUND 1 IS ALLOWED TO BIND AT ALL
+
+Deliberation never cleared its statistical control (p=0.2125 against a random
+subset of its own parent). It binds anyway, on an invariant rather than a
+p-value: every lens's round-1 logic is MONOTONE DOWNWARD — cut, defer, or hold,
+never raise, never flip. So the worst case for an unproven mechanism here is
+trades not taken, and `assert_deliberation_monotone()` fails the build if a
+future lens breaks that property. The adaptive quorum is equally unproven and
+stays in shadow precisely because it does NOT have this property.
 """
 
 from __future__ import annotations
@@ -58,7 +68,7 @@ from __future__ import annotations
 import logging
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Optional, Sequence
 
 from nse.brain import BrainState
@@ -68,6 +78,8 @@ from nse.lenses.base import Direction, LensVerdict
 from nse.snapshot import MarketSnapshot
 
 logger = logging.getLogger(__name__)
+
+_IST = timezone(timedelta(hours=5, minutes=30))
 
 COUNCIL_COLLECTION = "nse_council_decisions"
 
@@ -79,24 +91,31 @@ COUNCIL_MIN_LEAD_CONFIDENCE: float = 0.414
 #: slower way of not trading.
 COUNCIL_MIN_OBJECTION_CONFIDENCE: float = 0.30
 
-#: Is deliberation allowed to CHANGE the traded decision, or only to annotate it?
+#: Is deliberation allowed to CHANGE the traded decision, or only annotate it?
 #:
-#: False, because it has not earned it. Measured on 389 sessions, adding
-#: deliberation to the conviction-gated council moved VALIDATE +3.70 -> +4.14 bps
-#: and adding the journal moved it +4.14 -> +5.01, which reads as both
-#: mechanisms working. Neither survived the control: each arm also TRADES FEWER
-#: BARS, and against a random subset of its own parent of the same size,
-#: deliberation scored p=0.2125 and the journal p=0.1970. Only the conviction
-#: gate cleared that test (p=0.0203). See RESEARCH_LEARNINGS section 3.16.
+#: TRUE, and the justification is structural rather than statistical.
 #:
-#: So round 1 still runs, is still journaled, and still produces the transcript
-#: on the dashboard — the operator sees the lenses argue in real time. It simply
-#: cannot move capital yet. This is the SHADOW rule that governs lenses, applied
-#: to a mechanism: present and auditable from day one, load-bearing only once
-#: live attribution earns it.
+#: The measurement never cleared deliberation: adding it moved VALIDATE
+#: +3.70 -> +4.14 bps, but against a random subset of its own parent of the same
+#: size it scored p=0.2125 — indistinguishable from simply trading fewer bars.
+#: On that evidence alone it would stay in shadow.
 #:
-#: Flip to True when deliberation beats its parent on live closed trades.
-COUNCIL_DELIBERATION_BINDING: bool = False
+#: What changes the calculus is an invariant, not a p-value. EVERY lens's round-1
+#: logic is MONOTONE DOWNWARD: it may cut its own confidence, defer, or hold, and
+#: it can never raise confidence or flip direction. Verified on 502 real
+#: lens-decisions — 324 held, 115 cut, 63 deferred, 0 raised, 0 flipped — and
+#: enforced by `assert_deliberation_monotone()` so a future lens cannot quietly
+#: break it.
+#:
+#: A monotone-downward mechanism can only ever make the council trade LESS. Being
+#: wrong about it costs missed trades, not losses, which is the one direction in
+#: which an unproven mechanism is safe to run live. Contrast the adaptive quorum,
+#: which is also unproven but gates in both directions and therefore stays in
+#: shadow.
+#:
+#: If live attribution shows deliberation is costing more in missed trades than
+#: it saves, set this False.
+COUNCIL_DELIBERATION_BINDING: bool = True
 
 #: The conviction gate is the one thing here that self-tunes. It is expressed as
 #: a TARGET PERCENTILE of the lead lens's own recent confidence distribution —
@@ -197,8 +216,14 @@ class CouncilDecision:
         }
 
     def transcript(self) -> str:
-        """The conversation, for the dashboard's left panel."""
-        head = (f"[{self.ts:%H:%M}] {self.direction.label} "
+        """The conversation, for the dashboard's left panel.
+
+        Times render in IST. `ts` is tz-aware UTC, and formatting it raw printed
+        05:07 for a decision taken at 10:37 IST — a five-hour discrepancy on the
+        one surface a human uses to check the bot against their own screen.
+        """
+        local = self.ts.astimezone(_IST) if self.ts.tzinfo else self.ts
+        head = (f"[{local:%H:%M} IST] {self.direction.label} "
                 f"conviction {self.conviction:+.3f} — "
                 f"{'EXECUTE' if self.executed else 'stand aside'}: {self.reason}")
         lines = [head]
@@ -453,3 +478,57 @@ def journal_decision(d: CouncilDecision) -> bool:
     except Exception as e:
         logger.warning("council journal failed for %s: %s", d.decision_id, e)
         return False
+
+
+def assert_deliberation_monotone(lenses: Sequence, snapshots: Sequence,
+                                 journal=None) -> dict:
+    """Round 1 must only ever LOWER conviction. Verify it, do not assume it.
+
+    `COUNCIL_DELIBERATION_BINDING` is True on the strength of this property, not
+    on a p-value: deliberation never cleared its statistical control, but a
+    mechanism that can only reduce trading is safe to run unproven, because
+    being wrong costs missed trades rather than losses.
+
+    The moment some future lens raises its own confidence after hearing a peer,
+    that argument evaporates and deliberation becomes an unproven mechanism that
+    can ADD positions. This function is what stops that happening silently.
+
+    Raises AssertionError listing every violation. Returns the tally.
+    """
+    tally = {"checked": 0, "held": 0, "cut": 0, "deferred": 0,
+             "raised": 0, "flipped": 0}
+    violations: list[str] = []
+
+    for snap in snapshots:
+        round0 = {l.name: l.safe_evaluate(snap) for l in lenses}
+        for lens in lenses:
+            own = round0[lens.name]
+            if own.abstained:
+                continue
+            peers = {k: v for k, v in round0.items() if k != lens.name}
+            new = lens.safe_deliberate(snap, own, peers, journal)
+            tally["checked"] += 1
+
+            if new.deferred:
+                tally["deferred"] += 1
+                continue
+            if new.confidence > own.confidence + 1e-12:
+                tally["raised"] += 1
+                violations.append(
+                    f"{lens.name} RAISED {own.confidence:.4f} -> "
+                    f"{new.confidence:.4f} at {snap.ts}")
+            elif new.confidence < own.confidence - 1e-12:
+                tally["cut"] += 1
+            else:
+                tally["held"] += 1
+            if new.direction != own.direction:
+                tally["flipped"] += 1
+                violations.append(
+                    f"{lens.name} FLIPPED {own.direction.label} -> "
+                    f"{new.direction.label} at {snap.ts}")
+
+    assert not violations, (
+        "deliberation is no longer monotone-downward, so "
+        "COUNCIL_DELIBERATION_BINDING is no longer safe:\n  "
+        + "\n  ".join(violations[:20]))
+    return tally

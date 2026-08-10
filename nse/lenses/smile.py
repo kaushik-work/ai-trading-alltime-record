@@ -143,6 +143,36 @@ class SmileLens(BaseLens):
             },
         )
 
+    def _deliberate(self, snap: MarketSnapshot, own: LensVerdict,
+                    peers: dict, journal) -> LensVerdict:
+        """This lens and greeks read the same IV column, one moment apart.
+
+        If greeks abstained, the surface itself was unreadable and my curvature
+        is computed from the same suspect numbers. Standing partly down is the
+        honest response to a shared-input failure — it is not a second opinion
+        about the market, it is the same input failing twice.
+
+        Thin books make IV marks stale, and a stale surface has a curvature that
+        describes a market that has moved on.
+        """
+        cut, notes = 1.0, []
+
+        gk = peers.get("greeks")
+        if gk is not None and gk.abstained:
+            cut *= 0.6
+            notes.append("greeks could not read this surface — same iv column, "
+                         "same doubt")
+
+        lq = peers.get("liquidity")
+        if lq is not None and lq.speaks and lq.confidence < 0.4:
+            cut *= 0.7
+            notes.append(f"thin tape ({lq.confidence:.2f}) — IV marks are stale")
+
+        if cut >= 1.0:
+            return own
+        return own.revise(own.direction, own.confidence * cut,
+                          "; ".join(notes))
+
 
 def _iv_at(snap: MarketSnapshot, strike: int,
            option_type: Optional[str] = None) -> Optional[float]:

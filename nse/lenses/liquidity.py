@@ -77,15 +77,34 @@ class LiquidityLens(BaseLens):
                            f"only {0 if chain is None else len(chain)} contracts visible")
 
         n = len(chain)
-        if "no_trade" in chain.columns:
-            traded = ~chain["no_trade"].fillna(False).astype(bool)
-            traded_frac = float(traded.mean())
-        else:
-            # Never assume everything traded — that is the assumption that makes
-            # a backtest fillable everywhere and is why `no_trade` exists.
-            return abstain(self.name, "archive has no no_trade flag on this chain")
+        vol_col = pd.to_numeric(chain.get("volume"), errors="coerce").fillna(0.0)
 
-        vol = pd.to_numeric(chain.get("volume"), errors="coerce").fillna(0.0)
+        if "no_trade" in chain.columns:
+            # Archive path: the loader computed this from O=H=L=C with zero
+            # volume, which is stricter than volume alone.
+            traded = ~chain["no_trade"].fillna(False).astype(bool)
+        elif "volume" in chain.columns:
+            # LIVE path. `no_trade` is an archive-only column — the Angel
+            # SNAP_QUOTE feed has no equivalent — and this lens abstained on
+            # 100% of live snapshots until that was noticed. Contracts with zero
+            # volume are the live stand-in.
+            #
+            # The two are NOT the same measurement and the difference is one
+            # direction only: the archive flag also catches bars that printed a
+            # repeated price on nonzero volume, so live `traded_frac` reads
+            # slightly HIGHER than replay on identical tape. Stated because a
+            # lens whose scale silently shifts between backtest and production
+            # is a lens whose measured thresholds do not transfer — and this
+            # one's thresholds are TRAIN percentiles.
+            traded = vol_col > 0
+        else:
+            # Never assume everything traded. That assumption is what makes a
+            # backtest fillable everywhere.
+            return abstain(self.name, "chain carries neither no_trade nor volume")
+
+        traded_frac = float(traded.mean())
+
+        vol = vol_col
         total_vol = float(vol.sum())
         if total_vol <= 0:
             return LensVerdict(
@@ -130,3 +149,20 @@ class LiquidityLens(BaseLens):
                 "spot": round(snap.spot, 2),
             },
         )
+
+    def _deliberate(self, snap: MarketSnapshot, own: LensVerdict,
+                    peers: dict, journal) -> LensVerdict:
+        """This lens never revises, and that is deliberate.
+
+        It reports how present the market is. That is a fact about the tape, not
+        an opinion about direction, and no amount of disagreement from a
+        directional lens makes the chain busier or thinner than it actually was.
+        A context lens that let itself be talked out of its reading would stop
+        being context.
+
+        It never defers either: the others consume its reading during their own
+        round 1, so standing down would remove the input they are reacting to.
+        """
+        return own
+
+

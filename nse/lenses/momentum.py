@@ -143,6 +143,38 @@ class MomentumLens(BaseLens):
             },
         )
 
+    def _deliberate(self, snap: MarketSnapshot, own: LensVerdict,
+                    peers: dict, journal) -> LensVerdict:
+        """A breakout INTO an opposing order block is the textbook false one.
+
+        ict_smc knows where the resting orders are. Breaking a trailing range
+        straight into a zone on the other side is the setup that traps
+        breakout buyers, so a structural objection cuts hard here rather than
+        gently.
+
+        A breakout on no participation is also suspect: a range cleared by
+        nobody is a range that has not really been cleared.
+        """
+        cut, notes = 1.0, []
+
+        ict = peers.get("ict_smc")
+        if (ict is not None and ict.speaks and ict.direction != Direction.NEUTRAL
+                and ict.direction != own.direction and ict.confidence >= 0.30):
+            cut *= 0.5
+            notes.append("ict_smc has an opposing zone right where I am "
+                         "breaking — classic false break")
+
+        lq = peers.get("liquidity")
+        if lq is not None and lq.speaks and lq.confidence < 0.4:
+            cut *= 0.6
+            notes.append(f"thin tape ({lq.confidence:.2f}) — a range cleared by "
+                         f"nobody is not cleared")
+
+        if cut >= 1.0:
+            return own
+        return own.revise(own.direction, own.confidence * cut,
+                          "; ".join(notes))
+
 
 def _bars_since_break(closes: np.ndarray, hi: float, lo: float,
                       direction: Direction) -> Optional[int]:

@@ -136,6 +136,38 @@ class ICTSMCLens(BaseLens):
             },
         )
 
+    def _deliberate(self, snap: MarketSnapshot, own: LensVerdict,
+                    peers: dict, journal) -> LensVerdict:
+        """A level that has just been broken is not a level.
+
+        momentum is the direct contradiction to a structural read: if price has
+        cleared the trailing range in the opposite direction to the zone this
+        lens is leaning on, that zone is being invalidated in real time. A
+        supply zone price has already broken up through is not supply.
+
+        Thin participation matters too. Order blocks and fair-value gaps only
+        mean anything if there is someone there to defend them.
+        """
+        cut, notes = 1.0, []
+
+        mo = peers.get("momentum")
+        if (mo is not None and mo.speaks and mo.direction != Direction.NEUTRAL
+                and mo.direction != own.direction and mo.confidence >= 0.30):
+            cut *= 0.5
+            notes.append(f"momentum has broken the range {mo.direction.label} "
+                         f"through my zone — it is being invalidated")
+
+        lq = peers.get("liquidity")
+        if lq is not None and lq.speaks and lq.confidence < 0.4:
+            cut *= 0.75
+            notes.append(f"thin tape ({lq.confidence:.2f}) — nobody here to "
+                         f"defend these levels")
+
+        if cut >= 1.0:
+            return own
+        return own.revise(own.direction, own.confidence * cut,
+                          "; ".join(notes))
+
 
 # ── components ───────────────────────────────────────────────────────────────
 def _order_block_signal(bars: pd.DataFrame, spot: float,

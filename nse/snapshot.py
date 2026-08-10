@@ -207,6 +207,52 @@ def expiry_at_close(expiry_date, symbol: str) -> datetime:
     return ist.tz_convert("UTC").to_pydatetime()
 
 
+#: Intraday bars, cached per (symbol, interval). Angel's historical-candle
+#: endpoint is rate limited hard and `build_live` runs every cycle, so fetching
+#: bars on every snapshot earns "Access denied because of exceeding access rate"
+#: and returns nothing. That silently blinded THREE lenses — vwap, ict_smc and
+#: momentum all abstained with "0 bars" on the first live run while the option
+#: chain looked perfectly healthy.
+#:
+#: A 5-minute bar cannot change more than once every 5 minutes, so re-fetching
+#: faster than the TTL below buys no information and costs the whole quota.
+_BARS_TTL_SEC = 60.0
+_bars_cache: dict = {}
+
+
+def _cached_bars(fetcher, symbol: str, interval: str):
+    """Intraday bars with a TTL, serving the last good frame on failure.
+
+    Returning the previous frame rather than an empty one matters: a transient
+    rate-limit reply would otherwise turn every bar-reading lens into an
+    abstention for that cycle, which reads on the dashboard as "the lenses have
+    nothing to say" when the truth is "we asked too fast".
+    """
+    import time as _time
+
+    key = (symbol, interval)
+    now = _time.monotonic()
+    cached = _bars_cache.get(key)
+    if cached and now - cached[0] < _BARS_TTL_SEC:
+        return cached[1]
+
+    try:
+        fresh = fetcher.fetch_intraday_df(symbol, interval)
+    except Exception as e:
+        logger.debug("build_live: bars fetch failed for %s: %s", symbol, e)
+        fresh = None
+
+    if fresh is not None and not getattr(fresh, "empty", True):
+        _bars_cache[key] = (now, fresh)
+        return fresh
+
+    if cached:
+        logger.debug("build_live: serving cached bars for %s (fetch returned nothing)",
+                     symbol)
+        return cached[1]
+    return pd.DataFrame()
+
+
 def build_live(symbol: str, fetcher=None, strikes_around: int = 8,
                bars_interval: str = "5m") -> Optional[MarketSnapshot]:
     """Build a snapshot from Angel SmartAPI. Returns None if the market is unreadable.
@@ -236,11 +282,7 @@ def build_live(symbol: str, fetcher=None, strikes_around: int = 8,
             logger.warning("build_live: empty chain for %s", symbol)
             return None
 
-        bars = pd.DataFrame()
-        try:
-            bars = cache.fetcher.fetch_intraday_df(symbol, bars_interval)
-        except Exception as e:
-            logger.debug("build_live: bars unavailable for %s: %s", symbol, e)
+        bars = _cached_bars(cache.fetcher, symbol, bars_interval)
 
         vix = None
         try:
