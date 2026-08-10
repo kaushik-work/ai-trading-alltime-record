@@ -303,6 +303,73 @@ def _cached_bars(fetcher, symbol: str, interval: str):
 #: Prior-session bars change once a day, so they are cached for the session.
 _prior_cache: dict = {}
 
+#: Session-open open interest per contract, for deriving `oi_change` live.
+#: (session_date, symbol) -> {(strike, option_type): first observed oi}
+_oi_baseline: dict = {}
+
+
+def _attach_oi_change(chain: pd.DataFrame, symbol: str) -> pd.DataFrame:
+    """Derive `oi_change` / `oi_change_pct` for a LIVE chain.
+
+    THE BUG THIS FIXES, WHICH ONLY PRODUCTION COULD REVEAL.
+
+    `volume_oi` scores three components: OI walls, volume-profile position, and
+    OI BUILD. The build component reads `oi_change`, a column that
+    `nse/backtest/replay.py:normalise_day` computes from the session's first
+    print — so it exists in every backtest and the lens measured +1.66/+1.49 bps
+    WITH it.
+
+    The live chain comes from the REST FULL-mode quote path, which carries `oi`
+    as a level and no change column of any kind. (`angel_stream` decodes
+    `open_interest_change_percentage` into `oi_change_pct`, but that is the
+    socket tick cache, not the chain the snapshot is built from.) So in
+    production the lens silently ran on two of its three components, permanently
+    — a backtest/live divergence in the ONLY lens carrying weight.
+
+    Deriving it here rather than in the lens keeps replay and live producing the
+    same MarketSnapshot, which is the property the whole architecture rests on.
+
+    HONEST LIMITATION: the baseline is the first OI this PROCESS observed, not
+    the exchange's session open. They coincide only if the council starts before
+    09:15. Start it late and the build component measures "change since we
+    started watching", which is a smaller number than the backtest saw. The
+    field is left ABSENT for the first observation of each contract rather than
+    written as zero, because a fabricated zero would read as "no build" and be
+    indistinguishable from a real flat reading.
+    """
+    from datetime import date as _date
+
+    if chain is None or chain.empty or "oi" not in chain.columns:
+        return chain
+
+    key = (_date.today(), symbol)
+    # Drop other days so this cannot grow without bound across a long-lived
+    # process, and so a stale baseline never leaks into a new session.
+    for k in [k for k in _oi_baseline if k != key]:
+        _oi_baseline.pop(k, None)
+    base = _oi_baseline.setdefault(key, {})
+
+    out = chain.copy()
+    oi = pd.to_numeric(out["oi"], errors="coerce").fillna(0.0)
+    type_col = "option_type" if "option_type" in out.columns else "side"
+
+    changes, pcts = [], []
+    for i, row in enumerate(out.itertuples(index=False)):
+        ck = (getattr(row, "strike", None), str(getattr(row, type_col, "")).upper())
+        now = float(oi.iloc[i])
+        if ck not in base:
+            base[ck] = now
+            changes.append(float("nan"))
+            pcts.append(float("nan"))
+            continue
+        first = base[ck]
+        changes.append(now - first)
+        pcts.append(((now - first) / first * 100.0) if first > 0 else 0.0)
+
+    out["oi_change"] = changes
+    out["oi_change_pct"] = pcts
+    return out
+
 
 def _cached_prior_bars(fetcher, symbol: str, interval: str, today):
     """The previous session's bars, fetched once per day.
@@ -369,6 +436,10 @@ def build_live(symbol: str, fetcher=None, strikes_around: int = 8,
         if chain is None or chain.empty:
             logger.warning("build_live: empty chain for %s", symbol)
             return None
+
+        # Live chains carry oi as a LEVEL only; the build component needs the
+        # change. Derived here so replay and live emit the same schema.
+        chain = _attach_oi_change(chain, symbol)
 
         bars = _cached_bars(cache.fetcher, symbol, bars_interval)
         prior = _cached_prior_bars(cache.fetcher, symbol, bars_interval, bars)
