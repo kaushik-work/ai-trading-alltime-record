@@ -725,6 +725,48 @@ Neither bucket clears the random-subset control, so this is not a gate to ship.
 It is a reason NOT to build the extension guard that was requested, which is a
 more useful outcome than building it.
 
+
+### 3.21 Crypto is quietest exactly when NSE is open
+
+115,200 five-minute bars per symbol, |60-minute forward move| and volume share
+by hour, TRAIN and VALIDATE reported separately so the pattern has to hold
+twice.
+
+| IST | ETH \|move\| TR / VA | ETH vol | BTC \|move\| TR / VA | BTC vol |
+|---|---|---|---|---|
+| 12:00 | 37.1 / 29.2 | 3.6% | 24.9 / 23.3 | 3.4% |
+| 15:00 | 36.9 / 28.6 | 3.9% | 23.2 / 23.8 | 3.7% |
+| 18:00 | 56.6 / 52.9 | 5.1% | 35.9 / 46.1 | 4.9% |
+| 19:00 | 75.6 / 51.1 | 7.9% | 47.7 / 40.9 | 8.1% |
+| **20:00** | **74.4 / 46.9** | **9.8%** | **49.2 / 38.5** | **10.9%** |
+| 21:00 | 62.2 / 39.0 | 8.3% | 39.8 / 29.7 | 8.5% |
+
+**18:00-23:00 IST carries roughly twice the movement and 2.5x the volume of
+09:00-17:00**, on both symbols, in both splits independently. That is the US
+session — NY opens around 19:00 IST — and it is about as robust as a pattern
+gets in this repo.
+
+It is close to the mirror image of NSE hours: crypto is at its quietest during
+the Indian trading day.
+
+**ACTIVITY IS NOT EDGE, AND THIS TABLE MEASURES ACTIVITY.** |move| is how far
+price travels, not how predictable that travel is. A 2x wider distribution is
+2x the opportunity and 2x the risk, and the spread crossed to enter is usually
+wider in the same hours. Nothing here says those hours are more profitable.
+
+The question that would matter — is a LENS edge stronger then? — cannot be
+answered, because no crypto lens has an edge to concentrate (section 3.19,
+fifteen lens-symbol measurements, none clearing). Concentrating a zero edge
+into the busiest hours concentrates the zero.
+
+So the honest use is VOLATILITY SCHEDULING, not signal timing: if a crypto lens
+ever earns a weight, this says where its sample and its risk will sit. It is
+not a reason to trade 18:00-23:00 today.
+
+The NSE equivalent was measured in section 3.15 and behaves the same way:
+afternoon (>=14:00 IST) scored the best VALIDATE edge in the set at +3.57 bps
+and still did not clear its random-subset control, so it is not a rule either.
+
 ---
 
 ## 4. Data facts
