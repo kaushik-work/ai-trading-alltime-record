@@ -488,3 +488,124 @@ def nse_lenses(user: dict = Depends(_get_current_user)):
             "note": (m.note if m else ""),
         })
     return {"lenses": out, "count": len(out)}
+
+
+# ── one-glance health ────────────────────────────────────────────────────────
+@router.get("/health")
+def nse_health(user: dict = Depends(_get_current_user)):
+    """Everything that can be wrong with the council, in one payload.
+
+    Built for the question "is it working right now?", which until this existed
+    could only be answered by SSHing to the droplet and reading logs. Logs tell
+    you what happened; they are a poor way to notice that nothing is happening.
+
+    THE CHECK THAT MATTERS MOST IS DECISION AGE. A council that has stopped
+    deciding looks identical, from every other angle, to a council that is
+    deciding to stand aside — same green containers, same clear sentinel, same
+    everything. The only difference is a timestamp getting older. So that is
+    surfaced first and is the one thing that goes red on its own.
+
+    Each check returns ok | warn | fail plus the observed value, so the UI never
+    has to interpret a raw number to decide what colour to paint.
+    """
+    import os
+    from datetime import datetime, timedelta, timezone
+
+    checks: list[dict] = []
+
+    def add(name, state, detail, value=None):
+        checks.append({"name": name, "state": state, "detail": detail,
+                       "value": value})
+
+    now = datetime.now(timezone.utc)
+
+    # 1. Is the council still deciding?
+    last_ts = None
+    try:
+        from core.mongo import get_db
+        from nse.council import COUNCIL_COLLECTION
+        db = get_db()
+        if db is None:
+            add("database", "fail", "Mongo unreachable — nothing is persisting")
+        else:
+            add("database", "ok", db.name)
+            doc = db[COUNCIL_COLLECTION].find_one({}, {"_id": 0, "ts": 1},
+                                                  sort=[("ts", -1)])
+            if doc and doc.get("ts"):
+                last_ts = datetime.fromisoformat(doc["ts"])
+                if last_ts.tzinfo is None:
+                    last_ts = last_ts.replace(tzinfo=timezone.utc)
+                age = (now - last_ts).total_seconds()
+                # Two minutes is two missed 60s cycles. One missed cycle is a
+                # slow snapshot; two is a stopped council.
+                state = "ok" if age < 120 else "warn" if age < 600 else "fail"
+                add("council deciding", state,
+                    f"last decision {int(age)}s ago", round(age, 1))
+            else:
+                add("council deciding", "fail", "no decisions ever journaled")
+    except Exception as e:
+        add("database", "fail", str(e)[:120])
+
+    # 2. The sentinel — the only thing that can place an order.
+    try:
+        import requests
+        url = os.environ.get("SENTINEL_URL", "http://sentinel:8090")
+        st = requests.get(f"{url.rstrip('/')}/status", timeout=5).json()
+        add("sentinel", "ok", f"up {int(st.get('uptime_sec', 0))}s")
+        dm = st.get("deadman", {})
+        add("dead-man's switch",
+            "fail" if dm.get("fired") else "ok",
+            "LATCHED — clear it and find out why the brain went dark"
+            if dm.get("fired") else f"clear, {dm.get('timeout_sec')}s timeout")
+        add("orders armed", "ok" if st.get("live_orders") else "warn",
+            "LIVE — real orders" if st.get("live_orders")
+            else "disarmed (paper)", bool(st.get("live_orders")))
+        add("open positions", "ok", str(st.get("positions", 0)),
+            st.get("positions", 0))
+        if st.get("intents_rejected"):
+            add("intents rejected", "warn",
+                f"{st['intents_rejected']} — last: {st.get('last_reject_reason','')[:60]}",
+                st["intents_rejected"])
+    except Exception as e:
+        add("sentinel", "fail", f"unreachable — {str(e)[:80]}")
+
+    # 3. Is the feed actually live?
+    try:
+        from nse.ws.angel_stream import get_stream
+        d = get_stream().diagnostics()
+        add("market feed", "ok" if d.get("connected") else "fail",
+            f"{d.get('fresh_contracts', '?')} fresh contracts"
+            if d.get("connected") else "socket down")
+    except Exception as e:
+        add("market feed", "warn", str(e)[:80])
+
+    # 4. Who can actually move capital, and is anything dying?
+    try:
+        from nse.brain import load as load_brain
+        from nse.lenses import ROSTER
+        from nse.lenses.bootstrap import MEASURED
+        weighted, dying = [], []
+        for cls in ROSTER:
+            m = MEASURED.get(cls.name)
+            b = load_brain(cls.name,
+                           backtestable=bool(m and m.train_bps is not None),
+                           bootstrap_weight=m.bootstrap_weight if m else 0.0)
+            if b.effective_weight() > 0:
+                weighted.append(f"{cls.name}={b.effective_weight():g}")
+            if b.is_dying:
+                dying.append(cls.name)
+        add("lenses with weight", "ok" if weighted else "fail",
+            ", ".join(weighted) or "NONE — the council cannot trade")
+        if dying:
+            add("lenses dying", "warn", ", ".join(dying))
+    except Exception as e:
+        add("lenses", "warn", str(e)[:80])
+
+    worst = ("fail" if any(c["state"] == "fail" for c in checks)
+             else "warn" if any(c["state"] == "warn" for c in checks) else "ok")
+    return {
+        "overall": worst,
+        "checked_at": now.isoformat(),
+        "last_decision_at": last_ts.isoformat() if last_ts else None,
+        "checks": checks,
+    }
