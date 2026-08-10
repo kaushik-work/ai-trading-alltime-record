@@ -96,6 +96,38 @@ def market_open(now: Optional[datetime] = None, symbol: str = "NIFTY") -> bool:
     return now.time() >= __import__("datetime").time(9, 15) and now.time() <= close_t
 
 
+def _start_heartbeat(runner) -> "threading.Thread":
+    """Beat on a timer of its own, NOT once per decision.
+
+    The sentinel's dead-man's switch fires after SENTINEL_DEADMAN_SEC (30s by
+    default) of silence and flattens every open position. Heartbeating inside
+    the decision loop ties liveness to the decision cadence, so the default
+    `--every 60` would have gone silent for 60s at a time and tripped the
+    switch on every single cycle — flattening positions in production while the
+    brain was perfectly healthy.
+
+    Liveness and decision-making are different clocks and must not share one.
+    The beat also continues while a slow snapshot build is in flight, which is
+    exactly when the loop would otherwise stall past the timeout.
+    """
+    import threading
+
+    from nse.execution.sentinel_client import HEARTBEAT_INTERVAL_SEC
+
+    def beat():
+        while not _stop:
+            try:
+                runner.heartbeat()
+            except Exception as e:
+                logger.error("heartbeat failed: %s", e)
+            time.sleep(HEARTBEAT_INTERVAL_SEC)
+
+    t = threading.Thread(target=beat, name="sentinel-heartbeat", daemon=True)
+    t.start()
+    logger.info("heartbeat thread started (every %.0fs)", HEARTBEAT_INTERVAL_SEC)
+    return t
+
+
 def run(symbol: str = "NIFTY", every: int = 60, paper: bool = True,
         once: bool = False, ignore_hours: bool = False) -> int:
     from nse.council import assert_deliberation_monotone
@@ -119,6 +151,10 @@ def run(symbol: str = "NIFTY", every: int = 60, paper: bool = True,
     except Exception as e:
         logger.error("could not subscribe: %s", e)
         return 2
+
+    # Liveness runs on its own clock. See _start_heartbeat.
+    if not paper:
+        _start_heartbeat(runner)
 
     checked_monotone = False
     cycles = 0
@@ -165,7 +201,6 @@ def run(symbol: str = "NIFTY", every: int = 60, paper: bool = True,
             else:
                 runner.state.rejected += 1
 
-        runner.heartbeat()
         cycles += 1
         if once:
             break
