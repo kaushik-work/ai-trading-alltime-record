@@ -41,7 +41,7 @@ from datetime import date, datetime, time, timezone
 from typing import Optional
 
 from nse.brain import BrainState
-from nse.config import LOT_SIZES, TOTAL_CAPITAL_INR
+from nse.config import LOT_SIZES, TOTAL_CAPITAL_INR, market_close_for
 from nse.council import Council, journal_decision
 from nse.execution.sentinel_client import SentinelClient
 from nse.journal import DayJournal, build as build_journal, for_session, save as save_journal
@@ -52,7 +52,8 @@ from nse.snapshot import MarketSnapshot
 
 logger = logging.getLogger(__name__)
 
-IST = timezone.utc  # snapshots carry tz-aware UTC; market hours convert below
+from datetime import timedelta as _td
+_IST = timezone(_td(hours=5, minutes=30))
 
 #: Rupees of risk per trade. The operator's figure, inside the ₹3L pool.
 RISK_PER_TRADE_INR: float = 50_000.0
@@ -63,6 +64,26 @@ MAX_CONCURRENT_POSITIONS: int = 6
 #: A snapshot older than this is not tradeable. "Live means live" — acting on a
 #: stale book is how you buy a price that stopped existing.
 MAX_SNAPSHOT_AGE_SEC: float = 15.0
+
+#: MINUTES TO HOLD BEFORE EXITING. This is not a preference — it is the horizon
+#: the entry edge was MEASURED at (`hold_minutes=60` in
+#: nse/backtest/options_harness.py, and the 60-minute forward return in
+#: lens_harness). The measured +1.66/+1.49 bps describes what happens if you
+#: enter and exit sixty minutes later. Hold longer and you are trading a
+#: strategy nobody measured.
+#:
+#: THIS EXISTED NOWHERE BEFORE. The runner opened positions and had no exit path
+#: of any kind: no horizon, no stop, no target, no GTT bracket. A live position
+#: would have stayed open until expiry — at 1 DTE, very likely to zero — while
+#: also blocking re-entry on that symbol forever via the "already holding"
+#: guard. The dead-man's switch does not cover this: it fires when the BRAIN
+#: goes dark, not when a trade goes against you.
+HOLD_MINUTES: int = 60
+
+#: Flatten everything this many minutes before the close. The measurement's
+#: other exit is "session ends", and carrying a 1-DTE long option overnight is
+#: a different trade from the one that was measured.
+FLATTEN_BEFORE_CLOSE_MIN: int = 10
 
 #: Master switch. Defaults OFF: this file existing must never be sufficient to
 #: start trading.
@@ -78,7 +99,8 @@ class RunnerState:
     """What the loop knows about the session it is in."""
 
     session: Optional[date] = None
-    open_positions: dict = field(default_factory=dict)   # symbol -> position_id
+    #: symbol -> {"position_id", "opened_at", "strike", "option_type"}
+    open_positions: dict = field(default_factory=dict)
     decisions: int = 0
     executed: int = 0
     rejected: int = 0
@@ -168,6 +190,10 @@ class OptionsRunner:
         if not ENABLE_OPTIONS_RUNNER and not self.paper:
             return None
 
+        # Exits first. A stale position must not block the next entry, and a
+        # position past its horizon is already outside the measured strategy.
+        self.manage_exits(snap)
+
         self.state.decisions += 1
         self._source = getattr(snap, "source", "live")
         if self.state.first_spot is None:
@@ -197,6 +223,65 @@ class OptionsRunner:
             return None
 
         return self._submit(snap, decision)
+
+    def manage_exits(self, snap: MarketSnapshot) -> list:
+        """Close anything past its measured horizon, or near the close.
+
+        Runs BEFORE the entry check on every tick, for two reasons: a position
+        that should already be gone must not keep blocking re-entry, and an exit
+        is always more urgent than an entry.
+
+        The horizon is the one the edge was measured at. Exiting late is not a
+        smaller version of the strategy, it is a different one — the measured
+        number says nothing about minute 61.
+        """
+        closed = []
+        if not self.state.open_positions:
+            return closed
+
+        now = snap.ts
+        close_t = market_close_for(snap.symbol, now.astimezone(_IST).date())
+        mins_to_close = ((close_t.hour * 60 + close_t.minute)
+                         - (now.astimezone(_IST).hour * 60 + now.astimezone(_IST).minute))
+
+        for symbol, pos in list(self.state.open_positions.items()):
+            opened = pos.get("opened_at")
+            age_min = ((now - opened).total_seconds() / 60.0) if opened else 0.0
+
+            reason = None
+            if mins_to_close <= FLATTEN_BEFORE_CLOSE_MIN:
+                reason = f"session close in {mins_to_close}m"
+            elif opened and age_min >= HOLD_MINUTES:
+                reason = f"{HOLD_MINUTES}m measured horizon reached ({age_min:.0f}m)"
+
+            if not reason:
+                continue
+
+            pid = pos.get("position_id")
+            if self.paper:
+                logger.info("[PAPER] CLOSE %s %s — %s", symbol, pid, reason)
+                self.state.open_positions.pop(symbol, None)
+                closed.append({"symbol": symbol, "reason": reason, "paper": True})
+                continue
+
+            resp = self.client.close_position(pid, reason=reason)
+            if resp.get("ok"):
+                logger.info("CLOSED %s %s — %s", symbol, pid, reason)
+                self.state.open_positions.pop(symbol, None)
+            elif resp.get("indeterminate"):
+                # Do NOT drop it from state on an indeterminate close. Forgetting
+                # a position we may still hold is how a "flat" book turns out to
+                # be short one leg.
+                self.state.errors += 1
+                logger.error("close of %s indeterminate — keeping it in state "
+                             "pending reconciliation", pid)
+            else:
+                self.state.errors += 1
+                logger.error("close of %s REJECTED: %s — position still open",
+                             pid, resp.get("error"))
+            closed.append({"symbol": symbol, "reason": reason,
+                           "ok": bool(resp.get("ok"))})
+        return closed
 
     def _blocked(self, snap: MarketSnapshot) -> Optional[str]:
         """Risk and hygiene checks, each named so a refusal is diagnosable."""
@@ -240,7 +325,10 @@ class OptionsRunner:
             self.state.executed += 1
             logger.info("[PAPER] %s %s %d lot(s) — %s",
                         option_type, strike, lots, decision.reason)
-            self.state.open_positions[snap.symbol] = f"paper_{decision.decision_id}"
+            self.state.open_positions[snap.symbol] = {
+                "position_id": f"paper_{decision.decision_id}",
+                "opened_at": snap.ts, "strike": strike,
+                "option_type": option_type}
             return {"ok": True, "paper": True, "decision_id": decision.decision_id,
                     "option_type": option_type, "strike": strike, "lots": lots}
 
@@ -252,14 +340,18 @@ class OptionsRunner:
             self.state.executed += 1
             pid = resp.get("position_id")
             if pid:
-                self.state.open_positions[snap.symbol] = pid
+                self.state.open_positions[snap.symbol] = {
+                    "position_id": pid, "opened_at": snap.ts,
+                    "strike": strike, "option_type": option_type}
         elif resp.get("indeterminate"):
             # The intent may or may not have landed. Do NOT retry and do NOT
             # assume it failed — either guess can double a position. Mark the
             # symbol occupied and let reconciliation against the sentinel's own
             # position view settle it.
             self.state.errors += 1
-            self.state.open_positions[snap.symbol] = "INDETERMINATE"
+            self.state.open_positions[snap.symbol] = {
+                "position_id": "INDETERMINATE", "opened_at": snap.ts,
+                "strike": strike, "option_type": option_type}
             logger.error("intent %s indeterminate — symbol locked pending "
                          "reconciliation", decision.decision_id)
         else:

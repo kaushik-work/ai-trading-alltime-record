@@ -278,13 +278,27 @@ class Council:
             self.gate = None
             self.min_lead_confidence = COUNCIL_MIN_LEAD_CONFIDENCE
 
-    def retune_gate(self, confidences_by_session: dict, as_of) -> Optional[str]:
+    def retune_gate(self, confidences_by_session: dict, as_of,
+                    persist: bool = False) -> Optional[str]:
         """Move the conviction gate to its target percentile of recent history.
 
         Call this ONCE per session, out of market hours. Retuning intraday would
         mean two snapshots an hour apart were judged against different bars,
         which makes the session's decisions incomparable with each other and the
         day's attribution meaningless.
+
+        PERSISTENCE IS OPT-IN, and that default is not timidity.
+
+        This method used to save unconditionally. A verification run that fed it
+        `np.random.uniform(0, 1)` — checking only that the shrinkage and band
+        logic worked — therefore wrote a gate of 0.5615 into the PRODUCTION
+        cluster, fitted to random numbers. The live council then rejected trades
+        against a "measured floor" that was noise, and said so in its transcript
+        with a plausible-looking number.
+
+        A function that mutates shared production state as a side effect of
+        being called is a function that will eventually be called by a test.
+        Callers that mean it pass persist=True.
         """
         if self.gate is None:
             return None
@@ -292,8 +306,10 @@ class Council:
         self.gate, note = recalibrate_lens("council", self.gate,
                                            confidences_by_session, as_of)
         self.min_lead_confidence = self.gate.value
-        save_tunable("council", self.gate)
-        logger.info("council gate retuned: %s", note)
+        if persist:
+            save_tunable("council", self.gate)
+        logger.info("council gate retuned%s: %s",
+                    "" if persist else " (NOT persisted)", note)
         return note
 
     def weight_of(self, name: str) -> float:
