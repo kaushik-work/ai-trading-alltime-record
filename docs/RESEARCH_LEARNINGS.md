@@ -629,6 +629,102 @@ But the cost of a *badly calibrated* lens is worse than zero: it produces a
 number that looks like a measurement and is not, which is how `smile` nearly
 entered the record as "tested, no edge" on n=34.
 
+
+### 3.18 Which third of volume_oi works: the volume profile, not the OI walls
+
+`volume_oi` is the only lens with an edge, and it had been treated as one
+indivisible thing for the whole project. It is three components. Scored
+separately on the same 390 sessions, same protocol:
+
+| component | TRAIN | VALIDATE | signs |
+|---|---|---|---|
+| **`value_area_position`** (volume profile) | **+1.66** p=0.0048 | **+2.01** p=0.0181 | **agree** |
+| `oi_build` | +1.40 p=0.0062 | +1.17 p=0.1286 | agree |
+| `wall_position` (OI walls) | +0.26 p=0.6442 | -0.06 p=0.9422 | no |
+| *all three, the shipped lens* | +1.66 | +1.49 | agree |
+
+**The OI walls contribute nothing** - null on both splits on n=2277/1126, which
+is a robust null rather than a small sample. And the volume-profile component
+ALONE beats the shipped combination on VALIDATE, **+2.01 against +1.49**: the
+dead component dilutes the live one, because the lens averages whatever fires.
+
+Correlations: `value_area` and `oi_build` 0.481 (related, both OI/volume
+derived), walls about -0.11 against both - independent *and* useless, which is
+the worst combination, because independence is usually what justifies keeping
+something.
+
+CAUTION ON ACTING: picking the best-scoring component after seeing VALIDATE is
+selection. What is safe to conclude is the NULL - walls do nothing on either
+split - because a null is not something you can select your way into. Dropping
+them is supported; declaring +2.01 as the new expected edge is not.
+
+### 3.19 The crypto roster: five lenses, three symbols, no edge
+
+The bar-only lenses replayed on Delta perps - 115,200 bars each for ETHUSD and
+BTCUSD (13 months), 33,109 for XAUTUSD on its own split.
+
+| lens | ETHUSD | BTCUSD | XAUTUSD |
+|---|---|---|---|
+| `vwap` | +0.26 / -1.71 | -0.16 / +0.95 | -1.70 / +0.48 |
+| `ict_smc` | +0.38 / **+1.76** | -0.10 / +0.18 | -0.26 / +0.87 |
+| `momentum` | -3.14 / -0.05 | +0.61 / -2.63 | -2.15 / -1.10 |
+| `composite_profile` | **+5.15 / -8.35** | -1.09 / +0.46 | **-14.19 / +3.34** |
+| `candle_flow` | -4.52 / -3.30 | -1.58 / -1.34 | -0.45 / +0.67 |
+
+**Nothing clears.** Fifteen lens-symbol measurements, and not one shows a
+positive edge with agreeing signs and significance on both splits.
+
+**`vwap`'s NIFTY failure was not only the missing volume.** That was the open
+question this run existed to answer. On ETHUSD it fired on 18,862 of 18,862
+snapshots - **zero abstentions**, because real traded volume means a real
+session anchor every time - and still produced nothing. The index's zero-volume
+column was a genuine defect, and fixing it did not reveal an edge underneath.
+
+**`composite_profile` swings violently and significantly in BOTH directions**:
++5.15 to -8.35 on ETH, -14.19 to +3.34 on XAUT, every one of those p=0.0000 to
+p=0.0004. A number that large flipping sign between adjacent periods is the
+signature of fitting a regime, not measuring an edge. Its ETH TRAIN long
+fraction was 43.9% against VALIDATE's 57.9%, and XAUT's was 85.5% against
+43.6% - the lens is measuring the period, not the market.
+
+**`candle_flow` is consistently negative on the two liquid symbols** - ETH
+-4.52/-3.30 and BTC -1.58/-1.34, signs agreeing in both. Four measurements
+across two independent instruments all pointing the same way is more than the
+one bit a single flip gives you. The inverse convention (follow the wick rather
+than fade it) is therefore worth stating as a NEW hypothesis - but it must be
+tested on data not used to form it, which means XAUT and NIFTY, not ETH or BTC
+again. Flipping the sign and re-reading these same numbers is section 3.13.
+
+`ict_smc` on ETHUSD is the only positive with agreeing signs (+0.38 / +1.76),
+and it is not convincing: TRAIN is null at p=0.5750, and the same lens on
+BTCUSD is -0.10 / +0.18. One split on one symbol is the shape that produced the
+`uncontested only` artefact in section 3.15.
+
+### 3.20 Extension: the late-entry hypothesis is backwards for a fader
+
+Tested because the operator observed a losing trade that "was like entering at
+momentum end". Gating `volume_oi` on how much room the move has left:
+
+| bucket | TRAIN | VALIDATE | P(random subset better) |
+|---|---|---|---|
+| early (room >= 0.60) | +0.76 | **-0.72** | 0.83 |
+| mid | +0.57 | +0.54 | 0.70 |
+| **extended (< 0.30)** | **+2.04** p=0.0006 | **+2.00** p=0.0333 | 0.10 / 0.15 |
+
+Entering when the move is ALREADY EXTENDED measures better, consistently, on
+both splits - the opposite of the hypothesis.
+
+It is mechanically coherent: `volume_oi` is a **fader**, and its live component
+is the value-area position, which by construction says "price is stretched from
+value". An extended move is exactly the condition it is built to trade. The
+intuition about late entries applies to a FOLLOWER, and the follower here -
+`momentum` - measured negative on every venue tested (NIFTY -1.06/-0.73,
+ETHUSD -3.14/-0.05, XAUTUSD -2.15/-1.10).
+
+Neither bucket clears the random-subset control, so this is not a gate to ship.
+It is a reason NOT to build the extension guard that was requested, which is a
+more useful outcome than building it.
+
 ---
 
 ## 4. Data facts
