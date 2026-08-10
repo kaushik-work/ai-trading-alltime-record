@@ -267,6 +267,42 @@ _BARS_TTL_SEC = 60.0
 _bars_cache: dict = {}
 
 
+def _normalise_bars(df):
+    """Angel's bar frame -> the schema every lens and the replay path use.
+
+    `AngelFetcher._rows_to_df` returns CAPITALISED Open/High/Low/Close/Volume on
+    a `Date` index. Lenses and nse/backtest/replay.py both use lowercase columns
+    plus an explicit `datetime` column.
+
+    Live bars were therefore structurally unreadable by vwap, momentum and
+    ict_smc — and it stayed hidden because each of those lenses checks its
+    minimum BAR COUNT before it touches a column. For the first half of every
+    session they abstained with "0 bars" / "too few bars", which looks like
+    warm-up; only once enough bars accumulated did the real message appear
+    ("bars lack close/volume"). A guard that fails for a plausible-looking
+    reason hides the actual one.
+
+    Normalised here, at the single live-bar boundary, rather than in each lens:
+    three lenses independently coping with two schemas is three chances to cope
+    differently.
+    """
+    if df is None or getattr(df, "empty", True):
+        return pd.DataFrame()
+    out = df.copy()
+    if out.index.name in ("Date", "datetime", "date"):
+        out = out.reset_index()
+    out.columns = [str(c).lower() for c in out.columns]
+    if "datetime" not in out.columns:
+        for cand in ("date", "timestamp", "time"):
+            if cand in out.columns:
+                out = out.rename(columns={cand: "datetime"})
+                break
+    if "datetime" in out.columns:
+        out["datetime"] = pd.to_datetime(out["datetime"], errors="coerce")
+        out = out.dropna(subset=["datetime"]).sort_values("datetime")
+    return out.reset_index(drop=True)
+
+
 def _cached_bars(fetcher, symbol: str, interval: str):
     """Intraday bars with a TTL, serving the last good frame on failure.
 
@@ -289,7 +325,8 @@ def _cached_bars(fetcher, symbol: str, interval: str):
         logger.debug("build_live: bars fetch failed for %s: %s", symbol, e)
         fresh = None
 
-    if fresh is not None and not getattr(fresh, "empty", True):
+    fresh = _normalise_bars(fresh)
+    if fresh is not None and not fresh.empty:
         _bars_cache[key] = (now, fresh)
         return fresh
 
@@ -387,9 +424,8 @@ def _cached_prior_bars(fetcher, symbol: str, interval: str, today):
 
     out = pd.DataFrame()
     try:
-        hist = fetcher.fetch_historical_df(symbol, interval, days=5)
+        hist = _normalise_bars(fetcher.fetch_historical_df(symbol, interval, days=5))
         if hist is not None and not hist.empty:
-            hist = hist.rename(columns={c: c.lower() for c in hist.columns})
             if "datetime" in hist.columns:
                 hist["datetime"] = pd.to_datetime(hist["datetime"])
                 if today is not None and not today.empty and "datetime" in today.columns:
