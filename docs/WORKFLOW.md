@@ -241,6 +241,9 @@ downward or `assert_deliberation_monotone()` fails the session.
 | lens | verdict |
 |---|---|
 | **`volume_oi`** | TRAIN +1.66 / VALIDATE +1.49 bps — **PROBATION 0.50** |
+| ↳ `value_area_position` **alone** | **+1.66 / +2.01** — the volume profile is where the edge lives |
+| ↳ `oi_build` alone | +1.40 / +1.17 |
+| ↳ `wall_position` alone | +0.26 / **−0.06** — the OI walls contribute **nothing** |
 | `vwap` | −2.31 / −1.06 — and a −0.769 echo of `volume_oi` |
 | `ict_smc` | −1.41 / −0.15 |
 | `greeks` | −0.54 / −1.08 |
@@ -278,5 +281,9 @@ find and cheap to bench*, not producing edge.
   measured on NIFTY overstates what production runs. `has_volume` is journaled
   so the two can be separated.
 - **Crypto has no weighted lens**, so the council correctly refuses every entry
-  there.
+  there — and now for a measured reason: fifteen lens-symbol measurements
+  across ETHUSD, BTCUSD and XAUTUSD, none clearing (§3.19).
+- **`volume_oi`'s OI-wall component is dead weight** and dilutes the two live
+  components. Removing it is supported by a null on both splits, but it changes
+  the only lens that trades, so it is a decision rather than a cleanup (§3.18).
 - **`gamma_exposure` needs a wider chain**, not a third formula.
