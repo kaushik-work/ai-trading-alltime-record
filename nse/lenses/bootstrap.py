@@ -214,6 +214,40 @@ MEASURED: dict[str, Measurement] = {
               "formula. Its measured +0.26/+0.30 bps is discarded as noise "
               "rather than recorded as a weak positive."),
     ),
+    "candle_flow": Measurement(
+        lens="candle_flow",
+        train_bps=+0.09, train_p=0.9337,
+        validate_bps=-1.10, validate_p=0.5095,
+        lifecycle=Lifecycle.SHADOW,
+        bootstrap_weight=0.0,
+        note=("wick rejection, close location, effort-vs-result. NIFTY: nothing, "
+              "signs disagree. Measured on THREE further datasets and the "
+              "picture is consistent only in being unusable -- ETHUSD "
+              "-4.52/-3.30 and BTCUSD -1.58/-1.34 (both negative, signs "
+              "agreeing), XAUTUSD -0.45/+0.67 and NIFTY +0.09/-1.10 (both "
+              "disagreeing). The two liquid crypto symbols suggested the "
+              "INVERSE convention might carry something; NIFTY and XAUT were "
+              "then used as datasets that had NOT formed that hypothesis, and "
+              "neither supports it. Closed rather than flipped. Note NIFTY "
+              "replay reports has_volume on 4826/4826 because replay.py sums "
+              "OPTION volume into index bars -- live it would run on wick "
+              "geometry alone, so even this null overstates the live lens."),
+    ),
+    "extension": Measurement(
+        lens="extension",
+        train_bps=None, train_p=None,
+        validate_bps=None, validate_p=None,
+        lifecycle=Lifecycle.SHADOW,
+        bootstrap_weight=0.0,
+        note=("CONTEXT lens -- always NEUTRAL, so the directional harness "
+              "correctly reports 'insufficient data'. Measured as a GATE on "
+              "volume_oi instead, and the result INVERTED the hypothesis it was "
+              "built for: entering when the move is already extended scored "
+              "+2.04/+2.00 against an ungated +1.66/+1.49. volume_oi is a "
+              "fader, so an extended move is what it trades. Neither bucket "
+              "cleared the random-subset control (P=0.10/0.15), so this is a "
+              "reason NOT to gate on extension rather than a gate to ship."),
+    ),
     "vision": Measurement(
         lens="vision",
         train_bps=None, train_p=None,
