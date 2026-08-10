@@ -4,6 +4,7 @@ import { useRouter } from "next/navigation";
 import Header from "./components/Header";
 import CryptoChart from "./CryptoChart";
 import NseView from "./NseView";
+import SideTabs, { TabKey } from "./components/SideTabs";
 import PositionCard, { Position } from "./components/PositionCard";
 import SignalRadar, { SignalRow } from "./components/SignalRadar";
 import ActivityPanel, { MissedSignal, ShadowSummary, ShadowTrade } from "./components/ActivityPanel";
@@ -51,7 +52,13 @@ function signalTone(s: SignalRow): "up" | "down" | "warn" | "brand" | "neutral" 
 export default function CryptoHome() {
   const router = useRouter();
   const [authed, setAuthed] = useState(false);
-  const [viewMode, setViewMode] = useState<"crypto" | "nse">("crypto");
+  const [tab, setTab] = useState<TabKey>("nse");
+  // The Header and the mobile bar still think in venues. Deriving the venue
+  // from the tab keeps them working without threading a second piece of
+  // state that could disagree with this one.
+  const viewMode: "crypto" | "nse" =
+    tab === "crypto" || tab === "BTC" || tab === "ETH" ? "crypto" : "nse";
+  const setViewMode = (m: "crypto" | "nse") => setTab(m);
   const [snap, setSnap] = useState<Snapshot | null>(null);
   const [wsState, setWsState] = useState<"connecting" | "open" | "closed">("connecting");
   const [killConfirm, setKillConfirm] = useState(false);
@@ -139,8 +146,45 @@ export default function CryptoHome() {
     <div className="min-h-screen bg-[var(--plane)]">
       <Header mode={viewMode} onModeChange={setViewMode} connection={connection} />
 
-      <main className="max-w-[1400px] mx-auto px-3 sm:px-6 py-4 sm:py-6 pb-24 lg:pb-6">
-        {viewMode === "nse" ? <NseView /> : (
+      <main className="max-w-[1600px] mx-auto px-3 sm:px-6 py-4 sm:py-6 pb-24 lg:pb-6
+                       flex gap-4 sm:gap-6 items-start">
+        <div className="hidden lg:block">
+          <SideTabs active={tab} onChange={setTab} />
+        </div>
+
+        <div className="flex-1 min-w-0">
+        {tab === "BANKNIFTY" || tab === "FINNIFTY" || tab === "BTC" || tab === "ETH" ? (
+          /* An instrument with nothing behind it gets an honest empty state
+             rather than a chart of a bot that is not running. Saying WHY it is
+             not trading, with the measured number, is more useful than a blank
+             panel and stops the tab implying coverage that does not exist. */
+          <div className="card card-pad">
+            <div style={{ fontSize: 15, fontWeight: 600, marginBottom: 6 }}>
+              {tab} — not trading
+            </div>
+            <div style={{ fontSize: 13, color: "var(--ink-2)", lineHeight: 1.6 }}>
+              {tab === "FINNIFTY" && (
+                <>Refused on measured evidence: median half-spread <b>1.4760%</b> against
+                volume_oi&apos;s <b>0.70%</b> break-even. Section 3.10 calls it effectively
+                untradeable at these premiums.</>
+              )}
+              {tab === "BANKNIFTY" && (
+                <>Refused because its spread has never been measured — a different
+                reason from FINNIFTY, and a fixable one. Run the spread study
+                against it and it can be enabled.</>
+              )}
+              {(tab === "BTC" || tab === "ETH") && (
+                <>No signal source. Every crypto strategy was deleted once the
+                declared-but-uncharged perp fee was applied (BTC +23.89% → −8.21%).
+                The council&apos;s bar-only lenses port here, and unlike an index,
+                crypto has real traded volume — which is what vwap and
+                composite_profile need.</>
+              )}
+            </div>
+          </div>
+        ) : tab === "NIFTY" || tab === "SENSEX" ? (
+          <NseView symbol={tab} />
+        ) : viewMode === "nse" ? <NseView /> : (
           <>
             {/* ── Title + primary action ─────────────────────────────────── */}
             <div className="flex items-start justify-between gap-3 mb-4 sm:mb-6 flex-wrap">
@@ -245,6 +289,7 @@ export default function CryptoHome() {
             </div>
           </>
         )}
+        </div>
       </main>
 
       {/* ── Mobile sticky action bar ─────────────────────────────────────── */}

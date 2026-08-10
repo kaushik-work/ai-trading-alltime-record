@@ -21,7 +21,8 @@ type NseState = {
   open_positions: NsePosition[]; journal_count: number;
 };
 
-export default function NseView() {
+export default function NseView({ symbol = "NIFTY" }:
+                                 { symbol?: string } = {}) {
   const [state, setState] = useState<NseState | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [killBusy, setKillBusy] = useState(false);
@@ -107,7 +108,7 @@ export default function NseView() {
 
       <SystemHealth />
 
-      <NiftyChart symbol="NIFTY" />
+      <NiftyChart symbol={symbol} />
 
       <OptionChain />
 
