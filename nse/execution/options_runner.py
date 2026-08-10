@@ -345,9 +345,17 @@ class OptionsRunner:
             return closed
 
         now = snap.ts
-        close_t = market_close_for(snap.symbol, now.astimezone(_IST).date())
-        mins_to_close = ((close_t.hour * 60 + close_t.minute)
-                         - (now.astimezone(_IST).hour * 60 + now.astimezone(_IST).minute))
+        # A PERPETUAL HAS NO SESSION CLOSE, so there is nothing to flatten
+        # before. Without this, market_close_for() falls back to the NSE close
+        # and every crypto position would be squared off at 15:30 IST daily for
+        # no reason — the horizon exit is the only exit a perp needs.
+        if getattr(snap, "is_perp", False):
+            mins_to_close = 10 ** 6
+        else:
+            close_t = market_close_for(snap.symbol, now.astimezone(_IST).date())
+            mins_to_close = ((close_t.hour * 60 + close_t.minute)
+                             - (now.astimezone(_IST).hour * 60
+                                + now.astimezone(_IST).minute))
 
         for symbol, pos in list(self.state.open_positions.items()):
             opened = pos.get("opened_at")
@@ -404,8 +412,10 @@ class OptionsRunner:
         if snap.is_stale(MAX_SNAPSHOT_AGE_SEC):
             return f"snapshot is stale (> {MAX_SNAPSHOT_AGE_SEC:.0f}s old)"
         # Price discovery is not price. See COUNCIL_TRADE_FROM.
+        # The 09:30 gate exists because OPENING SPREADS are outside the measured
+        # regime. A perp has no open, so there is no such window to avoid.
         ist_now = snap.ts.astimezone(_IST).time()
-        if ist_now < COUNCIL_TRADE_FROM:
+        if not getattr(snap, "is_perp", False) and ist_now < COUNCIL_TRADE_FROM:
             return (f"{ist_now:%H:%M} IST — holding until "
                     f"{COUNCIL_TRADE_FROM:%H:%M} while opening spreads settle")
 

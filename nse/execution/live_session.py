@@ -128,6 +128,17 @@ def regime_percentile(symbol: str = "NIFTY") -> Optional[float]:
         return None
 
 
+#: Perpetuals trade 24/7. Listed explicitly rather than inferred from a name
+#: pattern, because "does this instrument ever close" is a fact about the
+#: contract and guessing it from a ticker string is how a 24/7 symbol ends up
+#: inheriting an equity calendar.
+PERP_SYMBOLS = {"BTCUSD", "ETHUSD", "XAUTUSD"}
+
+
+def is_perp(symbol: str) -> bool:
+    return symbol.upper() in PERP_SYMBOLS
+
+
 def market_open(now: Optional[datetime] = None, symbol: str = "NIFTY") -> bool:
     """Is the council awake? True from the WARM-UP time, not the bell.
 
@@ -137,6 +148,13 @@ def market_open(now: Optional[datetime] = None, symbol: str = "NIFTY") -> bool:
     questions, and conflating them is what left three lenses mute through the
     open.
     """
+    # A PERP NEVER CLOSES, and this is where forgetting that would bite.
+    # market_close_for() falls back to the NSE close for an unknown symbol, so
+    # ETHUSD would have inherited 15:40 IST and idled sixteen hours a day —
+    # silently, because "outside market hours" is a normal-looking log line.
+    if is_perp(symbol):
+        return True
+
     now = (now or datetime.now(timezone.utc)).astimezone(IST)
     if now.weekday() >= 5:
         return False
