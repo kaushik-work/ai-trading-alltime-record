@@ -77,7 +77,27 @@ BUILD_FULL_CONVICTION = 0.685  # |OI build imbalance| that saturates
 # Blend weights across the three reads. Equal until live attribution earns a
 # lens component more say — the brain weights LENSES, and this is the same
 # principle applied one level down.
-W_WALL, W_VALUE_AREA, W_BUILD = 1.0, 1.0, 1.0
+# W_WALL IS ZERO ON MEASURED EVIDENCE. Scored alone on the same 390 sessions,
+# the OI-wall component produced +0.26 bps (p=0.6442) on TRAIN and -0.06
+# (p=0.9422) on VALIDATE -- a null on BOTH splits, on n=2277/1126. That is not a
+# small-sample shrug; it is the component contributing nothing.
+#
+# Worse than nothing, in fact: the lens averages whatever fires, so a dead
+# component DILUTES the live ones. value_area_position alone scored +2.01 on
+# VALIDATE against the three-component lens's +1.49.
+#
+# Dropped by zeroing the weight rather than deleting the code, for two reasons.
+# The wall levels are still computed and journaled -- the dashboard draws them,
+# and they remain the right thing to look at even though they do not predict.
+# And a zeroed weight with this comment is reversible and auditable, where a
+# deletion would leave the next person wondering whether walls were ever tried.
+#
+# WHAT IS NOT CLAIMED: that the remaining edge is +2.01. Picking the
+# best-scoring component after seeing VALIDATE is selection. What is safe here
+# is the NULL -- you cannot select your way into "nothing on both splits" --
+# so removing the dead weight is supported while re-baselining the expectation
+# on the survivor's number is not. See RESEARCH_LEARNINGS section 3.18.
+W_WALL, W_VALUE_AREA, W_BUILD = 0.0, 1.0, 1.0
 
 
 class VolumeOILens(BaseLens):
@@ -111,7 +131,7 @@ class VolumeOILens(BaseLens):
         build, build_detail = _oi_build(calls, puts)
 
         components: list[tuple[float, float]] = []      # (signal, weight)
-        if wall_pos is not None:
+        if wall_pos is not None and W_WALL > 0:
             components.append((_clamp(wall_pos / WALL_FULL_CONVICTION), W_WALL))
         if va_pos is not None:
             components.append((_clamp(va_pos / VA_FULL_CONVICTION), W_VALUE_AREA))

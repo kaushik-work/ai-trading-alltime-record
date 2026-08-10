@@ -84,15 +84,24 @@ class Measurement:
 MEASURED: dict[str, Measurement] = {
     "volume_oi": Measurement(
         lens="volume_oi",
-        train_bps=+1.66, train_p=0.0012,
-        validate_bps=+1.49, validate_p=0.0527,
+        train_bps=+1.49, train_p=0.0036,
+        validate_bps=+1.67, validate_p=0.0306,
         lifecycle=Lifecycle.PROBATION,
         bootstrap_weight=LENS_PROBATION_WEIGHT_CAP,
-        note=("the only survivor: positive in both splits, signs agree, "
-              "break-even half-spread 0.70% against a measured near-ATM p90 of "
-              "0.157%. PROBATION not ACTIVE — VALIDATE is p=0.0527, and the "
-              "edge moved 1.80 -> 1.66 bps on a change of bar construction "
-              "alone, which is more fragility than a full weight deserves."),
+        note=("the only survivor. TWO components as of 2026-08-10: the OI-wall "
+              "term was dropped after measuring null on BOTH splits (+0.26 "
+              "p=0.6442 / -0.06 p=0.9422) while diluting the live two, since "
+              "the lens averages whatever fires. Re-measured without it: "
+              "TRAIN 1.66 -> 1.49, VALIDATE 1.49 -> 1.67, and VALIDATE crossed "
+              "p=0.0527 -> p=0.0306. Break-even half-spread 0.50% against a "
+              "measured near-ATM p50 of 0.1221% and p90 of 0.1562% — roughly "
+              "3x headroom. "
+              "STILL PROBATION, NOT ACTIVE. The removal is justified by a null "
+              "that cannot be selected into, but the resulting +1.67 was "
+              "obtained after looking at VALIDATE and is not a clean "
+              "out-of-sample number. The edge also moved 1.80 -> 1.66 on a "
+              "change of BAR CONSTRUCTION alone, which is more fragility than "
+              "a full weight deserves. See RESEARCH_LEARNINGS 3.18."),
     ),
     "vwap": Measurement(
         lens="vwap",
