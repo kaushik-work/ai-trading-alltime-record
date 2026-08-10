@@ -12,9 +12,13 @@ from nse.execution.nse_runner import get_nse_runner_state
 from nse.risk import is_killed, set_killed
 from nse.broker.angel_broker import AngelBroker
 from nse.data.option_chain import OptionChainCache
+from nse.snapshot import _cached_bars, _normalise_bars
 from nse.config import STEP_SIZES, LOT_SIZES, EXCHANGE
 
 logger = logging.getLogger(__name__)
+from datetime import timedelta as _td, timezone as _tz
+IST_TZ = _tz(_td(hours=5, minutes=30))
+
 router = APIRouter(prefix="/api/nse")
 
 
@@ -405,8 +409,16 @@ def nse_candles(symbol: str = Query("NIFTY"),
     the last bar on screen is still forming and must not be read as settled.
     """
     try:
-        cache = OptionChainCache.get()
-        df = cache.fetcher.fetch_intraday_df(symbol, interval)
+        # OptionChainCache is a plain constructor, not a singleton — there is no
+        # .get(). The chart rendered black with
+        # "type object 'OptionChainCache' has no attribute 'get'" because this
+        # invented an accessor that does not exist.
+        cache = OptionChainCache(symbol)
+        # Same cached path the snapshot uses: 60s TTL, serves the last good
+        # frame on failure. Angel rate-limits the historical endpoint hard and
+        # five containers already share the quota, so a chart refreshing every
+        # 5s must not add a REST call per poll.
+        df = _cached_bars(cache.fetcher, symbol, interval)
     except Exception as exc:
         logger.warning("candles: fetch failed for %s %s: %s", symbol, interval, exc)
         return {"symbol": symbol, "interval": interval, "candles": [],
@@ -418,12 +430,15 @@ def nse_candles(symbol: str = Query("NIFTY"),
 
     out = []
     for _, r in df.iterrows():
-        ts = r.get("datetime") or r.get("timestamp")
+        ts = r.get("datetime")
         if ts is None:
             continue
         try:
-            epoch = int(ts.timestamp())
-        except AttributeError:
+            # Angel bars are IST but tz-naive. lightweight-charts wants epoch
+            # seconds; localising first stops the series landing 5h30m adrift.
+            epoch = int((ts.tz_localize(IST_TZ) if ts.tzinfo is None
+                         else ts).timestamp())
+        except Exception:
             continue
         out.append({"time": epoch,
                     "open": float(r["open"]), "high": float(r["high"]),
@@ -536,11 +551,27 @@ def nse_health(user: dict = Depends(_get_current_user)):
                 if last_ts.tzinfo is None:
                     last_ts = last_ts.replace(tzinfo=timezone.utc)
                 age = (now - last_ts).total_seconds()
-                # Two minutes is two missed 60s cycles. One missed cycle is a
-                # slow snapshot; two is a stopped council.
-                state = "ok" if age < 120 else "warn" if age < 600 else "fail"
-                add("council deciding", state,
-                    f"last decision {int(age)}s ago", round(age, 1))
+                # Two minutes is two missed 60s cycles: one is a slow snapshot,
+                # two is a stopped council.
+                #
+                # OUTSIDE MARKET HOURS, NOT DECIDING IS CORRECT. The council
+                # idles overnight by design, so a decision age of hours is
+                # expected and flagging it red trains you to ignore a red panel
+                # — the panel then fails to mean anything on the morning it
+                # matters.
+                try:
+                    from nse.execution.live_session import market_open
+                    trading = market_open()
+                except Exception:
+                    trading = True
+                if not trading:
+                    add("council deciding", "ok",
+                        f"idle — market closed (last decision {int(age // 60)}m ago)",
+                        round(age, 1))
+                else:
+                    state = "ok" if age < 120 else "warn" if age < 600 else "fail"
+                    add("council deciding", state,
+                        f"last decision {int(age)}s ago", round(age, 1))
             else:
                 add("council deciding", "fail", "no decisions ever journaled")
     except Exception as e:
@@ -596,8 +627,15 @@ def nse_health(user: dict = Depends(_get_current_user)):
             if fts.tzinfo is None:
                 fts = fts.replace(tzinfo=timezone.utc)
             fage = (now - fts).total_seconds()
-            add("market feed", "ok" if fage < 300 else "warn",
-                f"spot {doc['spot']:.1f} seen {int(fage)}s ago",
+            try:
+                from nse.execution.live_session import market_open
+                trading = market_open()
+            except Exception:
+                trading = True
+            add("market feed", "ok" if (fage < 300 or not trading) else "warn",
+                f"spot {doc['spot']:.1f} seen "
+                + (f"{int(fage)}s ago" if fage < 300
+                   else f"{int(fage // 60)}m ago (market closed)"),
                 round(doc["spot"], 2))
     except Exception as e:
         add("market feed", "warn", str(e)[:80])
