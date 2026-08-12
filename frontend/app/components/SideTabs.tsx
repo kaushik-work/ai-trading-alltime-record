@@ -7,12 +7,15 @@ import { API, authHeaders } from "../lib/format";
  * Replaces the two-way Crypto/NSE switch, which hid half the system behind a
  * toggle and gave no room to grow past two venues.
  *
- * A TAB SAYS WHAT IT CAN DO, NOT JUST ITS NAME. Four of the six instruments
- * cannot currently trade — FINNIFTY and BANKNIFTY are refused on measured
- * spread grounds, BTC and ETH have no lens wired yet — and a rail of six
- * identical-looking tabs would imply six working bots. Each carries a status
- * dot and a one-word reason instead, so the sidebar tells you the truth about
- * coverage before you click anything.
+ * A TAB SAYS WHAT IT CAN DO, NOT JUST ITS NAME. Four of seven instruments
+ * cannot trade, and a rail of identical-looking tabs would imply seven working
+ * bots. Each carries a status dot and a one-word reason, so the sidebar tells
+ * the truth about coverage before anything is clicked.
+ *
+ * THE NOTES MUST TRACK REALITY. BTC and ETH read "measuring" for a while after
+ * their measurement had finished, so the rail said work was in progress when
+ * the answer was already in — a stale label is worse than a blunt one, because
+ * it invites you to wait for news that already arrived.
  */
 
 export type TabKey =
@@ -37,16 +40,16 @@ type Entry = {
  */
 const ENTRIES: Entry[] = [
   { key: "nse",    label: "NSE overview",  group: "Venues", status: "live",    note: "council" },
-  { key: "crypto", label: "Crypto overview", group: "Venues", status: "none", note: "no lens yet" },
+  { key: "crypto", label: "Crypto overview", group: "Venues", status: "blocked", note: "measured, no edge" },
 
   { key: "NIFTY",     label: "NIFTY",     group: "NSE / BSE", status: "live",    note: "measured" },
   { key: "SENSEX",    label: "SENSEX",    group: "NSE / BSE", status: "live",    note: "spread ok" },
   { key: "BANKNIFTY", label: "BANKNIFTY", group: "NSE / BSE", status: "live",    note: "spread ok" },
   { key: "FINNIFTY",  label: "FINNIFTY",  group: "NSE / BSE", status: "blocked", note: "1.79% spread" },
 
-  { key: "BTC",  label: "BTC",  group: "Crypto", status: "none", note: "measuring" },
-  { key: "ETH",  label: "ETH",  group: "Crypto", status: "none", note: "measuring" },
-  { key: "XAUT", label: "XAUT", group: "Crypto", status: "none", note: "4mo history" },
+  { key: "BTC",  label: "BTC",  group: "Crypto", status: "blocked", note: "no edge" },
+  { key: "ETH",  label: "ETH",  group: "Crypto", status: "blocked", note: "no edge" },
+  { key: "XAUT", label: "XAUT", group: "Crypto", status: "blocked", note: "no edge · 4mo" },
 ];
 
 const DOT: Record<Status, string> = {

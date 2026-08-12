@@ -170,18 +170,23 @@ export default function CryptoHome() {
                 two-sided book there in the tradeable premium band.</>
               )}
               {tab === "XAUT" && (
-                <>Tether Gold perp. Listed 2026-04-17, so it has <b>zero bars</b> in
-                the shared crypto TRAIN window and gets its own split carved from
-                its own coverage. Four months spans <b>one regime</b> — any result
-                here reads as &quot;held in this period&quot;, not &quot;holds&quot;,
-                and is weaker evidence than ETH&apos;s thirteen months.</>
+                <>Tether Gold perp, 33,109 bars. Listed 2026-04-17, so it has
+                <b> zero bars</b> in the shared crypto TRAIN window and gets its own
+                split. Measured and <b>no edge</b>: vwap −1.70/+0.48, ict_smc
+                −0.26/+0.87, momentum −2.15/−1.10, composite_profile −14.19/+3.34,
+                candle_flow −0.45/+0.67. Four months spans <b>one regime</b>, so
+                even a positive here would read as &quot;held in this period&quot;
+                rather than &quot;holds&quot;.</>
               )}
               {(tab === "BTC" || tab === "ETH") && (
-                <>No signal source. Every crypto strategy was deleted once the
-                declared-but-uncharged perp fee was applied (BTC +23.89% → −8.21%).
-                The council&apos;s bar-only lenses port here, and unlike an index,
-                crypto has real traded volume — which is what vwap and
-                composite_profile need.</>
+                <>The council <b>does</b> run here — five bar-only lenses read
+                {" "}{tab} on the same snapshot type as NIFTY. They were measured
+                on 115,200 five-minute bars (13 months) and <b>none has an edge</b>:
+                {tab === "ETH"
+                  ? " vwap +0.26/−1.71, ict_smc +0.38/+1.76, momentum −3.14/−0.05, composite_profile +5.15/−8.35, candle_flow −4.52/−3.30 (TRAIN/VALIDATE bps)."
+                  : " vwap −0.16/+0.95, ict_smc −0.10/+0.18, momentum +0.61/−2.63, composite_profile −1.09/+0.46, candle_flow −1.58/−1.34 (TRAIN/VALIDATE bps)."}
+                {" "}So it refuses every entry — correctly, because a lens with no
+                measured edge carries weight 0. Not a wiring gap.</>
               )}
             </div>
           </div>

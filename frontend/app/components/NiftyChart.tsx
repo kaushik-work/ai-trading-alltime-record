@@ -87,6 +87,43 @@ const CHROME = {
 const INTERVALS = ["1m", "5m", "15m"] as const;
 type Interval = (typeof INTERVALS)[number];
 
+function hhmm(iso: string): string {
+  return new Date(iso).toLocaleTimeString(undefined,
+    { hour12: false, hour: "2-digit", minute: "2-digit" });
+}
+
+/* Collapse consecutive decisions that say the same thing.
+ *
+ * The council decides once a minute, and on a quiet tape it reaches the same
+ * verdict every time — the panel showed 200 rows of
+ * "aside SHORT -0.27 lead volume_oi", which is one fact printed 200 times.
+ * Runs sharing outcome, direction, lead and conviction (to 2dp) become a single
+ * row with a time range and a count.
+ *
+ * NOTHING IS HIDDEN: the newest decision of each run is the one rendered, so
+ * expanding it shows real lens verdicts, and the count makes the repetition
+ * visible rather than scrolling it past you. A run of 200 is itself worth
+ * seeing — it means the tape did not move.
+ */
+function collapse(ds: Decision[]): { d: Decision; count: number; firstTs: string }[] {
+  const out: { d: Decision; count: number; firstTs: string }[] = [];
+  for (const d of ds) {
+    const prev = out[out.length - 1];
+    const same = prev
+      && prev.d.executed === d.executed
+      && prev.d.direction_label === d.direction_label
+      && (prev.d.lead ?? "") === (d.lead ?? "")
+      && Math.abs(prev.d.conviction - d.conviction) < 0.005;
+    if (same) {
+      prev.count += 1;
+      prev.firstTs = d.ts;          // decisions arrive newest-first
+    } else {
+      out.push({ d, count: 1, firstTs: d.ts });
+    }
+  }
+  return out;
+}
+
 export default function NiftyChart({ symbol = "NIFTY" }: { symbol?: string }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<any>(null);
@@ -332,8 +369,10 @@ export default function NiftyChart({ symbol = "NIFTY" }: { symbol?: string }) {
   return (
     <div style={{ display: "grid", gridTemplateColumns: "minmax(0,1fr) 340px", gap: 12 }}>
       <Card>
-        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-          <strong>{symbol}</strong>
+        <div style={{ display: "flex", alignItems: "center", gap: 10,
+                      padding: "14px 16px 12px",
+                      borderBottom: "1px solid var(--line)" }}>
+          <strong style={{ fontSize: 14 }}>{symbol}</strong>
           {last && <span style={{ fontVariantNumeric: "tabular-nums" }}>{last.close.toFixed(2)}</span>}
           <span style={{ flex: 1 }} />
           {INTERVALS.map((iv) => (
@@ -346,7 +385,8 @@ export default function NiftyChart({ symbol = "NIFTY" }: { symbol?: string }) {
           ))}
         </div>
 
-        <div style={{ position: "relative", width: "100%", height: 420 }}>
+        <div style={{ position: "relative", width: "100%", height: 420,
+                      padding: "12px 16px 0" }}>
           <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
 
           {box && expect && (
@@ -393,8 +433,9 @@ export default function NiftyChart({ symbol = "NIFTY" }: { symbol?: string }) {
         </div>
 
         {(levels?.levels?.length ?? 0) > 0 && (
-          <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 8,
-                        fontSize: 11, color: CHROME.dim }}>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 12,
+                        padding: "12px 16px 0",
+                        fontSize: 11, color: "var(--ink-3)" }}>
             {levels!.levels.map((lv) => {
               const st = LEVEL_STYLE[lv.kind] ?? { color: "#7d8896", dashed: true };
               return (
@@ -444,7 +485,7 @@ export default function NiftyChart({ symbol = "NIFTY" }: { symbol?: string }) {
         )}
 
         {markers.length > 0 && (
-          <div style={{ marginTop: 4, fontSize: 11, color: CHROME.dim }}>
+          <div style={{ padding: "6px 16px 0", fontSize: 11, color: "var(--ink-3)" }}>
             {markers.filter((m) => m.executed).length} executed (arrows) ·{" "}
             {markers.filter((m) => !m.executed).length} stood aside — reasons in
             the transcript, not drawn
@@ -452,29 +493,31 @@ export default function NiftyChart({ symbol = "NIFTY" }: { symbol?: string }) {
         )}
 
         {forming && (
-          <div style={{ marginTop: 6, fontSize: 11, color: CHROME.dim }}>
+          <div style={{ padding: "6px 16px 14px", fontSize: 11, color: "var(--ink-3)" }}>
             last bar {String(forming.getHours()).padStart(2, "0")}:
             {String(forming.getMinutes()).padStart(2, "0")} is still forming — it has not
             closed and is not a settled price
           </div>
         )}
-        {err && <div style={{ marginTop: 6, fontSize: 12, color: CHROME.down }}>{err}</div>}
+        {err && <div style={{ padding: "6px 16px 14px", fontSize: 12,
+                              color: "var(--down)" }}>{err}</div>}
       </Card>
 
       <Card>
-        <div style={{ marginBottom: 8 }}>
-          <strong>Council</strong>{" "}
-          <span style={{ fontSize: 11, color: CHROME.dim }}>
+        <div style={{ padding: "14px 16px 12px",
+                      borderBottom: "1px solid var(--line)" }}>
+          <strong style={{ fontSize: 14 }}>Council</strong>{" "}
+          <span style={{ fontSize: 11, color: "var(--ink-3)" }}>
             every decision, including the ones it declined
           </span>
         </div>
-        <div style={{ maxHeight: 470, overflowY: "auto" }}>
+        <div style={{ maxHeight: 470, overflowY: "auto", padding: "4px 0" }}>
           {decisions.length === 0 && (
-            <div style={{ color: CHROME.dim, fontSize: 12 }}>
+            <div style={{ padding: "12px 16px", color: "var(--ink-3)", fontSize: 12 }}>
               no decisions journaled yet
             </div>
           )}
-          {decisions.map((d) => {
+          {collapse(decisions).map(({ d, count, firstTs }) => {
             // Only the lenses that SAID something lead the entry. Abstentions
             // are collapsed to a count: on a typical snapshot five of nine
             // abstain for structural reasons (DTE, empty chain, too few bars),
@@ -484,16 +527,22 @@ export default function NiftyChart({ symbol = "NIFTY" }: { symbol?: string }) {
               (v) => !v.abstained && !v.deferred);
             const quiet = (d.round1 ?? []).length - spoke.length;
             return (
-              <details key={d.decision_id} open={d.executed}
-                       style={{ borderBottom: `1px solid ${CHROME.grid}`,
-                                padding: "8px 0" }}>
+              <details key={d.decision_id} open={d.executed && count === 1}
+                       style={{ borderBottom: "1px solid var(--line)",
+                                padding: "10px 16px" }}>
                 <summary style={{ cursor: "pointer", listStyle: "none",
                                   display: "flex", gap: 8, alignItems: "baseline",
                                   fontSize: 12, flexWrap: "wrap" }}>
-                  <span style={{ color: CHROME.dim, fontVariantNumeric: "tabular-nums" }}>
-                    {new Date(d.ts).toLocaleTimeString(undefined,
-                      { hour12: false, hour: "2-digit", minute: "2-digit" })}
+                  <span style={{ color: "var(--ink-3)", fontVariantNumeric: "tabular-nums" }}>
+                    {hhmm(firstTs)}{count > 1 ? `–${hhmm(d.ts)}` : ""}
                   </span>
+                  {count > 1 && (
+                    <span style={{ fontSize: 10, color: "var(--ink-3)",
+                                   border: "1px solid var(--line)", borderRadius: 3,
+                                   padding: "0 4px" }}>
+                      ×{count}
+                    </span>
+                  )}
                   <Pill tone={d.executed ? "up" : "neutral"}>
                     {d.executed ? "EXECUTE" : "aside"}
                   </Pill>
