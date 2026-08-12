@@ -99,6 +99,7 @@ export default function NiftyChart({ symbol = "NIFTY" }: { symbol?: string }) {
   const [levels, setLevels] = useState<Levels | null>(null);
   const [markers, setMarkers] = useState<Marker[]>([]);
   const [expect, setExpect] = useState<Expectation | null>(null);
+  const [box, setBox] = useState<{left:number;width:number;yEntry:number;yTarget:number;yStop:number} | null>(null);
   const priceLinesRef = useRef<any[]>([]);
   const [err, setErr] = useState<string | null>(null);
 
@@ -246,34 +247,54 @@ export default function NiftyChart({ symbol = "NIFTY" }: { symbol?: string }) {
     }
   }, [levels]);
 
-  // The expectation band, drawn on the price axis. Three lines rather than a
-  // shaded box: lightweight-charts has no rectangle primitive, and three
-  // labelled levels carry the same information without a custom plugin.
+  // THE TRADE BOX, drawn as an overlay rather than as price lines.
+  //
+  // lightweight-charts has no rectangle primitive, so the zones are positioned
+  // by converting price and time to pixel coordinates on every frame the chart
+  // moves. That is what makes a target/stop box possible at all here without
+  // pulling in a second charting library.
+  //
+  // Green above entry is the measured target zone, red below is the risk. They
+  // are drawn to SCALE, which is the point: the measured edge is +1.67 bps, so
+  // on a 24,400 index the green band is about four points tall. A box sized to
+  // look impressive would be a lie about magnitude, and the honest one being
+  // thin is the most useful thing on the chart.
   useEffect(() => {
+    const chart = chartRef.current;
     const series = seriesRef.current;
-    if (!series || !expect) return;
-    const made: any[] = [];
-    const spec = [
-      { p: expect.entry, c: CHROME.dim, t: "entry", w: 1, dash: 0 },
-      { p: expect.target, c: expect.direction > 0 ? CHROME.up : CHROME.down,
-        t: `target (${expect.horizon_min}m)`, w: 2, dash: 0 },
-      { p: expect.band_high, c: "#8b949e", t: "band +1sd", w: 1, dash: 2 },
-      { p: expect.band_low, c: "#8b949e", t: "band -1sd", w: 1, dash: 2 },
-    ];
-    for (const s of spec) {
+    const host = containerRef.current;
+    if (!chart || !series || !host || !expect) { setBox(null); return; }
+
+    const draw = () => {
       try {
-        made.push(series.createPriceLine({
-          price: s.p, color: s.c, lineWidth: s.w, lineStyle: s.dash,
-          axisLabelVisible: true, title: s.t,
-        }));
-      } catch { /* ignore */ }
-    }
-    return () => {
-      for (const pl of made) {
-        try { series.removePriceLine(pl); } catch { /* disposed */ }
-      }
+        const ts = chart.timeScale();
+        const x1 = ts.timeToCoordinate(expect.from_time as any);
+        const x2 = ts.timeToCoordinate(expect.to_time as any);
+        const yEntry = series.priceToCoordinate(expect.entry);
+        const yTarget = series.priceToCoordinate(expect.target);
+        const yStop = series.priceToCoordinate(
+          expect.direction > 0 ? expect.band_low : expect.band_high);
+        if (x1 == null || yEntry == null || yTarget == null || yStop == null) {
+          setBox(null);
+          return;
+        }
+        // The horizon may extend past the last bar, so the right edge is
+        // clamped to the plot rather than allowed to run off it.
+        const right = x2 == null ? host.clientWidth - 80 : Math.min(x2, host.clientWidth - 80);
+        setBox({
+          left: x1, width: Math.max(24, right - x1),
+          yEntry, yTarget, yStop,
+        });
+      } catch { setBox(null); }
     };
-  }, [expect]);
+
+    draw();
+    const ts = chart.timeScale();
+    ts.subscribeVisibleTimeRangeChange(draw);
+    return () => {
+      try { ts.unsubscribeVisibleTimeRangeChange(draw); } catch { /* disposed */ }
+    };
+  }, [expect, candles]);
 
   // Decision markers, EXECUTED AND DECLINED. The declined ones are the point:
   // seeing where the council stood aside against what price then did is how you
@@ -283,15 +304,24 @@ export default function NiftyChart({ symbol = "NIFTY" }: { symbol?: string }) {
   useEffect(() => {
     const series = seriesRef.current;
     if (!series || markers.length === 0) return;
+    // EXECUTED ONLY.
+    //
+    // Declined decisions were drawn too, on the argument that seeing where the
+    // council stood aside is informative. At 200 of them that argument fails on
+    // contact: the arrows covered every candle and buried the price action they
+    // were meant to be judged against. Information that hides the thing it
+    // annotates is not information.
+    //
+    // The count still appears beneath the chart, and every declined decision is
+    // in the transcript with its reason — so nothing is lost except the clutter.
+    const shown = markers.filter((m) => m.executed);
     try {
-      series.setMarkers(markers.map((m) => ({
+      series.setMarkers(shown.map((m) => ({
         time: m.time,
         position: m.direction > 0 ? "belowBar" : "aboveBar",
         shape: m.direction > 0 ? "arrowUp" : "arrowDown",
-        color: m.executed
-          ? (m.direction > 0 ? CHROME.up : CHROME.down)
-          : CHROME.dim,
-        text: m.executed ? m.text : "",
+        color: m.direction > 0 ? CHROME.up : CHROME.down,
+        text: m.text,
       })));
     } catch { /* marker times outside the loaded range */ }
   }, [markers]);
@@ -316,7 +346,51 @@ export default function NiftyChart({ symbol = "NIFTY" }: { symbol?: string }) {
           ))}
         </div>
 
-        <div ref={containerRef} style={{ width: "100%", height: 420 }} />
+        <div style={{ position: "relative", width: "100%", height: 420 }}>
+          <div ref={containerRef} style={{ width: "100%", height: "100%" }} />
+
+          {box && expect && (
+            <div style={{ position: "absolute", inset: 0, pointerEvents: "none" }}>
+              {/* reward zone */}
+              <div style={{
+                position: "absolute", left: box.left, width: box.width,
+                top: Math.min(box.yEntry, box.yTarget),
+                height: Math.max(2, Math.abs(box.yEntry - box.yTarget)),
+                background: "rgba(63,185,80,0.18)",
+                border: "1px solid rgba(63,185,80,0.55)",
+              }} />
+              {/* risk zone */}
+              <div style={{
+                position: "absolute", left: box.left, width: box.width,
+                top: Math.min(box.yEntry, box.yStop),
+                height: Math.max(2, Math.abs(box.yEntry - box.yStop)),
+                background: "rgba(248,81,73,0.14)",
+                border: "1px solid rgba(248,81,73,0.45)",
+              }} />
+              {/* entry */}
+              <div style={{
+                position: "absolute", left: box.left, width: box.width,
+                top: box.yEntry, borderTop: "1px dashed rgba(201,211,224,0.8)",
+              }} />
+              <span style={{
+                position: "absolute", left: box.left + 4,
+                top: Math.min(box.yEntry, box.yTarget) - 16,
+                fontSize: 10, color: "#3fb950", whiteSpace: "nowrap",
+                background: "rgba(13,17,23,0.75)", padding: "1px 4px", borderRadius: 3,
+              }}>
+                target {expect.target.toFixed(1)} · {expect.horizon_min}m
+              </span>
+              <span style={{
+                position: "absolute", left: box.left + 4,
+                top: Math.max(box.yEntry, box.yStop) + 2,
+                fontSize: 10, color: "#f85149", whiteSpace: "nowrap",
+                background: "rgba(13,17,23,0.75)", padding: "1px 4px", borderRadius: 3,
+              }}>
+                1sd risk {(expect.direction > 0 ? expect.band_low : expect.band_high).toFixed(1)}
+              </span>
+            </div>
+          )}
+        </div>
 
         {(levels?.levels?.length ?? 0) > 0 && (
           <div style={{ display: "flex", flexWrap: "wrap", gap: 10, marginTop: 8,
@@ -371,8 +445,9 @@ export default function NiftyChart({ symbol = "NIFTY" }: { symbol?: string }) {
 
         {markers.length > 0 && (
           <div style={{ marginTop: 4, fontSize: 11, color: CHROME.dim }}>
-            {markers.filter((m) => m.executed).length} executed ·{" "}
-            {markers.filter((m) => !m.executed).length} stood aside (grey arrows)
+            {markers.filter((m) => m.executed).length} executed (arrows) ·{" "}
+            {markers.filter((m) => !m.executed).length} stood aside — reasons in
+            the transcript, not drawn
           </div>
         )}
 
@@ -393,41 +468,88 @@ export default function NiftyChart({ symbol = "NIFTY" }: { symbol?: string }) {
             every decision, including the ones it declined
           </span>
         </div>
-        <div style={{ maxHeight: 470, overflowY: "auto", fontSize: 12 }}>
+        <div style={{ maxHeight: 470, overflowY: "auto" }}>
           {decisions.length === 0 && (
-            <div style={{ color: CHROME.dim }}>no decisions journaled yet</div>
-          )}
-          {decisions.map((d) => (
-            <div key={d.decision_id}
-                 style={{ borderBottom: `1px solid ${CHROME.grid}`, padding: "6px 0" }}>
-              <div style={{ display: "flex", gap: 6, alignItems: "baseline" }}>
-                <span style={{ color: CHROME.dim }}>
-                  {new Date(d.ts).toLocaleTimeString(undefined, { hour12: false })}
-                </span>
-                <Pill tone={d.executed ? "up" : "neutral"}>
-                  {d.executed ? "EXECUTE" : "stand aside"}
-                </Pill>
-                <span style={{ color: d.direction_label === "LONG" ? CHROME.up : CHROME.down }}>
-                  {d.direction_label}
-                </span>
-                <span style={{ fontVariantNumeric: "tabular-nums", color: CHROME.dim }}>
-                  {d.conviction >= 0 ? "+" : ""}{d.conviction.toFixed(3)}
-                </span>
-              </div>
-              <div style={{ color: CHROME.dim, margin: "2px 0" }}>{d.reason}</div>
-              {(d.round1 ?? []).map((v) => (
-                <div key={v.lens} style={{ paddingLeft: 8, color: CHROME.dim }}>
-                  <span style={{ color: CHROME.text }}>{v.lens}</span>{" "}
-                  {v.abstained ? <em>abstains</em>
-                    : v.deferred ? <em>defers</em>
-                    : <>{v.direction_label} {v.confidence.toFixed(2)}</>}
-                  {v.revised_from && <em> (revised)</em>}
-                  {" — "}
-                  {v.revision_note || v.rationale}
-                </div>
-              ))}
+            <div style={{ color: CHROME.dim, fontSize: 12 }}>
+              no decisions journaled yet
             </div>
-          ))}
+          )}
+          {decisions.map((d) => {
+            // Only the lenses that SAID something lead the entry. Abstentions
+            // are collapsed to a count: on a typical snapshot five of nine
+            // abstain for structural reasons (DTE, empty chain, too few bars),
+            // and printing five identical apologies per decision is what turned
+            // this panel into a wall of text.
+            const spoke = (d.round1 ?? []).filter(
+              (v) => !v.abstained && !v.deferred);
+            const quiet = (d.round1 ?? []).length - spoke.length;
+            return (
+              <details key={d.decision_id} open={d.executed}
+                       style={{ borderBottom: `1px solid ${CHROME.grid}`,
+                                padding: "8px 0" }}>
+                <summary style={{ cursor: "pointer", listStyle: "none",
+                                  display: "flex", gap: 8, alignItems: "baseline",
+                                  fontSize: 12, flexWrap: "wrap" }}>
+                  <span style={{ color: CHROME.dim, fontVariantNumeric: "tabular-nums" }}>
+                    {new Date(d.ts).toLocaleTimeString(undefined,
+                      { hour12: false, hour: "2-digit", minute: "2-digit" })}
+                  </span>
+                  <Pill tone={d.executed ? "up" : "neutral"}>
+                    {d.executed ? "EXECUTE" : "aside"}
+                  </Pill>
+                  <span style={{ color: d.direction_label === "LONG" ? CHROME.up : CHROME.down,
+                                 fontWeight: 600 }}>
+                    {d.direction_label}
+                  </span>
+                  <span style={{ color: CHROME.dim, fontVariantNumeric: "tabular-nums" }}>
+                    {d.conviction >= 0 ? "+" : ""}{d.conviction.toFixed(2)}
+                  </span>
+                  {d.lead && (
+                    <span style={{ color: CHROME.dim, fontSize: 11 }}>
+                      lead {d.lead}
+                    </span>
+                  )}
+                  <span style={{ flex: 1 }} />
+                  <span style={{ color: CHROME.dim, fontSize: 10 }}>
+                    {spoke.length} spoke · {quiet} quiet
+                  </span>
+                </summary>
+
+                <div style={{ fontSize: 11, color: CHROME.dim, margin: "4px 0 6px" }}>
+                  {d.reason}
+                </div>
+
+                {spoke.map((v) => (
+                  <div key={v.lens} style={{
+                    display: "grid", gridTemplateColumns: "104px 62px 1fr",
+                    gap: 6, padding: "2px 0", fontSize: 11, alignItems: "baseline",
+                  }}>
+                    <span style={{ color: CHROME.text }}>
+                      {v.lens}{v.revised_from ? " ↻" : ""}
+                    </span>
+                    <span style={{
+                      color: v.direction_label === "LONG" ? CHROME.up
+                           : v.direction_label === "SHORT" ? CHROME.down : CHROME.dim,
+                      fontVariantNumeric: "tabular-nums",
+                    }}>
+                      {v.direction_label === "NEUTRAL" ? "—"
+                        : `${v.direction_label === "LONG" ? "L" : "S"} ${v.confidence.toFixed(2)}`}
+                    </span>
+                    <span style={{ color: CHROME.dim }}>
+                      {v.revision_note || v.rationale}
+                    </span>
+                  </div>
+                ))}
+                {quiet > 0 && (
+                  <div style={{ fontSize: 10, color: CHROME.dim, marginTop: 4,
+                                fontStyle: "italic" }}>
+                    {quiet} abstained or deferred — expand a lens list in the
+                    journal for the reasons
+                  </div>
+                )}
+              </details>
+            );
+          })}
         </div>
       </Card>
     </div>

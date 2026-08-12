@@ -647,9 +647,13 @@ def nse_health(user: dict = Depends(_get_current_user)):
     try:
         from nse.ws.angel_stream import get_stream
         d = get_stream().diagnostics()
-        if d.get("connected"):
-            add("socket (this process)", "ok",
-                f"{d.get('fresh_contracts', '?')} fresh contracts")
+        # Only report a COUNT we actually have. The previous version printed
+        # "? fresh contracts" whenever the diagnostics dict lacked the key,
+        # putting a literal question mark on the dashboard -- a missing value
+        # rendered as though it were a value.
+        fresh = d.get("fresh_contracts")
+        if d.get("connected") and isinstance(fresh, int):
+            add("socket (this process)", "ok", f"{fresh} contracts streaming")
     except Exception:
         pass
 
