@@ -2,6 +2,7 @@
 import { useEffect, useState } from "react";
 import NiftyChart from "./components/NiftyChart";
 import SystemHealth from "./components/SystemHealth";
+import LensTable from "./components/LensTable";
 import OptionChain from "./components/OptionChain";
 import { Banner, Card, CardHead, Empty, Pill, Stat } from "./components/ui";
 import { API, authHeaders, getToken, inr } from "./lib/format";
@@ -109,6 +110,8 @@ export default function NseView({ symbol = "NIFTY" }:
       <SystemHealth />
 
       <NiftyChart symbol={symbol} />
+
+      <LensTable />
 
       <OptionChain />
 

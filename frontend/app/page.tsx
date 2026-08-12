@@ -5,6 +5,7 @@ import Header from "./components/Header";
 import CryptoChart from "./CryptoChart";
 import NseView from "./NseView";
 import SideTabs, { TabKey } from "./components/SideTabs";
+import CryptoLensView from "./components/CryptoLensView";
 import PositionCard, { Position } from "./components/PositionCard";
 import SignalRadar, { SignalRow } from "./components/SignalRadar";
 import ActivityPanel, { MissedSignal, ShadowSummary, ShadowTrade } from "./components/ActivityPanel";
@@ -153,7 +154,7 @@ export default function CryptoHome() {
         </div>
 
         <div className="flex-1 min-w-0">
-        {tab === "FINNIFTY" || tab === "BTC" || tab === "ETH" || tab === "XAUT" ? (
+        {tab === "FINNIFTY" ? (
           /* An instrument with nothing behind it gets an honest empty state
              rather than a chart of a bot that is not running. Saying WHY it is
              not trading, with the measured number, is more useful than a blank
@@ -169,27 +170,10 @@ export default function CryptoHome() {
                 (n=38), which is itself the finding: barely anything quotes a
                 two-sided book there in the tradeable premium band.</>
               )}
-              {tab === "XAUT" && (
-                <>Tether Gold perp, 33,109 bars. Listed 2026-04-17, so it has
-                <b> zero bars</b> in the shared crypto TRAIN window and gets its own
-                split. Measured and <b>no edge</b>: vwap −1.70/+0.48, ict_smc
-                −0.26/+0.87, momentum −2.15/−1.10, composite_profile −14.19/+3.34,
-                candle_flow −0.45/+0.67. Four months spans <b>one regime</b>, so
-                even a positive here would read as &quot;held in this period&quot;
-                rather than &quot;holds&quot;.</>
-              )}
-              {(tab === "BTC" || tab === "ETH") && (
-                <>The council <b>does</b> run here — five bar-only lenses read
-                {" "}{tab} on the same snapshot type as NIFTY. They were measured
-                on 115,200 five-minute bars (13 months) and <b>none has an edge</b>:
-                {tab === "ETH"
-                  ? " vwap +0.26/−1.71, ict_smc +0.38/+1.76, momentum −3.14/−0.05, composite_profile +5.15/−8.35, candle_flow −4.52/−3.30 (TRAIN/VALIDATE bps)."
-                  : " vwap −0.16/+0.95, ict_smc −0.10/+0.18, momentum +0.61/−2.63, composite_profile −1.09/+0.46, candle_flow −1.58/−1.34 (TRAIN/VALIDATE bps)."}
-                {" "}So it refuses every entry — correctly, because a lens with no
-                measured edge carries weight 0. Not a wiring gap.</>
-              )}
             </div>
           </div>
+        ) : tab === "BTC" || tab === "ETH" || tab === "XAUT" ? (
+          <CryptoLensView asset={tab} />
         ) : tab === "NIFTY" || tab === "SENSEX" || tab === "BANKNIFTY" ? (
           <NseView symbol={tab} />
         ) : viewMode === "nse" ? <NseView /> : (

@@ -377,7 +377,11 @@ def _compute_chart_extras(candles: list, asset: str) -> dict:
 
 @router.get("/candles")
 def crypto_candles(
-    asset: str = Query("BTC", pattern="^(BTC|ETH)$"),
+    # XAUT was excluded by this pattern, so the Tether Gold tab had no chart
+    # while its bars sat cached alongside BTC's and ETH's. The allowlist is the
+    # right shape -- it stops an arbitrary symbol reaching the exchange client --
+    # it was simply missing an instrument the rest of the system already knows.
+    asset: str = Query("BTC", pattern="^(BTC|ETH|XAUT)$"),
     resolution: str = Query("5m", pattern="^(1m|5m|15m|1h|4h|1d)$"),
     hours: int = Query(24, ge=1, le=720),
 ):
