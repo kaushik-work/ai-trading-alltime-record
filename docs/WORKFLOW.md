@@ -108,6 +108,8 @@ again — it lists 2026-04-17 and has *zero* bars in the shared TRAIN window.
 
 ## 3. The daily loop
 
+### NSE / BSE — a session
+
 | time (IST) | what happens |
 |---|---|
 | **09:00** | council wakes: subscribes, builds bars, lenses read and journal |
@@ -127,6 +129,29 @@ outside the regime the edge was measured in.
 **Why exit at 60 minutes.** That is the horizon the edge was measured at. Hold
 longer and you are trading a strategy nobody measured — the number says nothing
 about minute 61.
+
+### Crypto — there is no session
+
+A perpetual never closes, so none of the schedule above applies:
+
+| NSE rule | perp equivalent |
+|---|---|
+| wake 09:00, trade 09:30 | always awake, always tradeable |
+| flatten 10m before close | **no session flatten** — the 60m horizon is the only exit |
+| idle overnight, roll the session | one continuous run |
+
+`PERP_SYMBOLS` is an explicit set, not a name pattern: whether an instrument
+ever closes is a fact about the contract, and inferring it from a ticker is how
+a 24/7 symbol ends up on an equity calendar. Both `market_open()` and
+`manage_exits()` routed through `market_close_for()`, which falls back to the
+NSE close for an unknown symbol — ETHUSD would have idled sixteen hours a day
+and been flattened at 15:30 IST, silently, because "outside market hours" is a
+normal-looking log line.
+
+**When crypto is busy** (§3.21): 18:00–23:00 IST carries ~2× the movement and
+2.5× the volume of 09:00–17:00, on both symbols in both splits — roughly the
+mirror of NSE hours. That is ACTIVITY, not edge, and no crypto lens has an edge
+to concentrate into it.
 
 ---
 
@@ -236,7 +261,7 @@ downward or `assert_deliberation_monotone()` fails the session.
 
 ## 8. Where it actually stands
 
-**11 lenses built. One with a measured edge.**
+**12 lenses built. One with a measured edge.**
 
 | lens | verdict |
 |---|---|
@@ -252,8 +277,14 @@ downward or `assert_deliberation_monotone()` fails the session.
 | `composite_profile` | −1.93 / −0.78 |
 | `liquidity` | context lens; splits contradict |
 | `gamma_exposure` | **not measurable** on ±10 strikes — degenerate both ways |
-| `candle_flow` | built, unmeasured |
+| `candle_flow` | NIFTY +0.09 / −1.10; ETH −4.52/−3.30, BTC −1.58/−1.34 — closed |
+| `extension` | context lens; its gate study **inverted** the hypothesis |
 | `vision` | unmeasurable by replay; pinned at 0 |
+
+**Crypto: 15 lens-symbol measurements across ETHUSD, BTCUSD and XAUTUSD, none
+clearing** (§3.19). `vwap` fired on 18,862 of 18,862 ETHUSD snapshots — zero
+abstentions, real volume, real anchor — and still produced nothing, which
+closes the question of whether its NIFTY failure was only the missing volume.
 
 Also measured and rejected: **combining them** (equal weighting scored +0.22 vs
 +1.49 alone), **rejected lenses as filters** (`ict_smc` was the best gate on
